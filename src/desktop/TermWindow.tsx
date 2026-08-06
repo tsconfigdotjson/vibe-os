@@ -2,8 +2,8 @@ import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { SshTerminal } from '../sshterm';
 import type { ServerConfig } from '../api';
 import { paneSshConfig } from '../api';
-import type { Rect, WindowState } from './useWindows';
-import { rectToPixels, pixelsToRect, type Viewport } from './geometry';
+import { clampRect, type DragMode, type Rect, type WindowState } from './useWindows';
+import { rectToPixels, pixelsToRect, clampBox, type Viewport } from './geometry';
 
 const STATUS_LABEL: Record<WindowState['status'], string> = {
   loading: 'connecting',
@@ -23,7 +23,7 @@ export interface TermWindowProps {
   focused: boolean;
   view: Viewport;
   onRaise: (id: string) => void;
-  onCommit: (id: string, rect: Rect) => void;
+  onCommit: (id: string, rect: Rect, mode: DragMode) => void;
   onPreview: (rect: Rect | null) => void;
   onClose: (id: string) => void;
   onRestart: (id: string) => void;
@@ -64,7 +64,12 @@ export const TermWindow = memo(function TermWindow({
 
   const anchored = rectToPixels(win, view);
   const [live, setLive] = useState<typeof anchored | null>(null);
+  const [dragging, setDragging] = useState(false);
   const drag = useRef<DragState | null>(null);
+  // The exact rect the overlay is promising. Committing this value rather than
+  // recomputing one on pointerup is what guarantees the window lands where the
+  // highlight said it would — no rounding done twice, no stale state read.
+  const snap = useRef<Rect | null>(null);
   const box = live ?? anchored;
 
   const begin = useCallback(
@@ -75,7 +80,9 @@ export const TermWindow = memo(function TermWindow({
       (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
       onRaise(win.id);
       drag.current = { mode, startX: event.clientX, startY: event.clientY, origin: anchored };
+      snap.current = null;
       setLive(anchored);
+      setDragging(true);
     },
     [anchored, onRaise, win.id],
   );
@@ -105,12 +112,16 @@ export const TermWindow = memo(function TermWindow({
           next.top = o.top + dy;
           next.height = o.height - dy;
         }
-        next.width = Math.max(180, next.width);
-        next.height = Math.max(120, next.height);
       }
 
-      setLive(next);
-      onPreview(pixelsToRect(next, view));
+      // Clamp in pixel space so the window can never be dragged somewhere it
+      // cannot land; the snapped rect below is then always reachable.
+      const bounded = clampBox(next, state.mode, view);
+      const snapped = clampRect(pixelsToRect(bounded, view), state.mode === 'move' ? 'move' : 'resize');
+
+      snap.current = snapped;
+      setLive(bounded);
+      onPreview(snapped);
     },
     [onPreview, view],
   );
@@ -125,16 +136,16 @@ export const TermWindow = memo(function TermWindow({
       } catch {
         // pointer already gone
       }
-      if (live) onCommit(win.id, pixelsToRect(live, view));
+      if (snap.current) onCommit(win.id, snap.current, state.mode === 'move' ? 'move' : 'resize');
+      snap.current = null;
       setLive(null);
+      setDragging(false);
       onPreview(null);
     },
-    [live, onCommit, onPreview, view, win.id],
+    [onCommit, onPreview, win.id],
   );
 
   if (win.minimized) return null;
-
-  const dragging = drag.current !== null;
 
   return (
     <section

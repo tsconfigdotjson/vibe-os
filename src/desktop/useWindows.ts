@@ -11,11 +11,14 @@ import { onRuntimeDead } from '../sshterm';
  * is resized or the desktop is opened on a different screen, which pixel
  * coordinates would not.
  */
+export const MIN_WINDOW_COLS = 5;
+export const MIN_WINDOW_ROWS = 4;
+
 export const GRID_COLS = 24;
 export const GRID_ROWS = 14;
 
-const MIN_COLS = 5;
-const MIN_ROWS = 4;
+const MIN_COLS = MIN_WINDOW_COLS;
+const MIN_ROWS = MIN_WINDOW_ROWS;
 const STORAGE_KEY = 'vibe-os:desktop:v1';
 
 export interface WindowState {
@@ -46,14 +49,39 @@ export interface Rect {
   rowSpan: number;
 }
 
-function clampRect(r: Rect): Rect {
-  const colSpan = Math.max(MIN_COLS, Math.min(GRID_COLS, Math.round(r.colSpan)));
-  const rowSpan = Math.max(MIN_ROWS, Math.min(GRID_ROWS, Math.round(r.rowSpan)));
+export type DragMode = 'move' | 'resize';
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+
+/**
+ * Constrains a rect to the grid.
+ *
+ * The mode matters, and getting it wrong is very visible. Moving must preserve
+ * the window's size and only push its position back in bounds. Resizing must
+ * preserve its *position* — clamping the span first and then deriving the
+ * position from it (which is what this used to do) means growing a window's
+ * right edge silently drags its left edge inwards.
+ */
+export function clampRect(r: Rect, mode: DragMode = 'move'): Rect {
+  if (mode === 'move') {
+    const colSpan = clamp(r.colSpan, MIN_COLS, GRID_COLS);
+    const rowSpan = clamp(r.rowSpan, MIN_ROWS, GRID_ROWS);
+    return {
+      colSpan,
+      rowSpan,
+      col: clamp(r.col, 0, GRID_COLS - colSpan),
+      row: clamp(r.row, 0, GRID_ROWS - rowSpan),
+    };
+  }
+
+  // Resize: the anchored edge stays put, and only the span gives way.
+  const col = clamp(r.col, 0, GRID_COLS - MIN_COLS);
+  const row = clamp(r.row, 0, GRID_ROWS - MIN_ROWS);
   return {
-    colSpan,
-    rowSpan,
-    col: Math.max(0, Math.min(GRID_COLS - colSpan, Math.round(r.col))),
-    row: Math.max(0, Math.min(GRID_ROWS - rowSpan, Math.round(r.row))),
+    col,
+    row,
+    colSpan: clamp(r.colSpan, MIN_COLS, GRID_COLS - col),
+    rowSpan: clamp(r.rowSpan, MIN_ROWS, GRID_ROWS - row),
   };
 }
 
@@ -178,8 +206,10 @@ export function useWindows() {
     );
   }, []);
 
-  const move = useCallback((id: string, rect: Rect) => {
-    const clamped = clampRect(rect);
+  const move = useCallback((id: string, rect: Rect, mode: DragMode = 'move') => {
+    // TermWindow already clamps, so this is a safety net for programmatic
+    // callers. It must agree with what the drag preview promised.
+    const clamped = clampRect(rect, mode);
     setWindows((current) => current.map((w) => (w.id === id ? { ...w, ...clamped } : w)));
   }, []);
 
