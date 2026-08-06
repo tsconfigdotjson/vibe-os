@@ -6,3 +6,4 @@ public/wasm_exec.js
 *.tgz
 .DS_Store
 *.log
+server/assets.generated.ts

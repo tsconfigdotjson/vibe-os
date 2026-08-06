@@ -1,76 +1,34 @@
-import http from 'node:http';
-import https from 'node:https';
 import os from 'node:os';
 import { mkdir } from 'node:fs/promises';
-import type { IncomingMessage, ServerResponse, Server } from 'node:http';
-import type { Duplex } from 'node:stream';
+import type { Server } from 'bun';
 
-import type { Config } from './config.js';
-import { log, color } from './log.js';
-import { SshCa, discoverHostKey, fingerprint, requireSshKeygen } from './ssh-ca.js';
-import { createStaticServer } from './static.js';
-import { createApi, paneCommand } from './api.js';
-import { createBridge } from './bridge.js';
-import { createGate } from './auth.js';
-import { ensureWasm, ensureWebRoot } from './preflight.js';
-import { Acme } from './acme.js';
+import type { Config } from './config.ts';
+import { log, color } from './log.ts';
+import { SshCa, discoverHostKey, fingerprint, requireSshKeygen } from './ssh-ca.ts';
+import { createStaticServer } from './static.ts';
+import { createApi, paneCommand } from './api.ts';
+import { createBridgeHandlers, originAllowed, bridgeConnections, type BridgeData } from './bridge.ts';
+import { createGate } from './auth.ts';
+import { ensureWasm, ensureWebRoot } from './preflight.ts';
+import { Acme } from './acme.ts';
+import { WallpaperStore } from './wallpapers.ts';
 
 export interface RunningServer {
-  httpServer: Server;
-  httpsServer?: https.Server;
   port: number;
-  close: () => Promise<void>;
+  close: () => void;
 }
 
-function listen(server: Server | https.Server, port: number, host: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const onError = (err: NodeJS.ErrnoException) => {
-      server.removeListener('listening', onListening);
-      reject(err);
-    };
-    const onListening = () => {
-      server.removeListener('error', onError);
-      resolve();
-    };
-    server.once('error', onError);
-    server.once('listening', onListening);
-    server.listen(port, host);
-  });
-}
-
-/**
- * Binds the requested port, falling back rather than dying.
- *
- * Port 80 needs either root or CAP_NET_BIND_SERVICE, and on a fresh VPS the
- * user is usually root so it just works. When it does not, exiting with EACCES
- * is a bad experience — the useful thing is to come up somewhere reachable and
- * say exactly how to fix it.
- */
-async function listenWithFallback(server: Server, config: Config): Promise<number> {
-  try {
-    await listen(server, config.port, config.host);
-    return config.port;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'EACCES' || config.port >= 1024) throw err;
-
-    log.warn(`cannot bind port ${config.port} as ${os.userInfo().username} (needs root or CAP_NET_BIND_SERVICE)`);
-    log.warn(`  grant it once:   sudo setcap 'cap_net_bind_service=+ep' $(readlink -f "$(which node)")`);
-    log.warn('  or install the service:   sudo vibe-os install-service');
-
-    const fallback = 8080;
-    await listen(server, fallback, config.host);
-    log.warn(`listening on ${fallback} instead of ${config.port}`);
-    return fallback;
-  }
-}
+const UNAUTHORISED_PAGE = `<!doctype html><meta charset="utf-8"><title>vibe-os</title>
+<body style="font:14px ui-monospace,monospace;background:#07090d;color:#c8cedb;padding:2rem">
+<h1 style="font-weight:600">vibe-os</h1>
+<p>This server requires a token. Open the URL printed in the server log.</p></body>`;
 
 /**
  * Addresses a browser can actually reach.
  *
  * `os.hostname()` is the tempting answer and the wrong one — on a VPS it is
  * usually something like "ubuntu-2gb-fsn1" that resolves nowhere, and in a
- * container it is a hex ID. The interface addresses are what someone can type.
+ * container it is a hex id. Interface addresses are what someone can type.
  */
 function reachableHosts(config: Config): string[] {
   if (config.domain) return [config.domain];
@@ -93,7 +51,7 @@ function banner(config: Config, port: number, urls: string[], extras: string[]):
   console.log(`  ${color.bold('open')}      ${color.cyan(urls[0])}`);
   for (const extra of urls.slice(1, 4)) console.log(`            ${color.dim(extra)}`);
   console.log(`  ${color.dim('shell')}     ${config.user}@${config.sshHost}:${config.sshPort}`);
-  console.log(`  ${color.dim('panes')}     ${config.tmux ? 'tmux-backed (survive reload)' : 'plain login shell'}`);
+  console.log(`  ${color.dim('windows')}   ${config.tmux ? 'tmux-backed (survive reload)' : 'plain login shell'}`);
   for (const extra of extras) console.log(`  ${color.dim(extra)}`);
   console.log(`  ${line}`);
 
@@ -131,9 +89,13 @@ export async function startServer(config: Config): Promise<RunningServer> {
     log.warn('could not discover the SSH host key — the browser will ask you to confirm it on first connect');
   }
 
+  const wallpapers = new WallpaperStore(config.stateDir);
+  await wallpapers.init();
+
   const gate = createGate(config.token);
   const serveStatic = createStaticServer(config.webRoot);
-  const handleApi = createApi({ config, ca, hostKey });
+  const handleApi = createApi({ config, ca, hostKey, wallpapers });
+  const bridge = createBridgeHandlers({ host: config.sshHost, port: config.sshPort });
   const acme = config.domain
     ? new Acme({
         domain: config.domain,
@@ -145,78 +107,108 @@ export async function startServer(config: Config): Promise<RunningServer> {
 
   let tlsReady = false;
 
-  const handle = async (req: IncomingMessage, res: ServerResponse, secure: boolean): Promise<void> => {
-    const url = new URL(req.url ?? '/', `http${secure ? 's' : ''}://${req.headers.host ?? 'localhost'}`);
+  const handle = async (req: Request, server: Server<BridgeData>, secure: boolean): Promise<Response | undefined> => {
+    const url = new URL(req.url);
 
     // ACME challenges must answer on plain HTTP, unauthenticated, before any
     // redirect — Let's Encrypt will not follow a 302 to a cert we do not have.
-    if (!secure && acme?.handleChallenge(req, res, url)) return;
+    if (!secure && acme) {
+      const challenge = acme.handleChallenge(url);
+      if (challenge) return challenge;
+    }
 
     if (!secure && tlsReady && config.domain) {
-      res.writeHead(308, { location: `https://${config.domain}${url.pathname}${url.search}` }).end();
-      return;
+      return Response.redirect(`https://${config.domain}${url.pathname}${url.search}`, 308);
     }
 
-    if (gate.consumeTokenParam(res, url, secure)) return;
+    const redirect = gate.consumeTokenParam(url, secure);
+    if (redirect) return redirect;
 
     const denied = gate.check(req);
-    if (denied) {
-      if (url.pathname.startsWith('/api/')) {
-        res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: denied }));
-      } else {
-        res
-          .writeHead(401, { 'content-type': 'text/html; charset=utf-8' })
-          .end('<!doctype html><meta charset="utf-8"><title>vibe-os</title><body style="font:14px ui-monospace,monospace;background:#0b0e14;color:#c5c9d4;padding:2rem"><h1>vibe-os</h1><p>This server requires a token. Open the URL printed in the server log.</p></body>');
+
+    if (url.pathname === '/websocket') {
+      if (!originAllowed(req)) {
+        log.warn(`rejected cross-origin websocket upgrade from ${req.headers.get('origin')}`);
+        return new Response('forbidden', { status: 403 });
       }
-      return;
+      if (denied) return new Response('unauthorized', { status: 401 });
+      if (bridge.atCapacity()) return new Response('too many connections', { status: 503 });
+
+      const data: BridgeData = {
+        socket: null,
+        peer: server.requestIP(req)?.address ?? '?',
+        closed: false,
+      };
+      if (server.upgrade(req, { data })) return undefined;
+      return new Response('websocket upgrade failed', { status: 400 });
     }
 
-    if (await handleApi(req, res, url)) return;
-    if (await serveStatic(req, res, url.pathname)) return;
+    if (denied) {
+      if (url.pathname.startsWith('/api/')) return Response.json({ error: denied }, { status: 401 });
+      return new Response(UNAUTHORISED_PAGE, {
+        status: 401,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }
 
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found\n');
+    const api = await handleApi(req, url);
+    if (api) return api;
+
+    const asset = await serveStatic(req, url.pathname);
+    if (asset) return asset;
+
+    return new Response('not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   };
 
-  const wrap = (secure: boolean) => (req: IncomingMessage, res: ServerResponse) => {
-    handle(req, res, secure).catch((err: unknown) => {
-      log.error(`request failed: ${err instanceof Error ? err.message : String(err)}`);
-      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
-      res.end('internal error\n');
+  const makeServer = (port: number, secure: boolean, tls?: { key: string; cert: string }): Server<BridgeData> =>
+    Bun.serve<BridgeData>({
+      port,
+      hostname: config.host,
+      ...(tls ? { tls } : {}),
+      // Terminal output can be bursty; let a single frame carry a screenful.
+      maxRequestBodySize: 32 * 1024 * 1024,
+      development: false,
+      async fetch(req, server) {
+        try {
+          return (await handle(req, server, secure)) as Response;
+        } catch (err) {
+          log.error(`request failed: ${err instanceof Error ? err.message : String(err)}`);
+          return new Response('internal error\n', { status: 500 });
+        }
+      },
+      websocket: bridge.handlers,
     });
-  };
 
-  const httpServer = http.createServer(wrap(false));
-  const port = await listenWithFallback(httpServer, config);
+  /**
+   * Binds the requested port, falling back rather than dying.
+   *
+   * Port 80 needs root or CAP_NET_BIND_SERVICE, and on a fresh VPS the user is
+   * usually root so it just works. When it does not, exiting with EACCES is a
+   * bad experience — come up somewhere reachable and say how to fix it.
+   */
+  let httpServer: Server<BridgeData>;
+  let port = config.port;
+  try {
+    httpServer = makeServer(config.port, false);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if ((code !== 'EACCES' && code !== 'EPERM') || config.port >= 1024) throw err;
 
-  const bridgeOptions = {
-    target: { host: config.sshHost, port: config.sshPort },
-    authorize: (req: IncomingMessage) => gate.check(req),
-  };
+    log.warn(`cannot bind port ${config.port} as ${os.userInfo().username} (needs root or CAP_NET_BIND_SERVICE)`);
+    log.warn(`  grant it once:   sudo setcap 'cap_net_bind_service=+ep' $(readlink -f "$(which bun)")`);
+    log.warn('  or install the service:   sudo vibe-os install-service');
+    port = 8080;
+    httpServer = makeServer(port, false);
+    log.warn(`listening on ${port} instead of ${config.port}`);
+  }
 
-  const attachUpgrade = (server: Server | https.Server) => {
-    const bridge = createBridge(bridgeOptions);
-    server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-      if (url.pathname !== '/websocket') {
-        socket.destroy();
-        return;
-      }
-      bridge.handleUpgrade(req, socket, head);
-    });
-    return bridge;
-  };
-
-  attachUpgrade(httpServer);
-
-  let httpsServer: https.Server | undefined;
+  let httpsServer: Server<BridgeData> | undefined;
   const extras: string[] = [];
 
   if (acme && config.domain) {
     try {
       const material = await acme.obtain();
-      httpsServer = https.createServer({ key: material.key, cert: material.cert }, wrap(true));
-      attachUpgrade(httpsServer);
-      await listen(httpsServer, config.tlsPort, config.host);
+      httpsServer = makeServer(config.tlsPort, true, material);
       tlsReady = true;
       extras.push(`http://${config.domain} redirects to https`);
     } catch (err) {
@@ -231,18 +223,18 @@ export async function startServer(config: Config): Promise<RunningServer> {
     : reachableHosts(config).map((h) => `http://${h}${port === 80 ? '' : `:${port}`}/${query}`);
 
   const sample = paneCommand('1', config);
-  if (sample) extras.push(`each pane runs: ${sample}`);
+  if (sample) extras.push(`each window runs: ${sample}`);
   extras.push(`state: ${config.stateDir}`);
+  extras.push(`runtime: bun ${Bun.version}`);
 
   banner(config, port, urls, extras);
 
   return {
-    httpServer,
-    httpsServer,
     port,
-    async close() {
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-      if (httpsServer) await new Promise<void>((resolve) => httpsServer!.close(() => resolve()));
+    close() {
+      httpServer.stop(true);
+      httpsServer?.stop(true);
+      log.info(`stopped (${bridgeConnections()} bridge connections were open)`);
     },
   };
 }

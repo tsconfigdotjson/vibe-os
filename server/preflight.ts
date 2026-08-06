@@ -3,11 +3,12 @@ import { constants } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { log } from './log.js';
+import { log } from './log.ts';
+import { IS_COMPILED } from './runtime.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-/** dist/server -> package root */
-const PKG_ROOT = path.resolve(HERE, '..', '..');
+/** server/ -> package root */
+const PKG_ROOT = path.resolve(HERE, '..');
 
 const WASM_FILES = ['ssh.wasm', 'wasm_exec.js'];
 
@@ -37,6 +38,10 @@ function runFetchScript(): Promise<void> {
  * `vibe-os start` on a blank VPS still works.
  */
 export async function ensureWasm(webRoot: string): Promise<void> {
+  // A compiled binary carries every asset inside it; there is no directory to
+  // check and nothing to fetch.
+  if (IS_COMPILED) return;
+
   const missing = [];
   for (const name of WASM_FILES) {
     if (!(await isFile(path.join(webRoot, name)))) missing.push(name);
@@ -65,12 +70,14 @@ export async function ensureWasm(webRoot: string): Promise<void> {
 }
 
 export async function ensureWebRoot(webRoot: string): Promise<void> {
+  if (IS_COMPILED) return;
+
   try {
     await access(path.join(webRoot, 'index.html'), constants.R_OK);
   } catch {
     throw new Error(
       `no built web app at ${webRoot}\n` +
-        '  If you are running from a git checkout, build it first:  npm run build',
+        '  If you are running from a git checkout, build it first:  bun run build',
     );
   }
 }

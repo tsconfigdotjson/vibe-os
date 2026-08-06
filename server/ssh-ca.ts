@@ -23,7 +23,7 @@ import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
-import { log } from './log.js';
+import { log } from './log.ts';
 
 const run = promisify(execFile);
 

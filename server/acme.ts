@@ -7,8 +7,8 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { IncomingMessage, ServerResponse } from 'node:http';
-import { log } from './log.js';
+
+import { log } from './log.ts';
 
 const CHALLENGE_PREFIX = '/.well-known/acme-challenge/';
 /** Renew this far ahead of expiry. Let's Encrypt certs last 90 days. */
@@ -35,20 +35,12 @@ export class Acme {
   }
 
   /** Serves the HTTP-01 challenge. Must run before any HTTPS redirect. */
-  handleChallenge(_req: IncomingMessage, res: ServerResponse, url: URL): boolean {
-    if (!url.pathname.startsWith(CHALLENGE_PREFIX)) return false;
+  handleChallenge(url: URL): Response | null {
+    if (!url.pathname.startsWith(CHALLENGE_PREFIX)) return null;
     const token = url.pathname.slice(CHALLENGE_PREFIX.length);
     const value = this.challenges.get(token);
-    if (!value) {
-      res.writeHead(404, { 'content-type': 'text/plain' }).end('not found\n');
-      return true;
-    }
-    res.writeHead(200, {
-      'content-type': 'application/octet-stream',
-      'content-length': Buffer.byteLength(value),
-    });
-    res.end(value);
-    return true;
+    if (!value) return new Response('not found\n', { status: 404, headers: { 'content-type': 'text/plain' } });
+    return new Response(value, { status: 200, headers: { 'content-type': 'application/octet-stream' } });
   }
 
   private paths() {

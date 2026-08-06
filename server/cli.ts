@@ -6,15 +6,17 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { parseCliArgs, resolveConfig, savePersisted, type Config } from './config.js';
-import { startServer } from './index.js';
-import { SshCa, discoverHostKey } from './ssh-ca.js';
-import { log, color } from './log.js';
+import { parseCliArgs, resolveConfig, savePersisted, type Config } from './config.ts';
+import { startServer } from './index.ts';
+import { SshCa, discoverHostKey } from './ssh-ca.ts';
+import { log, color } from './log.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 const run = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PKG_ROOT = path.resolve(HERE, '..', '..');
-const BIN = path.join(PKG_ROOT, 'bin', 'vibe-os.mjs');
+const PKG_ROOT = path.resolve(HERE, '..');
+const ENTRY = path.join(PKG_ROOT, 'server', 'cli.ts');
+const BUN = process.execPath;
 
 const HELP = `
   ${color.bold('vibe-os')} — a terminal multiplexer in the browser
@@ -50,13 +52,8 @@ const HELP = `
     -v, --version       print the version
 `;
 
-async function version(): Promise<string> {
-  try {
-    const raw = await readFile(path.join(PKG_ROOT, 'package.json'), 'utf8');
-    return (JSON.parse(raw) as { version?: string }).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+function version(): string {
+  return pkg.version;
 }
 
 function probeTcp(host: string, port: number, timeout = 2000): Promise<boolean> {
@@ -92,11 +89,11 @@ interface Check {
 async function doctor(config: Config): Promise<number> {
   const checks: Check[] = [];
 
-  const major = Number(process.versions.node.split('.')[0]);
+  const bunMajor = Number((Bun.version ?? '0').split('.')[0]);
   checks.push({
-    label: 'node',
-    ok: major >= 20,
-    detail: major >= 20 ? process.version : `${process.version} — vibe-os needs Node 20+`,
+    label: 'bun',
+    ok: bunMajor >= 1,
+    detail: bunMajor >= 1 ? `v${Bun.version}` : 'vibe-os runs on Bun 1+',
     fatal: true,
   });
 
@@ -126,7 +123,7 @@ async function doctor(config: Config): Promise<number> {
     ok: sshd,
     detail: sshd
       ? `reachable at ${config.sshHost}:${config.sshPort}`
-      : `nothing listening on ${config.sshHost}:${config.sshPort} — panes will not connect`,
+      : `nothing listening on ${config.sshHost}:${config.sshPort} — windows will not connect`,
     fatal: true,
   });
 
@@ -134,8 +131,8 @@ async function doctor(config: Config): Promise<number> {
     label: 'tmux',
     ok: config.tmux,
     detail: config.tmux
-      ? 'found — panes persist across reloads'
-      : 'not installed — panes will be plain shells that die on reload (apt install tmux)',
+      ? 'found — windows persist across reloads'
+      : 'not installed — windows will be plain shells that die on reload (apt install tmux)',
   });
 
   const hostKey = await discoverHostKey(config.sshHost, config.sshPort);
@@ -170,7 +167,7 @@ async function doctor(config: Config): Promise<number> {
   checks.push({
     label: 'web build',
     ok: built,
-    detail: built ? config.webRoot : `missing at ${config.webRoot} — run npm run build`,
+    detail: built ? config.webRoot : `missing at ${config.webRoot} — run bun run build`,
     fatal: true,
   });
 
@@ -190,7 +187,7 @@ async function doctor(config: Config): Promise<number> {
     ok: bindable,
     detail: bindable
       ? 'bindable'
-      : `cannot bind as ${os.userInfo().username} — run: sudo setcap 'cap_net_bind_service=+ep' $(readlink -f "$(which node)")`,
+      : `cannot bind as ${os.userInfo().username} — run: sudo setcap 'cap_net_bind_service=+ep' $(readlink -f "$(which bun)")`,
   });
 
   console.log('');
@@ -228,7 +225,7 @@ User=${user}
 Environment=HOME=${home}
 Environment=NODE_ENV=production
 WorkingDirectory=${home}
-ExecStart=${process.execPath} ${BIN} start${forwarded.length ? ` ${forwarded.join(' ')}` : ''}
+ExecStart=${BUN} ${ENTRY} start${forwarded.length ? ` ${forwarded.join(' ')}` : ''}
 Restart=on-failure
 RestartSec=2
 # Lets an unprivileged user bind port 80 without setcap on the node binary.
@@ -271,7 +268,7 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (values.version) {
-    console.log(await version());
+    console.log(version());
     return 0;
   }
 

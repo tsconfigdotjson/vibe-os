@@ -40,8 +40,8 @@ export interface Config {
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-/** dist/server/config.js -> dist/web */
-const DEFAULT_WEB_ROOT = path.resolve(HERE, '..', 'web');
+/** server/config.ts -> dist/web */
+const DEFAULT_WEB_ROOT = path.resolve(HERE, '..', 'dist', 'web');
 
 export const OPTION_SPEC = {
   port: { type: 'string' as const },

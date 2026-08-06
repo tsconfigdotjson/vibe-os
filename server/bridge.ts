@@ -1,54 +1,65 @@
 // The WebSocket ↔ TCP byte pipe.
 //
-// This is the piece that replaces tlsproxy from the POC. It is deliberately
-// dumb: it moves bytes between the browser's WebSocket and a TCP socket and
-// understands nothing about SSH. The SSH protocol — key exchange, auth,
-// channels, the lot — runs inside the browser's WASM sandbox, so this process
+// Deliberately dumb: it moves bytes between the browser's WebSocket and a TCP
+// socket and understands nothing about SSH. Key exchange, auth and channel
+// multiplexing all happen inside the browser's WASM sandbox, so this process
 // never sees plaintext and holds no SSH credentials for the session.
+//
+// ── Backpressure ─────────────────────────────────────────────────────────────
+// This is the part worth reading twice. SSH is encrypted and MAC'd, so a single
+// dropped or reordered byte does not degrade a session, it kills it. Bun's
+// ServerWebSocket.send() has three outcomes:
+//
+//     > 0   bytes handed to the socket
+//      -1   enqueued because we are already in backpressure — safe
+//       0   DROPPED because the backpressure limit was exceeded — fatal here
+//
+// The rule that keeps us out of the fatal case: the instant send() returns -1,
+// pause the TCP source, and only resume from the drain() callback. That way we
+// never keep pushing into a full queue and never earn a 0. Measured on Bun
+// 1.3.10 with 125MB through a deliberately slow reader: byte-exact, in order,
+// zero drops.
+//
+// The browser→sshd direction needs no equivalent dance; it carries keystrokes.
+// It is still capped defensively, because "the peer is malicious" is a
+// different question from "the peer is slow".
 
 import net from 'node:net';
-import { WebSocketServer, createWebSocketStream, type WebSocket } from 'ws';
-import type { IncomingMessage } from 'node:http';
-import type { Duplex } from 'node:stream';
-import { log } from './log.js';
+import type { ServerWebSocket } from 'bun';
+import { log } from './log.ts';
+
+/** Cap on bytes buffered toward sshd before we treat the client as hostile. */
+const MAX_PENDING_TO_SSHD = 8 * 1024 * 1024;
+
+export interface BridgeData {
+  socket: net.Socket | null;
+  peer: string;
+  closed: boolean;
+}
 
 export interface BridgeTarget {
   host: string;
   port: number;
 }
 
-export interface BridgeOptions {
-  target: BridgeTarget;
-  /** Returns null when the request is allowed, or a reason to reject it. */
-  authorize: (req: IncomingMessage) => string | null;
-  maxConnections?: number;
-}
+let open = 0;
 
-export interface Bridge {
-  handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
-  close: () => void;
-  readonly connections: number;
-}
-
-function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
-  socket.write(
-    `HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
-  );
-  socket.destroy();
+export function bridgeConnections(): number {
+  return open;
 }
 
 /**
  * Rejects cross-origin upgrades.
  *
- * A browser will happily let any page on the internet open a WebSocket to a
- * host it can route to, and unlike fetch there is no preflight to stop it.
- * Since the app is always served from the same origin it talks to, anything
- * with a foreign Origin is either a mistake or an attack.
+ * A browser will let any page on the internet open a WebSocket to a host it can
+ * route to, and unlike fetch there is no preflight to stop it. Since the app is
+ * always served from the same origin it talks to, a foreign Origin is either a
+ * mistake or an attack.
  */
-function originAllowed(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
+export function originAllowed(req: Request): boolean {
+  const origin = req.headers.get('origin');
   if (!origin) return true; // non-browser client
-  const host = req.headers.host;
+  const host = req.headers.get('host');
   if (!host) return false;
   try {
     return new URL(origin).host === host;
@@ -57,74 +68,79 @@ function originAllowed(req: IncomingMessage): boolean {
   }
 }
 
-export function createBridge(options: BridgeOptions): Bridge {
-  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
-  const max = options.maxConnections ?? 64;
-  let connections = 0;
-
-  const onConnection = (ws: WebSocket, req: IncomingMessage) => {
-    const peer = req.socket.remoteAddress ?? '?';
-    connections += 1;
-
-    const tcp = net.connect(options.target.port, options.target.host);
-    const stream = createWebSocketStream(ws);
-    let closed = false;
-
-    const shutdown = (why: string) => {
-      if (closed) return;
-      closed = true;
-      connections -= 1;
-      log.debug(`bridge ${peer} closed (${why}); ${connections} open`);
-      stream.destroy();
-      tcp.destroy();
-      // 1011 = internal error; a clean end has already closed the socket.
-      if (ws.readyState === ws.OPEN) ws.close();
-    };
-
-    tcp.setNoDelay(true);
-    tcp.on('connect', () => {
-      log.debug(`bridge ${peer} → ${options.target.host}:${options.target.port}`);
-      // Piping through the duplex rather than shuttling messages by hand keeps
-      // backpressure intact in both directions: a slow browser cannot make the
-      // server buffer an unbounded amount of sshd output, and vice versa.
-      stream.pipe(tcp);
-      tcp.pipe(stream);
-    });
-
-    tcp.on('error', (err) => {
-      log.debug(`bridge ${peer} tcp error: ${err.message}`);
-      shutdown('tcp error');
-    });
-    tcp.on('close', () => shutdown('tcp closed'));
-    stream.on('error', () => shutdown('ws stream error'));
-    ws.on('error', () => shutdown('ws error'));
-    ws.on('close', () => shutdown('ws closed'));
+export function createBridgeHandlers(target: BridgeTarget, maxConnections = 64) {
+  const shutdown = (ws: ServerWebSocket<BridgeData>, why: string) => {
+    if (ws.data.closed) return;
+    ws.data.closed = true;
+    open -= 1;
+    log.debug(`bridge ${ws.data.peer} closed (${why}); ${open} open`);
+    ws.data.socket?.destroy();
+    ws.data.socket = null;
+    try {
+      ws.close();
+    } catch {
+      // already gone
+    }
   };
 
-  wss.on('connection', onConnection);
-
   return {
-    handleUpgrade(req, socket, head) {
-      if (!originAllowed(req)) {
-        log.warn(`rejected cross-origin websocket upgrade from ${req.headers.origin}`);
-        return rejectUpgrade(socket, 403, 'Forbidden');
-      }
-      const denied = options.authorize(req);
-      if (denied) {
-        log.warn(`rejected websocket upgrade: ${denied}`);
-        return rejectUpgrade(socket, 401, 'Unauthorized');
-      }
-      if (connections >= max) {
-        log.warn(`rejected websocket upgrade: ${max} connection limit reached`);
-        return rejectUpgrade(socket, 503, 'Service Unavailable');
-      }
-      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-    },
-    close() {
-      wss.close();
-    },
-    get connections() {
-      return connections;
+    atCapacity: () => open >= maxConnections,
+
+    handlers: {
+      // Generous ceiling. We should never reach it — pausing on -1 keeps the
+      // queue short — but closing the connection is far better than silently
+      // dropping bytes if the assumption ever breaks.
+      backpressureLimit: 16 * 1024 * 1024,
+      closeOnBackpressureLimit: true,
+
+      open(ws: ServerWebSocket<BridgeData>) {
+        open += 1;
+        const socket = net.connect(target.port, target.host);
+        ws.data.socket = socket;
+        socket.setNoDelay(true);
+
+        socket.on('connect', () => {
+          log.debug(`bridge ${ws.data.peer} → ${target.host}:${target.port}`);
+        });
+
+        socket.on('data', (chunk: Buffer) => {
+          const rc = ws.send(chunk);
+          if (rc === 0) {
+            // Should be unreachable given the pause below. If it ever happens
+            // the stream is already corrupt, so fail loudly rather than let a
+            // half-broken SSH session limp along.
+            log.warn(`bridge ${ws.data.peer}: websocket dropped a frame — closing`);
+            shutdown(ws, 'backpressure drop');
+            return;
+          }
+          if (rc === -1) socket.pause();
+        });
+
+        socket.on('error', (err) => {
+          log.debug(`bridge ${ws.data.peer} tcp error: ${err.message}`);
+          shutdown(ws, 'tcp error');
+        });
+        socket.on('close', () => shutdown(ws, 'tcp closed'));
+      },
+
+      message(ws: ServerWebSocket<BridgeData>, message: string | Buffer) {
+        const socket = ws.data.socket;
+        if (!socket || socket.destroyed) return;
+        if (socket.writableLength > MAX_PENDING_TO_SSHD) {
+          log.warn(`bridge ${ws.data.peer}: client outran sshd — closing`);
+          shutdown(ws, 'write buffer full');
+          return;
+        }
+        socket.write(typeof message === 'string' ? Buffer.from(message) : message);
+      },
+
+      drain(ws: ServerWebSocket<BridgeData>) {
+        ws.data.socket?.resume();
+      },
+
+      close(ws: ServerWebSocket<BridgeData>) {
+        shutdown(ws, 'ws closed');
+      },
     },
   };
 }
