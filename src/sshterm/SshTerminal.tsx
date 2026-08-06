@@ -15,13 +15,17 @@ export interface SshTerminalProps {
   className?: string;
 }
 
-/** Matches the app palette in styles.css so panes and chrome read as one surface. */
+/**
+ * Transparent background so the window's frosted plate shows through: xterm
+ * paints its own background otherwise and would punch an opaque rectangle
+ * through the glass. Needs allowTransparency below to take effect.
+ */
 const THEME = {
-  background: '#0d1117',
+  background: 'rgba(0, 0, 0, 0)',
   foreground: '#c8cedb',
   cursor: '#56cfe1',
-  cursorAccent: '#0d1117',
-  selectionBackground: '#25324a',
+  cursorAccent: '#090c12',
+  selectionBackground: 'rgba(86, 207, 225, 0.26)',
   black: '#161b25',
   red: '#ef6b73',
   green: '#7ee081',
@@ -86,6 +90,7 @@ export function SshTerminal({
       letterSpacing: 0,
       scrollback: 10_000,
       allowProposedApi: true,
+      allowTransparency: true,
       theme: THEME,
     });
     const fitAddon = new FitAddon();

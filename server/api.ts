@@ -40,7 +40,25 @@ function json(body: unknown, status = 200): Response {
  */
 export function paneCommand(paneId: string, config: Config): string | undefined {
   if (!config.tmux) return undefined;
-  return `tmux -u new-session -A -s vibe-${paneId}`;
+  const attach = `tmux -u new-session -A -s vibe-${paneId}`;
+  if (!config.tmuxTheme) return attach;
+
+  // Match tmux's status bar to the desktop chrome. tmux's default is a solid
+  // green bar that fights every other colour on screen.
+  //
+  // These are session options, not global (`set -g`) ones: a vibe-os window
+  // should not restyle tmux sessions the user started themselves, and they
+  // share one tmux server. The `\;` reaches tmux as a literal separator after
+  // the login shell has parsed the command.
+  const style = [
+    'set status-style "bg=#10141c fg=#9aa3b6"',
+    'set status-left-style "fg=#56cfe1 bold"',
+    'set window-status-current-style "fg=#dfe5f0 bold"',
+    'set pane-border-style "fg=#1b2230"',
+    'set pane-active-border-style "fg=#56cfe1"',
+    'set status-right "#[fg=#667085]#H"',
+  ].join(' \\; ');
+  return `${attach} \\; ${style}`;
 }
 
 export interface ApiDeps {

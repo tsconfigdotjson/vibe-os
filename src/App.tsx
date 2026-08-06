@@ -1,48 +1,67 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchServerConfig, type ServerConfig } from './api';
-import { usePanes, type LayoutMode } from './panes/usePanes';
-import { PaneView } from './panes/PaneView';
-import { Splitter } from './panes/Splitter';
-import { TopBar } from './chrome/TopBar';
-import { StatusLine } from './chrome/StatusLine';
+import { useWindows, type Rect } from './desktop/useWindows';
+import { TermWindow } from './desktop/TermWindow';
+import { Dock } from './desktop/Dock';
+import { GridOverlay } from './desktop/GridOverlay';
+import { WallpaperPanel } from './desktop/WallpaperPanel';
+import { useWallpaper } from './desktop/useWallpaper';
+import type { Viewport } from './desktop/geometry';
 
 /**
- * Pane identity colours, drawn from the ANSI palette the terminals themselves
- * use. Assignment is by position so a pane keeps its colour for as long as it
- * exists, and the same colour marks it in the header, the border, and the
- * status line — which is what makes two panes distinguishable at a glance
- * without reading anything.
+ * Window identity colours, drawn from the ANSI palette the terminals themselves
+ * use. Assignment is by position, and the same colour marks a window in its
+ * title bar, its focus ring and its dock entry — which is what makes several
+ * windows distinguishable at a glance without reading anything.
  */
 const HUES = ['#56cfe1', '#a78bfa', '#7ee081', '#f2c14e', '#ef6b73', '#63d4c0'];
+
+function useViewport(ref: React.RefObject<HTMLElement | null>): Viewport {
+  const [view, setView] = useState<Viewport>({ width: 1200, height: 700 });
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setView({ width, height });
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return view;
+}
 
 export default function App() {
   const [server, setServer] = useState<ServerConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<Rect | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const view = useViewport(surfaceRef);
 
   const {
-    panes,
-    layout,
-    ratio,
+    windows,
+    ordered,
     focused,
-    setLayout,
-    setRatio,
-    setFocused,
+    spawn,
+    close,
+    restart,
+    move,
+    raise,
+    minimize,
+    maximize,
     setStatus,
     setTitle,
-    restart,
-    addPane,
-    closePane,
-  } = usePanes();
+  } = useWindows();
+
+  const wallpaper = useWallpaper();
 
   useEffect(() => {
     let cancelled = false;
     fetchServerConfig().then(
-      (config) => {
-        if (!cancelled) setServer(config);
-      },
-      (err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      },
+      (config) => !cancelled && setServer(config),
+      (err: unknown) => !cancelled && setError(err instanceof Error ? err.message : String(err)),
     );
     return () => {
       cancelled = true;
@@ -51,47 +70,42 @@ export default function App() {
 
   const hues = useMemo(() => {
     const map: Record<string, string> = {};
-    panes.forEach((pane, index) => {
-      map[pane.id] = HUES[index % HUES.length];
+    windows.forEach((win, index) => {
+      map[win.id] = HUES[index % HUES.length];
     });
     return map;
-  }, [panes]);
+  }, [windows]);
 
-  const visible = layout === 'focus' ? panes.filter((pane) => pane.id === focused) : panes.slice(0, 2);
-  const overflow = layout === 'focus' ? 0 : Math.max(0, panes.length - 2);
-
-  // Alt-based chords rather than tmux's ctrl-b: the terminal has focus almost
-  // all the time and ctrl-b belongs to the tmux session running inside it.
-  // Capture phase, because xterm claims keys on its own textarea first.
+  // Alt chords rather than tmux's ctrl-b: the terminal has focus almost all the
+  // time and ctrl-b belongs to the tmux session running inside it. Capture
+  // phase, because xterm claims keys on its own textarea first.
   const onKeyDown = useCallback(
     (event: KeyboardEvent) => {
       if (!event.altKey || event.ctrlKey || event.metaKey) return;
-
       const digit = Number(event.key);
       if (Number.isInteger(digit) && digit >= 1 && digit <= 9) {
-        const pane = panes[digit - 1];
-        if (pane) {
-          setFocused(pane.id);
+        const win = windows[digit - 1];
+        if (win) {
+          raise(win.id);
           event.preventDefault();
           event.stopPropagation();
         }
         return;
       }
-
-      const bindings: Record<string, () => void> = {
-        '\\': () => setLayout('columns'),
-        '-': () => setLayout('rows'),
-        z: () => setLayout(layout === 'focus' ? 'columns' : 'focus'),
-        t: () => addPane(),
+      const actions: Record<string, () => void> = {
+        t: spawn,
+        w: () => focused && close(focused),
+        z: () => focused && maximize(focused),
+        m: () => focused && minimize(focused),
       };
-      const action = bindings[event.key.toLowerCase()];
+      const action = actions[event.key.toLowerCase()];
       if (action) {
         action();
         event.preventDefault();
         event.stopPropagation();
       }
     },
-    [panes, layout, setFocused, setLayout, addPane],
+    [windows, focused, spawn, close, maximize, minimize, raise],
   );
 
   useEffect(() => {
@@ -104,7 +118,7 @@ export default function App() {
       <div className="boot boot-error">
         <p className="boot-line">could not reach the vibe-os server</p>
         <p className="boot-detail">{error}</p>
-        <button type="button" className="action" onClick={() => window.location.reload()}>
+        <button type="button" className="ghost" onClick={() => window.location.reload()}>
           retry
         </button>
       </div>
@@ -122,55 +136,103 @@ export default function App() {
     );
   }
 
-  const splitStyle =
-    layout === 'columns'
-      ? { gridTemplateColumns: `${ratio}fr 6px ${1 - ratio}fr` }
-      : { gridTemplateRows: `${ratio}fr 6px ${1 - ratio}fr` };
+  const wallpaperUrl = wallpaper.prefs.wallpaper ? `/api/wallpapers/${wallpaper.prefs.wallpaper}` : null;
 
   return (
-    <div className="app">
-      <TopBar
-        server={server}
-        layout={layout}
-        paneCount={panes.length}
-        onLayout={setLayout as (mode: LayoutMode) => void}
-        onAddPane={addPane}
+    <div className="desktop">
+      <div
+        className="wallpaper"
+        style={
+          wallpaperUrl
+            ? {
+                backgroundImage: `url(${wallpaperUrl})`,
+                backgroundSize: wallpaper.prefs.fit === 'tile' ? 'auto' : wallpaper.prefs.fit,
+                backgroundRepeat: wallpaper.prefs.fit === 'tile' ? 'repeat' : 'no-repeat',
+              }
+            : undefined
+        }
       />
+      <div className="wallpaper-dim" style={{ opacity: wallpaperUrl ? wallpaper.prefs.dim : 0 }} />
 
-      <main
-        className="grid"
-        data-layout={layout}
-        data-panes={visible.length}
-        style={visible.length > 1 ? splitStyle : undefined}
-      >
-        {visible.map((pane, index) => (
-          <Fragment key={pane.id}>
-            {index > 0 ? (
-              <Splitter layout={layout === 'rows' ? 'rows' : 'columns'} ratio={ratio} onRatio={setRatio} />
-            ) : null}
-            <PaneView
-              pane={pane}
-              server={server}
-              hue={hues[pane.id]}
-              focused={pane.id === focused}
-              closable={panes.length > 1}
-              onFocus={setFocused}
-              onStatus={setStatus}
-              onTitle={setTitle}
-              onRestart={restart}
-              onClose={closePane}
-            />
-          </Fragment>
+      <header className="menubar glass">
+        <span className="wordmark">
+          vibe-os<span className="caret" aria-hidden="true" />
+        </span>
+        <span className="menu-facts">
+          <span>
+            {server.user}@{server.hostname}
+          </span>
+          <span className="sep">·</span>
+          <span title={server.hostKey ?? 'host key not pinned'}>
+            {server.hostKeyFingerprint ?? 'host key: prompt'}
+          </span>
+          <span className="sep">·</span>
+          <span>{server.tmux ? 'tmux' : 'no tmux'}</span>
+          <span className="sep">·</span>
+          <span data-warn={!server.authRequired || undefined}>{server.authRequired ? 'token' : 'open'}</span>
+        </span>
+        <span className="menu-right">v{server.version}</span>
+      </header>
+
+      <main className="surface" ref={surfaceRef}>
+        <GridOverlay preview={preview} view={view} />
+
+        {ordered.map((win) => (
+          <TermWindow
+            key={win.id}
+            win={win}
+            server={server}
+            hue={hues[win.id]}
+            focused={win.id === focused}
+            view={view}
+            onRaise={raise}
+            onCommit={move}
+            onPreview={setPreview}
+            onClose={close}
+            onRestart={restart}
+            onMinimize={minimize}
+            onMaximize={maximize}
+            onStatus={setStatus}
+            onTitle={setTitle}
+          />
         ))}
+
+        {windows.length === 0 ? (
+          <div className="empty">
+            <p className="empty-line">No windows open.</p>
+            <button type="button" className="ghost" onClick={spawn}>
+              Open a terminal
+            </button>
+            <p className="empty-hint">
+              or press <kbd>alt</kbd> <kbd>t</kbd>
+            </p>
+          </div>
+        ) : null}
       </main>
 
-      {overflow > 0 ? (
-        <p className="overflow-note">
-          {overflow} more pane{overflow > 1 ? 's' : ''} open — still running, not shown in this layout
-        </p>
-      ) : null}
+      <Dock
+        windows={windows}
+        hues={hues}
+        focused={focused}
+        tmux={server.tmux}
+        onSpawn={spawn}
+        onSelect={raise}
+        onWallpaper={() => setPanelOpen(true)}
+      />
 
-      <StatusLine panes={panes} hues={hues} focused={focused} server={server} onFocus={setFocused} />
+      {panelOpen ? (
+        <WallpaperPanel
+          list={wallpaper.list}
+          prefs={wallpaper.prefs}
+          busy={wallpaper.busy}
+          error={wallpaper.error}
+          maxBytes={server.maxWallpaperBytes}
+          onSave={wallpaper.save}
+          onUpload={wallpaper.upload}
+          onRemove={wallpaper.remove}
+          onClose={() => setPanelOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

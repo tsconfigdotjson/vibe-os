@@ -16,6 +16,7 @@ export interface ServerConfig {
    */
   hostKeyFingerprint: string | null;
   certificateEndpoint: string;
+  maxWallpaperBytes: number;
 }
 
 export async function fetchServerConfig(): Promise<ServerConfig> {

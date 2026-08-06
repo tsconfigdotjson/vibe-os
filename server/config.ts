@@ -35,6 +35,8 @@ export interface Config {
   certTtlSeconds: number;
   /** Wrap each pane in `tmux new-session -A`. Auto-detected unless forced. */
   tmux: boolean;
+  /** Restyle the tmux status bar to match the desktop. Session-scoped. */
+  tmuxTheme: boolean;
 
   open: boolean;
 }
@@ -61,6 +63,7 @@ export const OPTION_SPEC = {
   'cert-ttl': { type: 'string' as const },
   tmux: { type: 'boolean' as const },
   'no-tmux': { type: 'boolean' as const },
+  'no-tmux-theme': { type: 'boolean' as const },
   open: { type: 'boolean' as const },
   help: { type: 'boolean' as const, short: 'h' },
   version: { type: 'boolean' as const, short: 'v' },
@@ -151,6 +154,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
     token,
     certTtlSeconds: num(values['cert-ttl'], 12 * 60 * 60, 'cert-ttl'),
     tmux,
+    tmuxTheme: !values['no-tmux-theme'],
     open: Boolean(values.open),
   };
 }

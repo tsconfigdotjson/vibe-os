@@ -1,27 +1,37 @@
 # A blank Linux box with sshd, tmux and vibe-os on port 80 — the same shape as
 # a fresh VPS, close enough to be a real rehearsal for one.
 #
-# The build deliberately goes through `npm pack` and then installs the tarball
-# globally, rather than running from the source tree. That exercises the actual
-# publish path: if the `files` list is wrong, or something the server needs at
-# runtime is missing from the package, this image fails to start instead of
-# quietly working because the source happened to be lying around.
+# The runtime stage deliberately contains no Bun, no Node and no npm. It is
+# plain Debian plus OpenSSH, tmux and one compiled executable. If anything the
+# server needs at runtime were not actually embedded in that binary, this image
+# would fail to start rather than quietly work because a source tree happened to
+# be lying around.
 
-# ── stage 1: build the package exactly as `npm publish` would ────────────────
-FROM node:22-bookworm-slim AS builder
+# ── stage 1: build and compile ───────────────────────────────────────────────
+FROM oven/bun:1-debian AS builder
 
 WORKDIR /src
-# scripts/ comes along with the manifests because postinstall runs from there.
-COPY package.json package-lock.json ./
+# scripts/ comes along with the manifest because postinstall runs from there.
+COPY package.json ./
 COPY scripts ./scripts
-RUN npm ci
+RUN bun install
 
 COPY . .
-# prepack runs the full build: fetch ssh.wasm, vite, precompress, tsc.
-RUN mkdir -p /out && npm pack --pack-destination /out && ls -la /out
 
-# ── stage 2: the runtime box ─────────────────────────────────────────────────
-FROM node:22-bookworm-slim
+# Compile for whatever architecture the image is being built for, so this works
+# on both an arm64 laptop and an x64 VPS.
+ARG TARGETARCH
+RUN bun run build \
+    && case "$TARGETARCH" in \
+         amd64) BUN_TARGET=linux-x64 ;; \
+         arm64) BUN_TARGET=linux-arm64 ;; \
+         *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+       esac \
+    && bun scripts/compile.ts "$BUN_TARGET" \
+    && mv dist/bin/vibe-os-* /out-binary
+
+# ── stage 2: the runtime box, with no JavaScript runtime in sight ────────────
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-server \
@@ -40,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
-# The panes run as this user, not root — same as a VPS where you have already
+# The windows run as this user, not root — same as a VPS where you have already
 # stopped logging in as root. vibe-os writes its CA and the cert-authority line
 # into this home directory.
 RUN useradd --create-home --shell /bin/bash vibe \
@@ -51,16 +61,14 @@ RUN useradd --create-home --shell /bin/bash vibe \
     # makes a fresh set on first boot instead.
     && rm -f /etc/ssh/ssh_host_*
 
-# Lets an unprivileged process bind port 80. This is the same fix `vibe-os`
-# prints when it cannot bind, and the same capability the systemd unit grants.
-RUN setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(which node)")"
-
 COPY docker/sshd-vibe-os.conf /etc/ssh/sshd_config.d/vibe-os.conf
 COPY docker/entrypoint.sh /usr/local/bin/vibe-os-entrypoint
-RUN chmod +x /usr/local/bin/vibe-os-entrypoint
+COPY --from=builder /out-binary /usr/local/bin/vibe-os
 
-COPY --from=builder /out/*.tgz /tmp/
-RUN npm install -g /tmp/*.tgz && rm -f /tmp/*.tgz
+# Lets an unprivileged process bind port 80. Same fix `vibe-os` prints when it
+# cannot bind, and the same capability the systemd unit grants.
+RUN chmod +x /usr/local/bin/vibe-os-entrypoint /usr/local/bin/vibe-os \
+    && setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
 
 EXPOSE 80
 ENTRYPOINT ["/usr/local/bin/vibe-os-entrypoint"]

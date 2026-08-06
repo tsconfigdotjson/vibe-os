@@ -4,13 +4,19 @@ A terminal multiplexer in the browser. Point a blank VPS at it and you get
 persistent shells on port 80, reachable from anything with a browser.
 
 ```bash
-npm install -g vibe-os
+curl -fsSL -o /usr/local/bin/vibe-os \
+  https://github.com/GratefulWorkspace/vibe-os/releases/latest/download/vibe-os-linux-x64
+chmod +x /usr/local/bin/vibe-os
 vibe-os
 ```
 
-Open `http://<your-vps>/`. Two panes, both already logged in, each in its own
-tmux session. Close the tab, come back tomorrow, and whatever was running is
-still running.
+One file. No Bun, no Node, no npm on the target — the whole app, including the
+20MB SSH WASM runtime, is compiled into the binary.
+
+Open `http://<your-vps>/` and you get a desktop: click **+ terminal** in the
+dock to open a window, drag windows around a snap grid, and set a wallpaper.
+Every window is its own tmux session, so closing the tab and coming back
+tomorrow finds whatever was running still running.
 
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
 edit, no `sshd_config` change, and no root.
@@ -139,20 +145,35 @@ certificate instead.
 --state-dir <dir>   CA and TLS material (default ~/.vibe-os)
 ```
 
-### Multiplexer keys
+### The desktop
+
+Windows float over a wallpaper and snap to a 24 × 14 grid. Drag a title bar to
+move, drag any edge or corner to resize; the grid only appears while you are
+dragging, with the destination cell lit up. Double-click a title bar to fill the
+desktop.
 
 Chords use `alt`, not tmux's `ctrl-b` — the terminal has focus nearly all the
 time and `ctrl-b` belongs to the tmux session running inside it.
 
 | key | action |
 | --- | --- |
-| `alt` `1`…`9` | focus pane n |
-| `alt` `\` | side by side |
-| `alt` `-` | stacked |
-| `alt` `z` | show only the focused pane |
-| `alt` `t` | open another pane |
+| `alt` `t` | open a window |
+| `alt` `1`…`9` | raise window n |
+| `alt` `z` | maximise / restore |
+| `alt` `m` | minimise to the dock |
+| `alt` `w` | close (the tmux session keeps running) |
 
-Drag the divider to resize; double-click it to even the panes out.
+### Wallpaper
+
+The dock's ◑ button opens the picker. Uploads are stored on the server, not in
+the browser, so the same desktop appears on every device you open it from.
+Images are content-addressed by hash and their type is decided by sniffing magic
+bytes — not by the filename or the declared Content-Type, since these get served
+back to a browser and a mislabelled HTML file would be a stored-XSS primitive.
+
+The **Dim** slider darkens the wallpaper behind the windows. Terminal text sits
+on a 62% plate over the glass, which reads well on most images; turn Dim up for
+a busy or bright one.
 
 ---
 
@@ -196,7 +217,7 @@ root and it just works. Otherwise vibe-os falls back to port 8080 and tells you
 how to fix it:
 
 ```bash
-sudo setcap 'cap_net_bind_service=+ep' $(readlink -f "$(which node)")
+sudo setcap 'cap_net_bind_service=+ep' $(readlink -f "$(which bun)")
 ```
 
 or let systemd handle it, which grants the capability without touching the node
@@ -212,10 +233,16 @@ journalctl -u vibe-os -f
 ## Development
 
 ```bash
-npm install          # also fetches ssh.wasm from the upstream release
-npm run build
-npm run dev          # Vite on :5173, proxying to a vibe-os on :7681
+bun install          # also fetches ssh.wasm from the upstream release
+bun run build        # web app + precompressed assets + embedded manifest
+bun run dev          # Vite on :5173, proxying to a vibe-os on :7681
+bun run dev:server   # the server with --hot, on :7681
+bun run compile      # standalone binaries into dist/bin
 ```
+
+The server is TypeScript run directly by Bun — there is no build step for it.
+`bun run compile` bundles it with every web asset into one executable per
+platform.
 
 `ssh.wasm` (~19 MB) comes prebuilt from
 [c2FmZQ/sshterm](https://github.com/c2FmZQ/sshterm) releases rather than being
@@ -223,7 +250,7 @@ compiled here, so no Go toolchain is needed on the target machine. The build
 precompresses it to about 4.5 MB of brotli, which is what visitors actually
 download.
 
-Pin a version with `SSHTERM_VERSION=v0.8.3 npm run fetch-wasm`.
+Pin a version with `SSHTERM_VERSION=v0.8.3 bun run fetch-wasm`.
 
 ### Things that will bite you
 
@@ -243,6 +270,22 @@ as **changed**, which reads like an attack rather than a misconfiguration.
 
 **tmux is detected on the machine vibe-os runs on**, which is the SSH target by
 default. If you point `--ssh-host` somewhere else, pass `--tmux` explicitly.
+
+**xterm's `allowTransparency` is not enough to see through a terminal.** It
+covers the cell layer; xterm 6 also paints an opaque background on the element
+it mounts into and on its scrollable wrapper. Miss those and the terminal
+renders perfectly while punching a solid black rectangle through the glass — the
+effect just silently disappears. styles.css clears them explicitly.
+
+**BunFile.stat() returns undefined for embedded files** rather than a rejected
+promise, so `.catch()` on it throws. Use `.size`, which works in both modes.
+Embedded assets have no mtime either, so their ETag version comes from the
+generated `BUILD_ID`.
+
+**A compiled Bun binary keeps the same argv shape as `bun run`** —
+`[runtime, entry, ...args]`, where the entry reads as `/$bunfs/root/<name>`.
+Assuming a standalone executable drops the entry slot turns that path into the
+subcommand.
 
 ---
 

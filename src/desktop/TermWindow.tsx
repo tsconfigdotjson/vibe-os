@@ -1,0 +1,211 @@
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { SshTerminal } from '../sshterm';
+import type { ServerConfig } from '../api';
+import { paneSshConfig } from '../api';
+import type { Rect, WindowState } from './useWindows';
+import { rectToPixels, pixelsToRect, type Viewport } from './geometry';
+
+const STATUS_LABEL: Record<WindowState['status'], string> = {
+  loading: 'connecting',
+  ready: 'live',
+  ended: 'closed',
+  error: 'error',
+};
+
+/** Corner and edge grips. Anything not listed is not resizable from that side. */
+const HANDLES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
+type Handle = (typeof HANDLES)[number];
+
+export interface TermWindowProps {
+  win: WindowState;
+  server: ServerConfig;
+  hue: string;
+  focused: boolean;
+  view: Viewport;
+  onRaise: (id: string) => void;
+  onCommit: (id: string, rect: Rect) => void;
+  onPreview: (rect: Rect | null) => void;
+  onClose: (id: string) => void;
+  onRestart: (id: string) => void;
+  onMinimize: (id: string) => void;
+  onMaximize: (id: string) => void;
+  onStatus: (id: string, status: WindowState['status'], detail?: string) => void;
+  onTitle: (id: string, title: string) => void;
+}
+
+interface DragState {
+  mode: 'move' | Handle;
+  startX: number;
+  startY: number;
+  origin: { left: number; top: number; width: number; height: number };
+}
+
+export const TermWindow = memo(function TermWindow({
+  win,
+  server,
+  hue,
+  focused,
+  view,
+  onRaise,
+  onCommit,
+  onPreview,
+  onClose,
+  onRestart,
+  onMinimize,
+  onMaximize,
+  onStatus,
+  onTitle,
+}: TermWindowProps) {
+  // Rebuilt only when the window identity changes; SshTerminal reads it once.
+  const config = useMemo(
+    () => paneSshConfig(server, win.id, server.tmux ? 'tmux' : 'shell'),
+    [server, win.id],
+  );
+
+  const anchored = rectToPixels(win, view);
+  const [live, setLive] = useState<typeof anchored | null>(null);
+  const drag = useRef<DragState | null>(null);
+  const box = live ?? anchored;
+
+  const begin = useCallback(
+    (mode: DragState['mode']) => (event: React.PointerEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+      onRaise(win.id);
+      drag.current = { mode, startX: event.clientX, startY: event.clientY, origin: anchored };
+      setLive(anchored);
+    },
+    [anchored, onRaise, win.id],
+  );
+
+  const onPointerMove = useCallback(
+    (event: React.PointerEvent) => {
+      const state = drag.current;
+      if (!state) return;
+      const dx = event.clientX - state.startX;
+      const dy = event.clientY - state.startY;
+      const o = state.origin;
+
+      let next = { ...o };
+      if (state.mode === 'move') {
+        next.left = o.left + dx;
+        next.top = o.top + dy;
+      } else {
+        // Each letter in the handle name moves one edge. Left/top edges move
+        // the origin as well as the size, which is why they adjust both.
+        if (state.mode.includes('e')) next.width = o.width + dx;
+        if (state.mode.includes('s')) next.height = o.height + dy;
+        if (state.mode.includes('w')) {
+          next.left = o.left + dx;
+          next.width = o.width - dx;
+        }
+        if (state.mode.includes('n')) {
+          next.top = o.top + dy;
+          next.height = o.height - dy;
+        }
+        next.width = Math.max(180, next.width);
+        next.height = Math.max(120, next.height);
+      }
+
+      setLive(next);
+      onPreview(pixelsToRect(next, view));
+    },
+    [onPreview, view],
+  );
+
+  const finish = useCallback(
+    (event: React.PointerEvent) => {
+      const state = drag.current;
+      if (!state) return;
+      drag.current = null;
+      try {
+        (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+      } catch {
+        // pointer already gone
+      }
+      if (live) onCommit(win.id, pixelsToRect(live, view));
+      setLive(null);
+      onPreview(null);
+    },
+    [live, onCommit, onPreview, view, win.id],
+  );
+
+  if (win.minimized) return null;
+
+  const dragging = drag.current !== null;
+
+  return (
+    <section
+      className="win"
+      data-focused={focused || undefined}
+      data-status={win.status}
+      data-dragging={dragging || undefined}
+      style={{
+        ['--win-color' as string]: hue,
+        transform: `translate(${box.left}px, ${box.top}px)`,
+        width: box.width,
+        height: box.height,
+        zIndex: win.z,
+      }}
+      onPointerDown={() => onRaise(win.id)}
+    >
+      <header
+        className="win-bar"
+        onPointerDown={begin('move')}
+        onPointerMove={onPointerMove}
+        onPointerUp={finish}
+        onPointerCancel={finish}
+        onDoubleClick={() => onMaximize(win.id)}
+      >
+        <span className="win-dot" aria-hidden="true" />
+        <span className="win-name">{server.tmux ? `vibe-${win.id}` : `shell ${win.id}`}</span>
+        <span className="win-title">{win.title ?? ''}</span>
+        <span className="win-state">{STATUS_LABEL[win.status]}</span>
+        <span className="win-buttons">
+          <button type="button" title="Restart this connection" onClick={() => onRestart(win.id)}>
+            ⟳
+          </button>
+          <button type="button" title="Minimise to the dock" onClick={() => onMinimize(win.id)}>
+            –
+          </button>
+          <button type="button" title="Fill the desktop" onClick={() => onMaximize(win.id)}>
+            ▢
+          </button>
+          <button
+            type="button"
+            className="win-close"
+            title="Close the window (the tmux session keeps running)"
+            onClick={() => onClose(win.id)}
+          >
+            ✕
+          </button>
+        </span>
+      </header>
+
+      <div className="win-body">
+        <SshTerminal
+          key={`${win.id}:${win.generation}`}
+          config={config}
+          className="win-term"
+          onFocus={() => onRaise(win.id)}
+          onStatusChange={(status, detail) => onStatus(win.id, status, detail)}
+          onTitleChange={(title) => onTitle(win.id, title)}
+        />
+      </div>
+
+      {HANDLES.map((handle) => (
+        <span
+          key={handle}
+          className={`grip grip-${handle}`}
+          data-handle={handle}
+          onPointerDown={begin(handle)}
+          onPointerMove={onPointerMove}
+          onPointerUp={finish}
+          onPointerCancel={finish}
+        />
+      ))}
+    </section>
+  );
+});
