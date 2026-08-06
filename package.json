@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "fetch-wasm": "bun scripts/fetch-wasm.mjs",
-    "postinstall": "bun scripts/fetch-wasm.mjs --if-missing --soft-fail || exit 0",
+    "postinstall": "bun scripts/gen-assets.ts && bun scripts/fetch-wasm.mjs --if-missing --soft-fail || exit 0",
     "build:web": "vite build",
     "build:compress": "bun scripts/compress.mjs",
     "build:assets": "bun scripts/gen-assets.ts",

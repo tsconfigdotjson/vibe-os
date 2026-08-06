@@ -22,8 +22,17 @@ async function* walk(dir: string): AsyncGenerator<string> {
   }
 }
 
+// A fresh clone has no dist/web yet, but static.ts imports this manifest
+// unconditionally — so emit an empty one rather than failing. postinstall runs
+// this, which is what lets `bun run dev:server` and `tsc` work before the first
+// build. The empty manifest also makes the server read assets off disk, which
+// is what you want in development.
 const files: string[] = [];
-for await (const file of walk(WEB)) files.push(file);
+try {
+  for await (const file of walk(WEB)) files.push(file);
+} catch {
+  console.log('vibe-os: no dist/web yet — writing an empty asset manifest');
+}
 files.sort();
 
 // Embedded files have no usable mtime, so the ETag needs another source of
