@@ -18,7 +18,8 @@
   ],
   "scripts": {
     "fetch-wasm": "node scripts/fetch-wasm.mjs",
-    "postinstall": "node scripts/fetch-wasm.mjs --if-missing --soft-fail",
+    "//postinstall": "Best-effort: the server fetches ssh.wasm on first start if this does not. `|| exit 0` covers the case where the script itself is unreachable, which --soft-fail cannot catch.",
+    "postinstall": "node scripts/fetch-wasm.mjs --if-missing --soft-fail || exit 0",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "build:compress": "node scripts/compress.mjs",

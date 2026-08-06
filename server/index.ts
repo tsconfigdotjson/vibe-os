@@ -65,12 +65,33 @@ async function listenWithFallback(server: Server, config: Config): Promise<numbe
   }
 }
 
-function banner(config: Config, port: number, url: string, extras: string[]): void {
+/**
+ * Addresses a browser can actually reach.
+ *
+ * `os.hostname()` is the tempting answer and the wrong one — on a VPS it is
+ * usually something like "ubuntu-2gb-fsn1" that resolves nowhere, and in a
+ * container it is a hex ID. The interface addresses are what someone can type.
+ */
+function reachableHosts(config: Config): string[] {
+  if (config.domain) return [config.domain];
+  if (config.host !== '0.0.0.0' && config.host !== '::') return [config.host];
+
+  const addresses: string[] = [];
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const info of iface ?? []) {
+      if (info.family === 'IPv4' && !info.internal) addresses.push(info.address);
+    }
+  }
+  return addresses.length > 0 ? addresses : [os.hostname()];
+}
+
+function banner(config: Config, port: number, urls: string[], extras: string[]): void {
   const line = color.dim('─'.repeat(58));
   console.log('');
   console.log(`  ${color.bold(color.cyan('vibe-os'))} ${color.dim(`· ${os.hostname()}`)}`);
   console.log(`  ${line}`);
-  console.log(`  ${color.bold('open')}      ${color.cyan(url)}`);
+  console.log(`  ${color.bold('open')}      ${color.cyan(urls[0])}`);
+  for (const extra of urls.slice(1, 4)) console.log(`            ${color.dim(extra)}`);
   console.log(`  ${color.dim('shell')}     ${config.user}@${config.sshHost}:${config.sshPort}`);
   console.log(`  ${color.dim('panes')}     ${config.tmux ? 'tmux-backed (survive reload)' : 'plain login shell'}`);
   for (const extra of extras) console.log(`  ${color.dim(extra)}`);
@@ -204,16 +225,16 @@ export async function startServer(config: Config): Promise<RunningServer> {
     }
   }
 
-  const displayHost = config.domain ?? (config.host === '0.0.0.0' || config.host === '::' ? os.hostname() : config.host);
-  const url = tlsReady
-    ? `https://${config.domain}${config.tlsPort === 443 ? '' : `:${config.tlsPort}`}/`
-    : `http://${displayHost}${port === 80 ? '' : `:${port}`}/${config.token ? `?token=${config.token}` : ''}`;
+  const query = config.token ? `?token=${config.token}` : '';
+  const urls = tlsReady
+    ? [`https://${config.domain}${config.tlsPort === 443 ? '' : `:${config.tlsPort}`}/${query}`]
+    : reachableHosts(config).map((h) => `http://${h}${port === 80 ? '' : `:${port}`}/${query}`);
 
   const sample = paneCommand('1', config);
   if (sample) extras.push(`each pane runs: ${sample}`);
   extras.push(`state: ${config.stateDir}`);
 
-  banner(config, port, url, extras);
+  banner(config, port, urls, extras);
 
   return {
     httpServer,

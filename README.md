@@ -13,7 +13,33 @@ tmux session. Close the tab, come back tomorrow, and whatever was running is
 still running.
 
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
-edit, no `sshd_config` change, no root, and no Docker.
+edit, no `sshd_config` change, and no root.
+
+## Try it without a VPS
+
+```bash
+docker compose up --build
+open http://localhost:8080
+```
+
+The container is a blank Debian box with sshd, tmux and git — the same shape as
+a fresh VPS, so it exercises the real thing: vibe-os generates its CA, writes
+the `cert-authority` line, discovers the host key, and binds port 80 as an
+unprivileged user via `setcap`. The image is built by `npm pack`-ing this repo
+and installing the tarball globally, so a broken `files` list fails the build
+rather than hiding behind the source tree.
+
+Two differences from a VPS worth knowing:
+
+- `localhost` counts as a **secure origin**, so clipboard copy/paste works here
+  even over plain HTTP. Reached by bare IP on a VPS, it would not.
+- The startup banner prints the container's bridge address (`172.x.x.x`), which
+  the host cannot reach. Use `localhost:8080`. On a VPS that same line prints
+  the address you actually want.
+
+Both volumes are worth keeping: `vibe-home` preserves the CA and your work,
+`vibe-sshd` preserves the container's host keys so the browser does not report
+the host key as changed after a rebuild.
 
 ---
 

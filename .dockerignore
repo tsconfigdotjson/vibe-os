@@ -1,0 +1,8 @@
+node_modules
+dist
+public/ssh.wasm
+public/wasm_exec.js
+.git
+*.tgz
+*.log
+.DS_Store

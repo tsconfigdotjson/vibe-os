@@ -1,0 +1,31 @@
+# Try vibe-os without a VPS.
+#
+#   docker compose up --build
+#   open http://localhost:8080
+#
+# localhost counts as a secure origin in browsers, so clipboard copy/paste works
+# here even though the connection is plain HTTP — on a VPS reached by IP it
+# would not.
+
+services:
+  vibe-os:
+    build: .
+    container_name: vibe-os
+    ports:
+      # Host 8080 -> container 80. Use "80:80" if you want the real thing and
+      # your host lets you bind it.
+      - "8080:80"
+    volumes:
+      # Keeps the SSH certificate authority, the cert-authority line, and any
+      # work in the home directory across `docker compose down`.
+      - vibe-home:/home/vibe
+      # Keeps the container's SSH host keys stable, so the browser does not see
+      # the host key change after a rebuild.
+      - vibe-sshd:/etc/ssh
+    # Anything here is passed straight to `vibe-os start`.
+    # command: ["--token"]
+    restart: unless-stopped
+
+volumes:
+  vibe-home:
+  vibe-sshd:
