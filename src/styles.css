@@ -1,0 +1,576 @@
+/*
+ * vibe-os
+ *
+ * The chrome is a status line, not a dashboard. Everything is monospace and
+ * aligned to a character grid, hierarchy comes from size, tracking and opacity
+ * rather than from a second typeface, and colour is strictly semantic: each
+ * pane owns one hue from the ANSI palette that the terminals themselves use,
+ * and that hue marks the pane everywhere it appears. Nothing here is coloured
+ * for decoration.
+ *
+ * No web fonts: this has to render correctly on a VPS with no outbound network
+ * and no CDN.
+ */
+
+:root {
+  --void: #07090d;
+  --surface: #0d1117;
+  --chrome: #10141c;
+  --raised: #161b25;
+  --rule: #1b2230;
+  --rule-bright: #26304180;
+
+  --text: #c8cedb;
+  --text-dim: #8b93a5;
+  --muted: #5c6678;
+
+  --ok: #7ee081;
+  --warn: #f2c14e;
+  --err: #ef6b73;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo,
+    Consolas, monospace;
+
+  --t-micro: 10.5px;
+  --t-small: 11.5px;
+  --t-base: 12.5px;
+  --t-mark: 15px;
+
+  --row: 30px;
+  --gutter: 10px;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--t-base);
+  font-variant-ligatures: none;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 1px solid var(--pane-color, #56cfe1);
+  outline-offset: 1px;
+}
+
+/* ── shell ────────────────────────────────────────────────────────────── */
+
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-rows: var(--row) minmax(0, 1fr) auto var(--row);
+}
+
+/* ── top bar ──────────────────────────────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 10px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--rule);
+  min-width: 0;
+}
+
+.wordmark {
+  font-size: var(--t-mark);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  flex: none;
+}
+
+/* A live block cursor, because that is what this product is made of. */
+.caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.95em;
+  margin-left: 2px;
+  background: #56cfe1;
+  translate: 0 0.08em;
+  animation: blink 1.15s steps(1) infinite;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 1;
+}
+
+.meta-item {
+  font-size: var(--t-small);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta-dim {
+  color: var(--muted);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.segmented {
+  display: flex;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.segmented button {
+  padding: 3px 8px;
+  font-size: var(--t-small);
+  line-height: 1.35;
+  color: var(--muted);
+  background: transparent;
+  border-right: 1px solid var(--rule);
+  transition: color 90ms linear, background-color 90ms linear;
+}
+
+.segmented button:last-child {
+  border-right: none;
+}
+
+.segmented button:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+
+.segmented button[data-active] {
+  color: var(--void);
+  background: var(--text-dim);
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  font-size: var(--t-small);
+  color: var(--text-dim);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  transition: color 90ms linear, border-color 90ms linear;
+}
+
+.action:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.action-count {
+  font-size: var(--t-micro);
+  color: var(--muted);
+  border-left: 1px solid var(--rule);
+  padding-left: 6px;
+}
+
+/* ── pane grid ────────────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--gutter);
+  gap: 0;
+}
+
+.grid[data-panes='1'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.grid[data-layout='rows'] {
+  grid-auto-flow: row;
+}
+
+.pane {
+  display: grid;
+  grid-template-rows: 24px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+  /* The identity hue is only fully present on the focused pane; unfocused
+     panes keep the hue but drop to a whisper, so focus is unambiguous. */
+  transition: border-color 120ms linear;
+}
+
+.pane[data-focused] {
+  border-color: color-mix(in oklab, var(--pane-color) 55%, var(--rule));
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 0;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--t-micro);
+  min-width: 0;
+}
+
+/* The index badge doubles as the pane's colour rail. */
+.pane-index {
+  flex: none;
+  width: 22px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  color: var(--void);
+  background: color-mix(in oklab, var(--pane-color) 40%, var(--muted));
+  transition: background-color 120ms linear;
+}
+
+.pane[data-focused] .pane-index {
+  background: var(--pane-color);
+}
+
+.pane-session {
+  flex: none;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+.pane-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.pane-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.pane-status .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.pane[data-status='ready'] .pane-status {
+  color: var(--text-dim);
+}
+.pane[data-status='ready'] .dot {
+  background: var(--ok);
+}
+.pane[data-status='loading'] .dot {
+  background: var(--warn);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+.pane[data-status='error'] .pane-status {
+  color: var(--err);
+}
+.pane[data-status='error'] .dot {
+  background: var(--err);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.pane-detail {
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 90ms linear;
+}
+
+.pane:hover .pane-actions,
+.pane:focus-within .pane-actions {
+  opacity: 1;
+}
+
+.pane-actions button {
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+
+.pane-actions button:hover {
+  color: var(--text);
+}
+
+.pane-body {
+  min-height: 0;
+  min-width: 0;
+  padding: 6px 4px 4px 8px;
+  background: var(--surface);
+}
+
+.pane-term {
+  width: 100%;
+  height: 100%;
+}
+
+/* xterm paints its own background; keep it flush with the pane. */
+.pane-term .xterm .xterm-viewport {
+  background: transparent !important;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+/* ── splitter ─────────────────────────────────────────────────────────── */
+
+.splitter {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  touch-action: none;
+}
+
+.splitter[data-layout='columns'] {
+  cursor: col-resize;
+}
+
+.splitter[data-layout='rows'] {
+  cursor: row-resize;
+}
+
+.splitter-grip {
+  background: var(--rule);
+  border-radius: 2px;
+  transition: background-color 90ms linear;
+}
+
+.splitter[data-layout='columns'] .splitter-grip {
+  width: 1px;
+  height: 26px;
+}
+
+.splitter[data-layout='rows'] .splitter-grip {
+  width: 26px;
+  height: 1px;
+}
+
+.splitter:hover .splitter-grip,
+.splitter:focus-visible .splitter-grip {
+  background: var(--text-dim);
+}
+
+/* ── status line ──────────────────────────────────────────────────────── */
+
+.statusline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 10px;
+  background: var(--chrome);
+  border-top: 1px solid var(--rule);
+  font-size: var(--t-small);
+  min-width: 0;
+}
+
+.sl-panes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sl-pane {
+  padding: 2px 7px;
+  border-radius: 2px;
+  color: var(--muted);
+  white-space: nowrap;
+  transition: color 90ms linear, background-color 90ms linear;
+}
+
+.sl-pane:hover {
+  color: var(--text-dim);
+  background: var(--raised);
+}
+
+.sl-pane[data-active] {
+  color: var(--void);
+  background: var(--pane-color);
+  font-weight: 600;
+}
+
+.sl-pane[data-status='error']:not([data-active]) {
+  color: var(--err);
+}
+
+.sl-spinner {
+  color: var(--warn);
+  padding-left: 4px;
+}
+
+.sl-facts {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sl-fact {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sl-fact[data-warn] {
+  color: var(--warn);
+}
+
+.sl-sep {
+  color: var(--rule-bright);
+}
+
+.overflow-note {
+  margin: 0;
+  padding: 4px 10px;
+  font-size: var(--t-micro);
+  color: var(--muted);
+  background: var(--chrome);
+  border-top: 1px solid var(--rule);
+}
+
+/* ── boot / error ─────────────────────────────────────────────────────── */
+
+.boot {
+  height: 100%;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 8px;
+  padding: 0 clamp(20px, 8vw, 90px);
+}
+
+.boot-line {
+  margin: 0;
+  font-size: var(--t-mark);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  display: flex;
+  align-items: baseline;
+}
+
+.boot-detail {
+  margin: 0;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+.boot-error .boot-line {
+  color: var(--err);
+}
+
+.boot .action {
+  margin-top: 8px;
+}
+
+/* ── responsive ───────────────────────────────────────────────────────── */
+
+@media (max-width: 760px) {
+  .topbar-meta {
+    display: none;
+  }
+
+  /* Two panes side by side on a phone is two unusable panes. */
+  .grid[data-panes='2'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) 6px minmax(0, 1fr) !important;
+  }
+
+  .splitter {
+    cursor: row-resize;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .caret {
+    opacity: 1;
+  }
+}

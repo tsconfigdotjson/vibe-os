@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.sshterm-src/
+public/ssh.wasm
+public/wasm_exec.js
+*.tgz
+.DS_Store
+*.log

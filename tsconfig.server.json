@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "skipLibCheck": true,
+    "declaration": false,
+    "sourceMap": true,
+    "outDir": "dist/server",
+    "rootDir": "server"
+  },
+  "include": ["server"]
+}
