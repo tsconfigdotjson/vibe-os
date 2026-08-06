@@ -31,9 +31,12 @@ open http://localhost:8080
 The container is a blank Debian box with sshd, tmux and git — the same shape as
 a fresh VPS, so it exercises the real thing: vibe-os generates its CA, writes
 the `cert-authority` line, discovers the host key, and binds port 80 as an
-unprivileged user via `setcap`. The image is built by `npm pack`-ing this repo
-and installing the tarball globally, so a broken `files` list fails the build
-rather than hiding behind the source tree.
+unprivileged user via `setcap`.
+
+The runtime stage contains **no Bun, Node or npm** — plain Debian, OpenSSH, tmux
+and one compiled binary. If anything the server needed at runtime were not
+actually embedded in that binary, the container would fail to start rather than
+quietly work because a source tree happened to be lying around.
 
 Two differences from a VPS worth knowing:
 
@@ -53,7 +56,7 @@ the host key as changed after a rebuild.
 
 ```
 ┌─────────────────┐                        ┌──────────────────┐        ┌──────┐
-│     browser     │   wss://…/websocket    │   vibe-os (node) │  TCP   │ sshd │
+│     browser     │   wss://…/websocket    │  vibe-os (bun)   │  TCP   │ sshd │
 │   ssh.wasm      │ ─────────────────────► │    :80 / :443    │ ─────► │  :22 │
 │  private key    │                        │   byte pipe      │        │      │
 │  in IndexedDB   │   POST /api/ssh/…      │   + SSH CA       │        │ tmux │
@@ -61,9 +64,9 @@ the host key as changed after a rebuild.
 ```
 
 **The SSH protocol runs inside the browser.** Key exchange, authentication and
-channel multiplexing all happen in a Go/WASM sandbox in the tab. The Node server
-is a byte pipe that understands nothing about SSH — it never sees plaintext and
-holds no credentials for your session.
+channel multiplexing all happen in a Go/WASM sandbox in the tab. The server is a
+byte pipe that understands nothing about SSH — it never sees plaintext and holds
+no credentials for your session.
 
 ### The bootstrap problem, and how it is solved
 
@@ -81,27 +84,27 @@ vibe-os does neither. **It is its own short-lived SSH certificate authority.**
    cert-authority ssh-ed25519 AAAA… vibe-os-ca@host
    ```
 
-2. Each pane generates its own keypair inside the WASM sandbox. The private half
-   stays in IndexedDB and never crosses the network.
+2. Each window generates its own keypair inside the WASM sandbox. The private
+   half stays in IndexedDB and never crosses the network.
 
-3. The pane POSTs only its **public** key to `/api/ssh/certificate`. The server
-   signs it and returns a certificate valid for 12 hours.
+3. The window POSTs only its **public** key to `/api/ssh/certificate`. The
+   server signs it and returns a certificate valid for 12 hours.
 
 4. sshd accepts it because of that one `cert-authority` line.
 
 No private key is ever transmitted. Certificates expire on their own, and
 revoking every browser that ever connected is deleting one line.
 
-### How panes stay alive
+### How windows stay alive
 
-Each certificate carries a per-pane `force-command` critical option:
+Each certificate carries a per-window `force-command` critical option:
 
 ```
 force-command tmux -u new-session -A -s vibe-1
 ```
 
 `new-session -A` attaches if the session exists and creates it otherwise, so a
-pane reattaches to exactly what it was running before. Because the client
+window reattaches to exactly what it was running before. Because the client
 requests a *shell* (not an exec), sshd allocates a real PTY and then runs the
 forced command inside it — so resize, job control and full-screen programs all
 behave.
@@ -139,6 +142,7 @@ certificate instead.
 --ssh-port <n>      SSH target port (default 22)
 --user <name>       unix user to log in as (default: current user)
 --no-tmux           plain login shells instead of persistent tmux sessions
+--no-tmux-theme     leave tmux's own status bar styling alone
 --cert-ttl <secs>   certificate lifetime (default 43200)
 
 --workspace <dir>   root for projects and worktrees (default ~/workspace)
