@@ -99,7 +99,17 @@ export function createBridgeHandlers(target: BridgeTarget, maxConnections = 64) 
         ws.data.socket = socket;
         socket.setNoDelay(true);
 
+        // Without this an unreachable target leaves the browser staring at a
+        // connected WebSocket until the OS gives up, which can be minutes.
+        socket.setTimeout(15_000, () => {
+          if (socket.connecting) {
+            log.warn(`bridge ${ws.data.peer}: ${target.host}:${target.port} did not answer`);
+            shutdown(ws, 'connect timeout');
+          }
+        });
+
         socket.on('connect', () => {
+          socket.setTimeout(0);
           log.debug(`bridge ${ws.data.peer} → ${target.host}:${target.port}`);
         });
 

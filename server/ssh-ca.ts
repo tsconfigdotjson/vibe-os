@@ -18,7 +18,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { chmod, mkdir, readFile, writeFile, appendFile, access, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, writeFile, appendFile, access, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -161,8 +161,12 @@ export class SshCa {
   async signUserCert(opts: SignOptions): Promise<string> {
     const publicKey = normalisePublicKey(opts.publicKey);
 
-    const tmp = path.join(os.tmpdir(), `vibe-os-sign-${process.pid}-${this.nextSerial()}`);
-    await mkdir(tmp, { recursive: true, mode: 0o700 });
+    // mkdtemp, not a name we compose ourselves: it creates the directory
+    // atomically with an unpredictable suffix, so nothing in a world-writable
+    // /tmp can pre-create the path (or a symlink at it) and have us write key
+    // material somewhere else.
+    const tmp = await mkdtemp(path.join(os.tmpdir(), 'vibe-os-sign-'));
+    await chmod(tmp, 0o700).catch(() => {});
     const keyFile = path.join(tmp, 'id.pub');
     const certFile = path.join(tmp, 'id-cert.pub');
 

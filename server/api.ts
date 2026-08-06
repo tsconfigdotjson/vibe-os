@@ -103,6 +103,13 @@ export function createApi(deps: ApiDeps) {
       const mode = url.searchParams.get('mode') ?? 'tmux';
       if (mode !== 'tmux' && mode !== 'shell') return json({ error: 'invalid mode' }, 400);
 
+      // Check the declared length before buffering: the server allows large
+      // bodies for wallpaper uploads, and there is no reason to hold 32MB in
+      // memory just to reject it as a public key.
+      if (Number(req.headers.get('content-length') ?? 0) > MAX_PUBKEY_BYTES) {
+        return json({ error: 'public key too large' }, 413);
+      }
+
       try {
         const publicKey = await req.text();
         if (publicKey.length > MAX_PUBKEY_BYTES) throw new Error('public key too large');

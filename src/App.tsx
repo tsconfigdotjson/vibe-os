@@ -16,19 +16,48 @@ import type { Viewport } from './desktop/geometry';
  */
 const HUES = ['#56cfe1', '#a78bfa', '#7ee081', '#f2c14e', '#ef6b73', '#63d4c0'];
 
-function useViewport(ref: React.RefObject<HTMLElement | null>): Viewport {
-  const [view, setView] = useState<Viewport>({ width: 1200, height: 700 });
-  useEffect(() => {
-    const node = ref.current;
+/**
+ * Measures the window surface.
+ *
+ * This has to be a callback ref, not an effect over a ref object. The desktop
+ * renders a boot screen until the server config arrives, so on mount there is
+ * no `.surface` to observe — and an effect keyed on the ref object never runs
+ * again when one finally appears, leaving the viewport pinned to whatever the
+ * initial value was. Windows would then be clamped into a phantom rectangle the
+ * size of that default, which looks like the desktop only occupying a corner of
+ * the screen.
+ *
+ * A callback ref fires exactly when the node attaches and detaches, and taking
+ * a synchronous measurement there means the first painted frame already has
+ * real numbers.
+ */
+function useViewport(): [(node: HTMLElement | null) => void, Viewport] {
+  const [view, setView] = useState<Viewport>({ width: 0, height: 0 });
+  const observer = useRef<ResizeObserver | null>(null);
+
+  const attach = useCallback((node: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
     if (!node) return;
-    const observer = new ResizeObserver(([entry]) => {
+
+    const measure = (width: number, height: number) => {
+      if (width > 0 && height > 0) {
+        setView((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+      }
+    };
+
+    const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
-      if (width > 0 && height > 0) setView({ width, height });
+      measure(width, height);
     });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [ref]);
-  return view;
+    ro.observe(node);
+    observer.current = ro;
+
+    const rect = node.getBoundingClientRect();
+    measure(rect.width, rect.height);
+  }, []);
+
+  return [attach, view];
 }
 
 export default function App() {
@@ -37,8 +66,7 @@ export default function App() {
   const [preview, setPreview] = useState<Rect | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
 
-  const surfaceRef = useRef<HTMLDivElement>(null);
-  const view = useViewport(surfaceRef);
+  const [attachSurface, view] = useViewport();
 
   const {
     windows,
@@ -137,6 +165,9 @@ export default function App() {
   }
 
   const wallpaperUrl = wallpaper.prefs.wallpaper ? `/api/wallpapers/${wallpaper.prefs.wallpaper}` : null;
+  // Cell size divides by this; rendering a window before the first measurement
+  // would place it with NaN geometry.
+  const measured = view.width > 0 && view.height > 0;
 
   return (
     <div className="desktop">
@@ -174,10 +205,10 @@ export default function App() {
         <span className="menu-right">v{server.version}</span>
       </header>
 
-      <main className="surface" ref={surfaceRef}>
-        <GridOverlay preview={preview} view={view} />
+      <main className="surface" ref={attachSurface}>
+        {measured ? <GridOverlay preview={preview} view={view} /> : null}
 
-        {ordered.map((win) => (
+        {measured ? ordered.map((win) => (
           <TermWindow
             key={win.id}
             win={win}
@@ -195,9 +226,9 @@ export default function App() {
             onStatus={setStatus}
             onTitle={setTitle}
           />
-        ))}
+        )) : null}
 
-        {windows.length === 0 ? (
+        {measured && windows.length === 0 ? (
           <div className="empty">
             <p className="empty-line">No windows open.</p>
             <button type="button" className="ghost" onClick={spawn}>

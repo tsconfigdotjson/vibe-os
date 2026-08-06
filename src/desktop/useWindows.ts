@@ -125,7 +125,12 @@ function placement(index: number): Rect {
 
 export function useWindows() {
   const initial = useRef(load()).current;
-  const [nextZ, setNextZ] = useState(initial.nextZ);
+  // A ref, not state: stacking order is bookkeeping, and driving it through
+  // setState forced side effects (setWindows, setFocused) to run *inside* state
+  // updaters. React is allowed to invoke updaters more than once — StrictMode
+  // does it deliberately — so those side effects fired twice and the z counter
+  // drifted.
+  const zCounter = useRef(initial.nextZ);
   const [windows, setWindows] = useState<WindowState[]>(() =>
     initial.windows.map((w) => ({
       ...w,
@@ -147,54 +152,50 @@ export function useWindows() {
           z,
           minimized,
         })),
-        nextZ,
+        nextZ: zCounter.current,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch {
       // private mode or quota — the desktop still works, it just forgets layout
     }
-  }, [windows, nextZ]);
+  }, [windows]);
 
   const patch = useCallback((id: string, next: Partial<WindowState>) => {
     setWindows((current) => current.map((w) => (w.id === id ? { ...w, ...next } : w)));
   }, []);
 
-  const raise = useCallback(
-    (id: string) => {
-      setFocused(id);
-      setNextZ((z) => {
-        setWindows((current) => current.map((w) => (w.id === id ? { ...w, z, minimized: false } : w)));
-        return z + 1;
-      });
-    },
-    [],
-  );
+  const raise = useCallback((id: string) => {
+    const z = (zCounter.current += 1);
+    setFocused(id);
+    setWindows((current) => current.map((w) => (w.id === id ? { ...w, z, minimized: false } : w)));
+  }, []);
 
   const spawn = useCallback(() => {
-    setWindows((current) => {
-      // Lowest unused positive integer: ids become tmux session names and get
-      // typed by humans in `tmux ls`, so they should stay short and reusable.
-      const used = new Set(current.map((w) => w.id));
-      let n = 1;
-      while (used.has(String(n))) n += 1;
-      const id = String(n);
-      const rect = placement(current.length);
-      setFocused(id);
-      setNextZ((z) => z + 1);
-      return [
-        ...current,
-        { id, generation: 0, ...rect, z: nextZ, minimized: false, status: 'loading' as SshStatus },
-      ];
-    });
-  }, [nextZ]);
+    // Lowest unused positive integer: ids become tmux session names and get
+    // typed by humans in `tmux ls`, so they should stay short and reusable.
+    const used = new Set(windows.map((w) => w.id));
+    let n = 1;
+    while (used.has(String(n))) n += 1;
+    const id = String(n);
+    const rect = placement(windows.length);
+    const z = (zCounter.current += 1);
 
-  const close = useCallback((id: string) => {
-    setWindows((current) => {
-      const next = current.filter((w) => w.id !== id);
-      setFocused((f) => (f === id ? (next.at(-1)?.id ?? null) : f));
-      return next;
-    });
-  }, []);
+    setWindows((current) =>
+      current.some((w) => w.id === id)
+        ? current
+        : [...current, { id, generation: 0, ...rect, z, minimized: false, status: 'loading' as SshStatus }],
+    );
+    setFocused(id);
+  }, [windows]);
+
+  const close = useCallback(
+    (id: string) => {
+      const remaining = windows.filter((w) => w.id !== id);
+      setWindows((current) => current.filter((w) => w.id !== id));
+      setFocused((f) => (f === id ? (remaining.at(-1)?.id ?? null) : f));
+    },
+    [windows],
+  );
 
   const restart = useCallback((id: string) => {
     setWindows((current) =>

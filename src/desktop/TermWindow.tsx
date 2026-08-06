@@ -75,6 +75,10 @@ export const TermWindow = memo(function TermWindow({
   const begin = useCallback(
     (mode: DragState['mode']) => (event: React.PointerEvent) => {
       if (event.button !== 0) return;
+      // The window buttons live inside the drag handle, so their pointerdown
+      // bubbles to it. Without this guard the handle preventDefaults the event
+      // and captures the pointer, and the button never sees a click at all.
+      if ((event.target as HTMLElement).closest('button')) return;
       event.preventDefault();
       event.stopPropagation();
       (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
