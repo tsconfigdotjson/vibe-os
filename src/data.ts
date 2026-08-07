@@ -61,7 +61,36 @@ export interface WindowRow {
   minimized: boolean;
   profileId: string | null;
   promptDone: boolean;
+  /**
+   * 'ssh' while this window's terminal belongs to a real terminal instead of
+   * the desktop. Persisted, unlike a browser pop-out, because the point of it
+   * is that you close the laptop and the terminal keeps running.
+   */
+  handoff: 'ssh' | null;
+  handoffAt: number | null;
+  /** A terminal has actually attached, so its departure is reaped at once. */
+  handoffSeen: boolean;
   createdAt: number;
+}
+
+/** Mirrors AttachForm in server/attach.ts. */
+export interface AttachForm {
+  key: 'command' | 'url';
+  hint: string;
+  command: string;
+}
+
+/** Mirrors AttachInfo in server/attach.ts. */
+export interface AttachInfo {
+  ref: string;
+  session: string;
+  cwd: string;
+  workspace: string;
+  project: string;
+  role: string | null;
+  endpoint: { user: string; host: string; port: number };
+  /** Ways to reach the window, best first — the server decides the order. */
+  forms: AttachForm[];
 }
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -234,7 +263,14 @@ export function useWindowRows(workspaceId: string | null) {
   const key = workspaceId ? `/api/workspaces/${workspaceId}/windows` : null;
   const { data, error, isLoading, mutate } = useSWR<WindowRow[]>(key, fetcher, {
     revalidateOnFocus: false,
-    refreshInterval: 0,
+    /*
+     * Still not polled in the normal case — but a window handed to a terminal
+     * is the one thing here that changes without this tab doing anything. The
+     * server hands it back when the ssh session goes away, and without a poll
+     * the desktop would sit on a placeholder for a terminal that closed hours
+     * ago. Only ever runs while something is actually out.
+     */
+    refreshInterval: (latest) => (latest?.some((r) => r.handoff === 'ssh') ? 5_000 : 0),
   });
 
   return { rows: data, error, isLoading, mutate, key };
@@ -246,4 +282,11 @@ export const windowApi = {
   patch: (id: string, patch: Partial<WindowRow> & { raise?: boolean }) =>
     send<WindowRow>(`/api/windows/${id}`, 'PATCH', patch),
   remove: (id: string) => send<{ ok: true }>(`/api/windows/${id}`, 'DELETE'),
+  /** How to reach this window from a real terminal. Composes strings only. */
+  attachInfo: (id: string) => fetcher<AttachInfo>(`/api/windows/${id}/attach`),
+  /**
+   * Hands the terminal to an ssh client, or takes it back — which detaches
+   * whoever is attached, so the desktop never becomes a second tmux client.
+   */
+  handoff: (id: string, mode: 'ssh' | null) => send<WindowRow>(`/api/windows/${id}/handoff`, 'POST', { mode }),
 };

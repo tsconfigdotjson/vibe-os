@@ -44,6 +44,21 @@ export interface Gate {
   /** null when allowed, otherwise a reason string. */
   check(req: Request): string | null;
   /**
+   * `check`, but a valid `?token=` in the URL also passes.
+   *
+   * For the one endpoint whose whole purpose is to be fetched by something
+   * that is not a browser. `consumeTokenParam` answers a token in the query by
+   * setting a cookie and redirecting, which is right for a page load and
+   * useless to `curl`: it has no cookie jar by default, so it follows the
+   * redirect and gets a 401. A bare `Authorization` header would work but is
+   * not something anyone will type.
+   *
+   * The exposure is the same one the startup banner already accepts by
+   * printing `http://host/?token=…`, and the reach is no greater — this gate
+   * guards the app, and the token is the app's.
+   */
+  checkAllowingParam(req: Request, url: URL): string | null;
+  /**
    * Handles `?token=…` on a page load: sets the session cookie and redirects to
    * the same URL without the token, so it does not linger in history or leak
    * through a Referer header.
@@ -53,13 +68,18 @@ export interface Gate {
 
 export function createGate(token: string | null): Gate {
   if (!token) {
-    return { enabled: false, check: () => null, consumeTokenParam: () => null };
+    return {
+      enabled: false,
+      check: () => null,
+      checkAllowingParam: () => null,
+      consumeTokenParam: () => null,
+    };
   }
 
-  return {
+  const gate = {
     enabled: true,
 
-    check(req) {
+    check(req: Request): string | null {
       const cookie = readCookie(req, COOKIE);
       if (cookie && safeEqual(cookie, token)) return null;
 
@@ -69,7 +89,14 @@ export function createGate(token: string | null): Gate {
       return 'missing or invalid session token';
     },
 
-    consumeTokenParam(url, secure) {
+    checkAllowingParam(req: Request, url: URL): string | null {
+      if (gate.check(req) === null) return null;
+      const supplied = url.searchParams.get('token');
+      if (supplied && safeEqual(supplied, token)) return null;
+      return 'missing or invalid session token';
+    },
+
+    consumeTokenParam(url: URL, secure: boolean): Response | null {
       const supplied = url.searchParams.get('token');
       if (!supplied) return null;
       if (!safeEqual(supplied, token)) {
@@ -95,5 +122,7 @@ export function createGate(token: string | null): Gate {
         },
       });
     },
-  };
+  } satisfies Gate;
+
+  return gate;
 }

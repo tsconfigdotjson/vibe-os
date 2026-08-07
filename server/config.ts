@@ -22,6 +22,17 @@ export interface Config {
   /** Where the WebSocket bridge points. Defaults to this machine's sshd. */
   sshHost: string;
   sshPort: number;
+  /**
+   * `host` or `host:port` to print in the ssh commands offered for popping a
+   * terminal out to a real one.
+   *
+   * Unset is the common case and the good default: the host the browser used to
+   * reach the desktop is almost always the host sshd answers on, and unlike
+   * `sshHost` (`127.0.0.1`, where the bridge dials) it is something a person on
+   * another machine can actually type. Set this when the two really do differ —
+   * a reverse proxy in front of the web port, or sshd on a non-standard port.
+   */
+  sshAdvertise?: string;
   /** Unix user the browser logs in as, and the certificate principal. */
   user: string;
 
@@ -56,6 +67,7 @@ export const OPTION_SPEC = {
   'acme-staging': { type: 'boolean' as const },
   'ssh-host': { type: 'string' as const },
   'ssh-port': { type: 'string' as const },
+  'ssh-advertise': { type: 'string' as const },
   user: { type: 'string' as const },
   'state-dir': { type: 'string' as const },
   'web-root': { type: 'string' as const },
@@ -168,6 +180,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
     acmeStaging: Boolean(values['acme-staging'] ?? process.env.VIBE_OS_ACME_STAGING),
     sshHost: String(values['ssh-host'] ?? process.env.VIBE_OS_SSH_HOST ?? '127.0.0.1'),
     sshPort: num(values['ssh-port'] ?? process.env.VIBE_OS_SSH_PORT, 22, 'ssh-port'),
+    sshAdvertise: (values['ssh-advertise'] as string) ?? process.env.VIBE_OS_SSH_ADVERTISE ?? undefined,
     user: String(values.user ?? process.env.VIBE_OS_USER ?? os.userInfo().username),
     stateDir,
     webRoot: path.resolve(String(values['web-root'] ?? process.env.VIBE_OS_WEB_ROOT ?? DEFAULT_WEB_ROOT)),

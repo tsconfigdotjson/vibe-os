@@ -1,10 +1,11 @@
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import { SshTerminal } from '../sshterm';
 import type { ServerConfig } from '../api';
 import { windowSshConfig } from '../api';
 import type { Profile } from '../data';
 import { PromptBand } from './PromptBand';
+import { SshHandoff } from './SshHandoff';
 import { clampRect, type DragMode, type Rect, type WindowState } from './useWindows';
 import { rectToPixels, pixelsToRect, clampBox, type Viewport } from './geometry';
 
@@ -19,16 +20,28 @@ const STATUS_LABEL: Record<WindowState['status'], string> = {
 const HANDLES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 type Handle = (typeof HANDLES)[number];
 
+/**
+ * Where a terminal has gone, when it is not in its window.
+ *
+ * Both destinations mean the same thing to the desktop — let go of the session,
+ * show a placeholder — and differ only in who picks it up and how it comes
+ * back. A browser pop-out is asked to close over a BroadcastChannel; a terminal
+ * is detached by the server with `tmux detach-client`.
+ */
+export type PopTarget = 'browser' | 'ssh';
+
 export interface TermWindowProps {
   win: WindowState & { label?: string };
   server: ServerConfig;
   hue: string;
   /** The role this window runs as, when it has one. */
   profile: Profile | null;
-  /** Its terminal is open in a separate browser window. */
-  poppedOut: boolean;
+  /** Where this window's terminal has gone, or null while it is here. */
+  poppedTo: PopTarget | null;
   /** Returns false when the browser refused to open the window. */
   onPopOut: (id: string) => boolean;
+  /** Hands the terminal to a real terminal, or takes it back with null. */
+  onHandoff: (id: string, mode: 'ssh' | null) => void;
   onReclaim: (id: string) => void;
   focused: boolean;
   view: Viewport;
@@ -56,8 +69,9 @@ export const TermWindow = memo(function TermWindow({
   server,
   hue,
   profile,
-  poppedOut,
+  poppedTo,
   onPopOut,
+  onHandoff,
   onReclaim,
   focused,
   view,
@@ -85,6 +99,11 @@ export const TermWindow = memo(function TermWindow({
   // A blocked pop-up is silent — the browser tells the user in the omnibox, but
   // the click looks like it did nothing at all here. Say so in the window.
   const [popBlocked, setPopBlocked] = useState(false);
+  // The ⇗ button offers a choice now, so it opens a menu rather than acting.
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Covers the toggle and the menu together, so a pointerdown on either is
+  // "inside" and the dismiss-on-outside-click handler leaves it alone.
+  const menuAnchor = useRef<HTMLSpanElement | null>(null);
   // The exact rect the overlay is promising. Committing this value rather than
   // recomputing one on pointerup is what guarantees the window lands where the
   // highlight said it would — no rounding done twice, no stale state read.
@@ -168,9 +187,41 @@ export const TermWindow = memo(function TermWindow({
     [onCommit, onPreview, win.id],
   );
 
+  /*
+   * Dismissed by a click outside it, or Escape.
+   *
+   * The containment check is the whole point, and leaving it out is a silent
+   * way to build a menu that cannot be used. `pointerdown` fires long before
+   * `click`, and closing on it unmounts the item under the cursor — so React
+   * has thrown the button away by the time the click would have reached it,
+   * and every entry does nothing at all. Ignoring events inside the anchor
+   * lets the item's own `onClick` run and close the menu itself.
+   *
+   * Capture, because the terminal below stops plenty of events from bubbling
+   * and a menu you cannot dismiss by clicking away is worse than no menu.
+   */
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (menuAnchor.current?.contains(e.target as Node)) return;
+      setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuOpen(false);
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, { capture: true });
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
+
   if (win.minimized) return null;
 
   const showBand = Boolean(profile && profile.prompt.trim() !== '' && !win.promptDone);
+  const poppedOut = poppedTo !== null;
+
+  /** Takes the terminal back from wherever it went. */
+  const reclaim = () => (poppedTo === 'ssh' ? onHandoff(win.id, null) : onReclaim(win.id));
 
   return (
     <section
@@ -211,21 +262,68 @@ export const TermWindow = memo(function TermWindow({
           <span className="win-name">{win.label}</span>
         )}
         <span className="win-title">{poppedOut ? '' : (win.title ?? '')}</span>
-        <span className="win-state">{poppedOut ? 'popped out' : STATUS_LABEL[win.status]}</span>
+        <span className="win-state">
+          {poppedTo === 'ssh' ? 'in a terminal' : poppedTo === 'browser' ? 'popped out' : STATUS_LABEL[win.status]}
+        </span>
         <span className="win-buttons">
-          <button
-            type="button"
-            title={poppedOut ? 'Bring this terminal back into the desktop' : 'Open this terminal in its own window'}
-            onClick={() => {
-              if (poppedOut) {
-                onReclaim(win.id);
-                return;
-              }
-              setPopBlocked(!onPopOut(win.id));
-            }}
-          >
-            {poppedOut ? '⇱' : '⇗'}
-          </button>
+          <span className="win-menu-anchor" ref={menuAnchor}>
+            <button
+              type="button"
+              aria-haspopup={poppedOut ? undefined : 'menu'}
+              aria-expanded={poppedOut ? undefined : menuOpen}
+              title={poppedOut ? 'Bring this terminal back into the desktop' : 'Send this terminal somewhere else'}
+              onClick={() => {
+                if (poppedOut) {
+                  reclaim();
+                  return;
+                }
+                setMenuOpen((open) => !open);
+              }}
+            >
+              {poppedOut ? '⇱' : '⇗'}
+            </button>
+            {menuOpen && !poppedOut ? (
+              // Both entries do the same thing to this window — let go of the
+              // session — and differ only in who picks it up. Keeping them on
+              // one menu is what makes that legible.
+              <div className="win-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setPopBlocked(!onPopOut(win.id));
+                  }}
+                >
+                  <span className="win-menu-icon" aria-hidden="true">
+                    ⧉
+                  </span>
+                  <span className="win-menu-text">
+                    <span className="win-menu-label">Browser window</span>
+                    <span className="win-menu-hint">Its own window on this screen</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!server.tmux}
+                  title={server.tmux ? undefined : 'This server runs plain login shells (--no-tmux)'}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onHandoff(win.id, 'ssh');
+                  }}
+                >
+                  <span className="win-menu-icon" aria-hidden="true">
+                    ❯
+                  </span>
+                  <span className="win-menu-text">
+                    <span className="win-menu-label">SSH session</span>
+                    <span className="win-menu-hint">Attach from a real terminal</span>
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </span>
           <button type="button" title="Restart this connection" onClick={() => onRestart(win.id)}>
             ⟳
           </button>
@@ -254,10 +352,12 @@ export const TermWindow = memo(function TermWindow({
           windows is smaller. The session itself is untouched: it lives on the
           server, and both views only ever attach to it.
         */}
-        {poppedOut ? (
+        {poppedTo === 'ssh' ? (
+          <SshHandoff windowId={win.id} onReclaim={reclaim} />
+        ) : poppedTo === 'browser' ? (
           <div className="popped">
             <p className="popped-line">Open in its own window.</p>
-            <button type="button" className="ghost" onClick={() => onReclaim(win.id)}>
+            <button type="button" className="ghost" onClick={reclaim}>
               Bring it back
             </button>
             <p className="popped-hint">The session keeps running either way.</p>

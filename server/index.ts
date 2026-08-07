@@ -6,7 +6,9 @@ import type { Config } from './config.ts';
 import { log, color } from './log.ts';
 import { SshCa, discoverHostKey, fingerprint, requireSshKeygen } from './ssh-ca.ts';
 import { createStaticServer } from './static.ts';
-import { createApi, windowCommand } from './api.ts';
+import { createApi } from './api.ts';
+import { windowCommand } from './session.ts';
+import { attachInfo, attachScript, publicOrigin, publicHost } from './attach.ts';
 import { discoverClaude } from './harness.ts';
 import { createBridgeHandlers, originAllowed, bridgeConnections, type BridgeData } from './bridge.ts';
 import { createGate } from './auth.ts';
@@ -133,6 +135,40 @@ export async function startServer(config: Config): Promise<RunningServer> {
 
     if (!secure && tlsReady && config.domain) {
       return Response.redirect(`https://${config.domain}${url.pathname}${url.search}`, 308);
+    }
+
+    /*
+     * `/t/<ref>` — a URL you type into a terminal.
+     *
+     * It answers with a short shell script that execs `ssh -t … tmux …`, so
+     * `sh -c "$(curl -sSL …/t/quiet-amber-otter-1)"` lands you in the session.
+     * Everything is resolved here rather than on the far side, so the box needs
+     * nothing installed for this to work — not even vibe-os on the PATH — and
+     * the script is short enough to read before you run it.
+     *
+     * Its position is load-bearing at both ends. Ahead of `consumeTokenParam`,
+     * because that answers a `?token=` by setting a cookie and redirecting,
+     * which curl follows straight into a 401 — so this route checks the token
+     * itself instead. And ahead of the static handler, because `/t/<ref>` has
+     * no extension and the SPA fallback would otherwise hand a terminal
+     * index.html to run.
+     */
+    const attach = /^\/t\/([^/]+)\/?$/.exec(url.pathname);
+    if (attach && (req.method === 'GET' || req.method === 'HEAD')) {
+      const text = (body: string, status = 200): Response =>
+        new Response(req.method === 'HEAD' ? null : body, {
+          status,
+          headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+        });
+
+      if (gate.checkAllowingParam(req, url)) return text('# unauthorized\n', 401);
+      if (!config.tmux) return text('# this server runs plain login shells (--no-tmux)\n', 409);
+
+      const ref = decodeURIComponent(attach[1]);
+      const info = attachInfo(db, config, ref, publicOrigin(req, url), publicHost(req, url));
+      if (!info) return text(`# no such window: ${ref}\n`, 404);
+      log.info(`handed out an attach command for ${info.session}`);
+      return text(attachScript(info));
     }
 
     const redirect = gate.consumeTokenParam(url, secure);
