@@ -193,6 +193,57 @@ follows you between browsers and machines. The sidebar polls once a minute and
 on window focus — a VPS is not a realtime database and a minute of staleness
 costs nothing.
 
+### Profiles
+
+The rail on the right lists the roles you can open a terminal as — *QA
+Engineer*, *Backend Manager*, whatever your work divides into. Clicking one
+opens a window, launches its harness in the worktree, and offers its standing
+prompt above the terminal. Profiles belong to a project and appear in every
+workspace of it, because the prompts and flags describe the codebase while
+workspaces are worktrees you throw away.
+
+A profile carries a name, one of ten colours, a harness (`claude`, a plain
+shell, or any command on the box) with its flags, and a prompt. The colour is
+the point of the thing: it tints the window, its title bar and its dock entry,
+so three roles running at once are distinguishable without reading anything. A
+role window also gets a taller header with the role's name at the top of the
+hierarchy and the tmux session name demoted beneath it.
+
+Clicking a role that is already open **raises that window** rather than starting
+a second one — a workspace usually wants one of each. Alt-click when it does
+not.
+
+Flags are stored as a list of arguments, not a command line, and each is quoted
+on its own when the launch command is built. `--model 'opus; rm -rf /'` is one
+argument containing a semicolon, not two commands. The browser never sends a
+command at all: the window row says which profile it was opened as, and the
+server resolves the rest, exactly as it already does for the worktree path.
+
+The harness runs as `<command> <args>; exec "$SHELL"`. The tail matters — tmux
+ends a session when its last pane exits, so without it, quitting Claude would
+take the desktop window with it. And because windows attach with
+`new-session -A`, which ignores a shell-command when it attaches, reloading the
+page rejoins the running harness instead of starting a second one on top.
+
+#### The prompt band
+
+The band above the terminal offers the prompt two ways, and the second is the
+one that always works.
+
+**Copy** puts it on the clipboard. **Send** writes it straight into the SSH
+session and lets xterm wrap it in bracketed-paste markers, so a multi-line
+prompt arrives in Claude's composer as one unsent block rather than submitting
+itself on the first newline.
+
+Send exists because `navigator.clipboard` **does not exist at all** on a page
+served over plain HTTP to an IP address — which is the deployment this project
+is for. Copy falls back to `execCommand`, which still works there; pasting *into*
+the terminal has no such fallback. Either button dismisses the band, and that
+sticks across reloads, per window.
+
+Deleting a profile leaves any window already running it alone — those are live
+sessions with real work in them. The window just becomes an ordinary terminal.
+
 ### The desktop
 
 Windows float over a wallpaper and snap to a 24 × 14 grid. Drag a title bar to
@@ -263,7 +314,9 @@ serves HTTPS, and redirects. Certificates are renewed 30 days before expiry.
 
 On plain HTTP the browser clipboard API is unavailable — the origin is not a
 secure context — so copy-on-select and paste-on-right-click stop working. Use a
-domain if you want them.
+domain if you want them. A profile's prompt is unaffected either way: its
+**Send** button writes into the session directly and never touches the
+clipboard.
 
 ---
 
@@ -373,8 +426,8 @@ subcommand.
   Docker cannot rehearse, and both only run on a first start.
 - **No authentication by default.** The token gate exists and works; it is off
   until you pass `--token`. There is no multi-user story at all.
-- **No Claude session launcher.** Windows open a shell; running `claude` in one
-  is still something you type.
+- **No keyboard shortcuts for profiles.** The rail is click-only; `alt` plus a
+  digit already raises windows, and a second chord deserves its own thought.
 - **No branch operations.** Workspaces create a worktree and a branch; pushing,
   PRs and merging happen in the terminal.
 - **Deleting a workspace keeps its branch**, deliberately, so work is

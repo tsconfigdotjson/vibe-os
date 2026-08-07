@@ -50,6 +50,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
+# ── optional: a harness for profiles to launch ───────────────────────────────
+#
+# Off by default, so a plain `docker build` still produces the image the comment
+# at the top describes. docker-compose.yml turns it on, because that is the
+# "try it without a VPS" path and a profile with nothing to launch demonstrates
+# nothing. On a real VPS you install Claude Code the usual way instead.
+#
+# The native installer, not npm: it drops a standalone executable, which keeps
+# this stage free of a JavaScript runtime that vibe-os could accidentally lean
+# on. It costs ~280MB, which is the other reason this is opt-in.
+#
+# It lands in /opt rather than the vibe user's home because that home is a
+# volume in compose — anything baked into it at build time is masked the moment
+# an existing volume mounts over it.
+ARG WITH_CLAUDE=0
+RUN if [ "$WITH_CLAUDE" = "1" ]; then \
+      mkdir -p /opt/claude \
+      && HOME=/opt/claude sh -c 'curl -fsSL https://claude.ai/install.sh | bash' \
+      && ln -s /opt/claude/.local/bin/claude /usr/local/bin/claude \
+      && chmod -R a+rX /opt/claude \
+      && claude --version ; \
+    fi
+
 # The windows run as this user, not root — same as a VPS where you have already
 # stopped logging in as root. vibe-os writes its CA and the cert-authority line
 # into this home directory.

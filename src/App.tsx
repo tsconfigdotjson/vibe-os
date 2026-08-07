@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchServerConfig, type ServerConfig } from './api';
-import { useProjects, useWorkspaces } from './data';
+import { useProfiles, useProjects, useWorkspaces, type ProfileInput } from './data';
 import { useWindows, type Rect } from './desktop/useWindows';
 import { TermWindow } from './desktop/TermWindow';
 import { Dock } from './desktop/Dock';
@@ -9,6 +9,8 @@ import { WallpaperPanel } from './desktop/WallpaperPanel';
 import { useWallpaper } from './desktop/useWallpaper';
 import { ProjectPicker } from './chrome/ProjectPicker';
 import { WorkspaceSidebar } from './chrome/WorkspaceSidebar';
+import { ProfileRail } from './chrome/ProfileRail';
+import { ProfilePanel } from './chrome/ProfilePanel';
 import type { Viewport } from './desktop/geometry';
 
 /**
@@ -63,6 +65,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<Rect | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  // null = closed, 'new' = creating, otherwise the id being edited.
+  const [editing, setEditing] = useState<string | 'new' | null>(null);
   const [scanning, setScanning] = useState(false);
   const [wsBusy, setWsBusy] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
@@ -76,6 +80,7 @@ export default function App() {
   const [attachSurface, view] = useViewport();
   const { projects, rescan } = useProjects();
   const { workspaces, create, remove, touch } = useWorkspaces(projectId);
+  const { profiles, create: createProfile, update: updateProfile, remove: removeProfile } = useProfiles(projectId);
   const wallpaper = useWallpaper();
 
   const {
@@ -83,6 +88,8 @@ export default function App() {
     ordered,
     focused,
     spawn,
+    openProfile,
+    markPromptDone,
     close,
     restart,
     move,
@@ -153,13 +160,54 @@ export default function App() {
     [workspaces, workspaceId],
   );
 
+  const profileById = useMemo(() => new Map(profiles.map((p) => [p.id, p])), [profiles]);
+
+  /**
+   * Window colours.
+   *
+   * A profile window takes its role's colour — that is the whole point of
+   * choosing one, and it has to be the same colour in the rail, the title bar
+   * and the dock or it identifies nothing. Plain terminals keep the positional
+   * palette, which only ever has to make them distinct from each other.
+   */
   const hues = useMemo(() => {
     const map: Record<string, string> = {};
     windows.forEach((win, index) => {
-      map[win.id] = HUES[index % HUES.length];
+      const profile = win.profileId ? profileById.get(win.profileId) : undefined;
+      map[win.id] = profile ? `var(--profile-${profile.color})` : HUES[index % HUES.length];
     });
     return map;
-  }, [windows]);
+  }, [windows, profileById]);
+
+  const runningProfiles = useMemo(
+    () => new Set(windows.map((w) => w.profileId).filter((id): id is string => id !== null)),
+    [windows],
+  );
+
+  /**
+   * What each window is called.
+   *
+   * A role window is called by its role everywhere it appears — the title bar,
+   * the dock — because that is the name you went looking for. Plain terminals
+   * keep the workspace-and-index name, which is also their tmux session.
+   */
+  const labels = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const win of windows) {
+      const profile = win.profileId ? profileById.get(win.profileId) : undefined;
+      map[win.id] = profile
+        ? profile.name
+        : currentWorkspace
+          ? `${currentWorkspace.name}-${win.idx}`
+          : `window ${win.idx}`;
+    }
+    return map;
+  }, [windows, profileById, currentWorkspace]);
+
+  const focusedProfileId = useMemo(
+    () => windows.find((w) => w.id === focused)?.profileId ?? null,
+    [windows, focused],
+  );
 
   const onRescan = useCallback(async () => {
     setScanning(true);
@@ -342,6 +390,7 @@ export default function App() {
                   win={{ ...win, label: currentWorkspace ? `${currentWorkspace.name}-${win.idx}` : `window ${win.idx}` }}
                   server={server}
                   hue={hues[win.id]}
+                  profile={win.profileId ? (profileById.get(win.profileId) ?? null) : null}
                   focused={win.id === focused}
                   view={view}
                   onRaise={raise}
@@ -353,6 +402,7 @@ export default function App() {
                   onMaximize={maximize}
                   onStatus={setStatus}
                   onTitle={setTitle}
+                  onPromptDone={markPromptDone}
                 />
               ))
             : null}
@@ -390,17 +440,43 @@ export default function App() {
             </div>
           ) : null}
         </main>
+
+        <ProfileRail
+          profiles={profiles}
+          running={runningProfiles}
+          activeId={focusedProfileId}
+          projectName={currentProject?.name ?? null}
+          canOpen={Boolean(workspaceId)}
+          onOpen={(id, opts) => void openProfile(id, opts)}
+          onEdit={setEditing}
+          onCreate={() => setEditing('new')}
+        />
       </div>
 
       <Dock
         windows={windows}
         hues={hues}
+        labels={labels}
         focused={focused}
-        workspaceName={currentWorkspace?.name ?? null}
         onSpawn={() => void spawn()}
         onSelect={raise}
         onWallpaper={() => setPanelOpen(true)}
       />
+
+      {editing ? (
+        <ProfilePanel
+          // Remounts between profiles so the form state is rebuilt from the
+          // one being edited rather than kept from the last one.
+          key={editing}
+          profile={editing === 'new' ? null : (profileById.get(editing) ?? null)}
+          palette={server.palette}
+          onSave={(input: ProfileInput) =>
+            editing === 'new' ? createProfile(input) : updateProfile(editing, input)
+          }
+          onDelete={editing === 'new' ? null : () => removeProfile(editing)}
+          onClose={() => setEditing(null)}
+        />
+      ) : null}
 
       {panelOpen ? (
         <WallpaperPanel

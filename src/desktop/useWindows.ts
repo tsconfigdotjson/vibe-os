@@ -32,6 +32,10 @@ export interface WindowState {
   rowSpan: number;
   z: number;
   minimized: boolean;
+  /** The profile this window runs as, or null for a plain terminal. */
+  profileId: string | null;
+  /** The prompt band has been handed off; it stays closed from then on. */
+  promptDone: boolean;
   status: SshStatus;
   detail?: string;
   title?: string;
@@ -110,6 +114,8 @@ export function useWindows(workspaceId: string | null) {
       rowSpan: r.rowSpan,
       z: r.z,
       minimized: r.minimized,
+      profileId: r.profileId,
+      promptDone: r.promptDone,
       status: 'loading' as SshStatus,
       ...runtime[r.id],
     }));
@@ -147,12 +153,16 @@ export function useWindows(workspaceId: string | null) {
     [applyRow],
   );
 
-  const spawn = useCallback(async () => {
-    if (!workspaceId) return;
-    const created = await windowApi.create(workspaceId);
-    await mutate((current) => [...(current ?? []), created], { revalidate: false });
-    setFocused(created.id);
-  }, [workspaceId, mutate]);
+  const spawn = useCallback(
+    async (profileId?: string | null) => {
+      if (!workspaceId) return;
+      const created = await windowApi.create(workspaceId, profileId);
+      await mutate((current) => [...(current ?? []), created], { revalidate: false });
+      setFocused(created.id);
+      return created;
+    },
+    [workspaceId, mutate],
+  );
 
   /**
    * Closes a window and ends the session behind it.
@@ -211,6 +221,33 @@ export function useWindows(workspaceId: string | null) {
     [rows, applyRow, raise],
   );
 
+  /**
+   * Opens a profile — raising the window already running it rather than
+   * starting a second one.
+   *
+   * A profile is a role, and a workspace normally wants one of each: two
+   * "Backend Manager" sessions on the same worktree is usually a mistake, not
+   * an intention. `forceNew` is the escape hatch for when it is an intention.
+   */
+  const openProfile = useCallback(
+    async (profileId: string, opts: { forceNew?: boolean } = {}) => {
+      if (!opts.forceNew) {
+        const existing = windows.find((w) => w.profileId === profileId);
+        if (existing) {
+          raise(existing.id);
+          return;
+        }
+      }
+      await spawn(profileId);
+    },
+    [windows, raise, spawn],
+  );
+
+  const markPromptDone = useCallback(
+    (id: string) => applyRow(id, { promptDone: true }, () => windowApi.patch(id, { promptDone: true })),
+    [applyRow],
+  );
+
   const setStatus = useCallback(
     (id: string, status: SshStatus, detail?: string) => {
       patchRuntime(id, { status, detail, ...(status === 'ready' ? { readyAt: Date.now() } : {}) });
@@ -247,6 +284,8 @@ export function useWindows(workspaceId: string | null) {
     focused,
     isLoading,
     spawn,
+    openProfile,
+    markPromptDone,
     close,
     restart,
     move,

@@ -54,7 +54,27 @@
 
   --menubar: 34px;
   --sidebar: 210px;
+  --rail: 190px;
   --radius: 12px;
+
+  /*
+   * Profile colours.
+   *
+   * Ten hues spaced around the wheel, all at roughly the terminal palette's
+   * lightness and saturation so a tinted window still reads as part of the same
+   * desktop rather than a different application. The server validates against
+   * these names; this block is the only place that decides what they look like.
+   */
+  --profile-cyan: #56cfe1;
+  --profile-teal: #63d4c0;
+  --profile-green: #7ee081;
+  --profile-lime: #b6e36a;
+  --profile-amber: #f2c14e;
+  --profile-orange: #ff9d5c;
+  --profile-coral: #ef6b73;
+  --profile-rose: #f472b6;
+  --profile-violet: #a78bfa;
+  --profile-blue: #6d9cf5;
 
   color-scheme: dark;
 }
@@ -120,10 +140,11 @@ button {
   isolation: isolate;
 }
 
-/* Sidebar beside the window surface; the dock floats over both. */
+/* Rails either side of the window surface; the dock floats over all three.
+   Left is *where* you are working, right is *as whom*. */
 .workbench {
   display: grid;
-  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--rail);
   min-height: 0;
   min-width: 0;
 }
@@ -278,7 +299,17 @@ button {
   align-items: center;
   gap: 8px;
   padding: 0 6px 0 10px;
-  background: rgb(255 255 255 / 4%);
+  /*
+   * A film over --popover, not a film over bare glass.
+   *
+   * Title bars sit on top of other windows more often than not, and the glass
+   * behind them is a ~4% white wash — enough that a neighbouring window's
+   * terminal text, and its blinking cursor, read straight through the name of
+   * this one. `--popover` is the base this stylesheet already reaches for when
+   * something has to be *read* over an unknown backdrop; a title bar is that,
+   * so it uses the same one rather than a number invented here.
+   */
+  background: linear-gradient(rgb(255 255 255 / 4%), rgb(255 255 255 / 4%)), var(--popover);
   border-bottom: 1px solid rgb(255 255 255 / 7%);
   cursor: grab;
   touch-action: none;
@@ -385,6 +416,11 @@ button {
 }
 
 .win-body {
+  position: relative;
+  /* A column so the prompt band can sit above the terminal and take only the
+     height it needs, leaving the rest — and all of it when there is no band. */
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   min-width: 0;
   padding: 6px 4px 4px 8px;
@@ -393,8 +429,11 @@ button {
 }
 
 .win-term {
+  /* flex rather than height:100% — with a band above it, 100% would be the
+     whole body and the terminal would overflow by the band's height. */
+  flex: 1;
   width: 100%;
-  height: 100%;
+  min-height: 0;
 }
 
 /*
@@ -1433,8 +1472,529 @@ kbd {
   color: var(--text-dim);
 }
 
+/* ── profile rail ─────────────────────────────────────────────────────── */
+
+/* The mirror of .sidebar: same glass, same rhythm, divider on the other edge. */
+.rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px 8px 10px 0;
+  background: linear-gradient(180deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: inset 1px 0 0 rgb(255 255 255 / 8%);
+}
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 9px 12px;
+}
+
+.rail-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.rail-new {
+  width: 21px;
+  height: 21px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 15%, transparent);
+  transition: background-color 130ms ease, transform 130ms ease;
+}
+
+.rail-new:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 30%, transparent);
+}
+
+.rail-new:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.rail-new:disabled {
+  color: var(--muted);
+  background: rgb(255 255 255 / 5%);
+  cursor: default;
+}
+
+.rail-empty {
+  margin: 0;
+  padding: 0 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  overflow-y: auto;
+  overflow-x: clip;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 14%) transparent;
+}
+
+.rail-list li {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Mirrors .ws: full-bleed to the rail's inner edge, square on that side, so a
+   selected row joins the surface it owns. */
+.rail-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 7px 24px 7px 12px;
+  border-radius: 0 9px 9px 0;
+  text-align: left;
+  transition: background-color 120ms ease;
+}
+
+.rail-item:hover:not(:disabled) {
+  background: rgb(255 255 255 / 6%);
+}
+
+.rail-item:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* The active role is the one whose window has focus, and it earns the colour —
+   every other row shows its colour only in the chip. */
+.rail-item[data-active] {
+  background: color-mix(in oklab, var(--win-color) 15%, rgb(255 255 255 / 5%));
+}
+
+.rail-chip {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--win-color);
+  /* Dim until the role is running, so the rail shows at a glance which of them
+     are live without needing a second indicator. */
+  opacity: 0.42;
+  transition: opacity 140ms ease, box-shadow 140ms ease;
+}
+
+.rail-item[data-live] .rail-chip {
+  opacity: 1;
+  box-shadow: 0 0 10px color-mix(in oklab, var(--win-color) 65%, transparent);
+}
+
+.rail-text {
+  display: grid;
+  min-width: 0;
+}
+
+.rail-name {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-item[data-live] .rail-name,
+.rail-item[data-active] .rail-name {
+  color: var(--text);
+}
+
+.rail-meta {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-edit {
+  position: absolute;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.rail-list li:hover .rail-edit,
+.rail-edit:focus-visible {
+  opacity: 1;
+}
+
+.rail-edit:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 10%);
+}
+
+/* ── profile windows ──────────────────────────────────────────────────── */
+
+/*
+ * A role window has to be recognisable across the desktop, so it changes in two
+ * ways at once: a taller bar with the role's name at the top of the hierarchy,
+ * and a wash of its colour over the whole frame. Neither alone was enough — the
+ * tint is too subtle to read on a busy wallpaper, and a name in a 30px bar is
+ * just another terminal label.
+ */
+.win[data-profile] {
+  grid-template-rows: 42px minmax(0, 1fr);
+  border-color: color-mix(in oklab, var(--win-color) 30%, var(--glass-edge));
+}
+
+/* Same base as any title bar, with the role's colour as the film over it. */
+.win[data-profile] .win-bar {
+  padding-left: 12px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--win-color) 26%, transparent),
+      color-mix(in oklab, var(--win-color) 11%, transparent)
+    ),
+    var(--popover);
+  border-bottom-color: color-mix(in oklab, var(--win-color) 26%, transparent);
+}
+
+/* The tint sits over the terminal's plate, not under it, so it reads as tinted
+   glass rather than a different background colour. Non-interactive: the
+   terminal underneath still takes every click. */
+.win[data-profile] .win-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--win-color);
+  opacity: 0.05;
+}
+
+.win[data-profile] .win-dot {
+  width: 9px;
+  height: 9px;
+}
+
+.win-ident {
+  display: grid;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.win-role {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.win-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: color-mix(in oklab, var(--text-dim) 80%, var(--win-color));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── prompt band ──────────────────────────────────────────────────────── */
+
+/*
+ * The standing prompt, offered above the terminal until it is handed off.
+ *
+ * Capped at a third of the window: it is a thing you act on and dismiss, and it
+ * must never be the reason you cannot see what the harness is doing.
+ */
+.band {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 7px;
+  /* Only a backstop for a very short window — .band-text does the real capping,
+     in whole lines. */
+  max-height: 60%;
+  /* Cancels .win-body's padding so the band spans the full width and meets the
+     title bar, rather than floating as an inset card inside the terminal area. */
+  margin: -6px -4px 6px -8px;
+  padding: 9px 10px 8px;
+  background: color-mix(in oklab, var(--win-color) 11%, rgb(9 12 18 / 72%));
+  border-bottom: 1px solid color-mix(in oklab, var(--win-color) 24%, transparent);
+}
+
+.band-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.band-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: color-mix(in oklab, var(--win-color) 55%, var(--text-dim));
+}
+
+.band-x {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--muted);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.band-x:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 10%);
+}
+
+.band-text {
+  overflow-y: auto;
+  min-height: 0;
+  /* Whole lines, never a sliced one. A percentage cap lands mid-glyph and reads
+     as a rendering fault rather than as "scroll for the rest"; `lh` is the line
+     box itself, so five of them is exactly five readable lines. */
+  max-height: 5lh;
+  padding-right: 4px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  /* The prompt is written text, so its own line breaks are meaningful. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 14%) transparent;
+}
+
+/* Set only when the text actually overflows, so a short prompt is never faded
+   into looking like it has been cut off. */
+.band-text[data-more] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+
+.band-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.band-actions .btn {
+  padding: 5px 12px;
+}
+
+.band-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--warn);
+}
+
+.band-ok {
+  color: var(--ok);
+}
+
+/* ── profile editor ───────────────────────────────────────────────────── */
+
+.panel-wide {
+  width: min(440px, 92vw);
+}
+
+.text-input {
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: rgb(0 0 0 / 28%);
+  border: 1px solid rgb(255 255 255 / 11%);
+  transition: border-color 120ms ease;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--win-color, var(--accent)) 55%, transparent);
+}
+
+.text-input.mono {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.prompt-input {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 90px;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 2px solid transparent;
+  /* The ring is drawn outside the swatch so picking one does not shrink the
+     colour you are judging it by. */
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.swatch:hover {
+  transform: scale(1.08);
+}
+
+.swatch[data-active] {
+  box-shadow: 0 0 0 2px var(--void), 0 0 0 4px currentColor;
+  color: var(--text);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+
+.chip {
+  padding: 4px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid rgb(255 255 255 / 9%);
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.chip:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 11%);
+}
+
+.chip[data-active] {
+  color: var(--text);
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 42%, transparent);
+}
+
+/* Skipping permission checks is worth naming as what it is, but only once it is
+   actually on — an unselected chip is a menu item, not a warning. */
+.chip[data-warn][data-active] {
+  color: var(--warn);
+  background: color-mix(in oklab, var(--warn) 20%, transparent);
+  border-color: color-mix(in oklab, var(--warn) 42%, transparent);
+}
+
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.field-hint code {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 8%);
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.panel-actions .btn {
+  padding: 7px 16px;
+}
+
+/* Pushes the primary action to the right, so destructive and confirming actions
+   never sit under the same thumb. */
+.panel-delete {
+  margin-right: auto;
+}
+
+.panel-ask {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.btn-primary {
+  color: #06080c;
+  background: var(--text);
+  border: 1px solid transparent;
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #fff;
+}
+
+.btn-primary:disabled {
+  color: var(--muted);
+  background: rgb(255 255 255 / 12%);
+  cursor: default;
+}
+
+.panel-foot {
+  margin-top: 10px;
+}
+
+@media (max-width: 1180px) {
+  /* The rail goes before the sidebar: you switch workspaces more often than you
+     start a new role, and a role already open is reachable from the dock. */
+  .workbench {
+    grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  }
+
+  .rail {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
-  /* The sidebar is the first thing to go: windows need the room more. */
+  /* The sidebar is the next to go: windows need the room more. */
   .workbench {
     grid-template-columns: minmax(0, 1fr);
   }

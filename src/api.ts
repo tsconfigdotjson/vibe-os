@@ -17,6 +17,8 @@ export interface ServerConfig {
   hostKeyFingerprint: string | null;
   certificateEndpoint: string;
   maxWallpaperBytes: number;
+  /** Colour tokens a profile may use; `--profile-<token>` resolves each one. */
+  palette: readonly string[];
 }
 
 export async function fetchServerConfig(): Promise<ServerConfig> {

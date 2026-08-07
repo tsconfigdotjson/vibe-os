@@ -1,7 +1,10 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import type { Terminal } from '@xterm/xterm';
 import { SshTerminal } from '../sshterm';
 import type { ServerConfig } from '../api';
 import { windowSshConfig } from '../api';
+import type { Profile } from '../data';
+import { PromptBand } from './PromptBand';
 import { clampRect, type DragMode, type Rect, type WindowState } from './useWindows';
 import { rectToPixels, pixelsToRect, clampBox, type Viewport } from './geometry';
 
@@ -20,6 +23,8 @@ export interface TermWindowProps {
   win: WindowState & { label?: string };
   server: ServerConfig;
   hue: string;
+  /** The role this window runs as, when it has one. */
+  profile: Profile | null;
   focused: boolean;
   view: Viewport;
   onRaise: (id: string) => void;
@@ -31,6 +36,7 @@ export interface TermWindowProps {
   onMaximize: (id: string) => void;
   onStatus: (id: string, status: WindowState['status'], detail?: string) => void;
   onTitle: (id: string, title: string) => void;
+  onPromptDone: (id: string) => void;
 }
 
 interface DragState {
@@ -44,6 +50,7 @@ export const TermWindow = memo(function TermWindow({
   win,
   server,
   hue,
+  profile,
   focused,
   view,
   onRaise,
@@ -55,6 +62,7 @@ export const TermWindow = memo(function TermWindow({
   onMaximize,
   onStatus,
   onTitle,
+  onPromptDone,
 }: TermWindowProps) {
   // Rebuilt only when the window identity changes; SshTerminal reads it once.
   const config = useMemo(() => windowSshConfig(server, win.id), [server, win.id]);
@@ -63,6 +71,9 @@ export const TermWindow = memo(function TermWindow({
   const [live, setLive] = useState<typeof anchored | null>(null);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<DragState | null>(null);
+  // State rather than a ref: the Send button has to re-render from disabled to
+  // enabled when the terminal appears, which a ref would not trigger.
+  const [term, setTerm] = useState<Terminal | null>(null);
   // The exact rect the overlay is promising. Committing this value rather than
   // recomputing one on pointerup is what guarantees the window lands where the
   // highlight said it would — no rounding done twice, no stale state read.
@@ -148,12 +159,15 @@ export const TermWindow = memo(function TermWindow({
 
   if (win.minimized) return null;
 
+  const showBand = Boolean(profile && profile.prompt.trim() !== '' && !win.promptDone);
+
   return (
     <section
       className="win"
       data-focused={focused || undefined}
       data-status={win.status}
       data-dragging={dragging || undefined}
+      data-profile={profile ? '' : undefined}
       style={{
         ['--win-color' as string]: hue,
         transform: `translate(${box.left}px, ${box.top}px)`,
@@ -172,7 +186,16 @@ export const TermWindow = memo(function TermWindow({
         onDoubleClick={() => onMaximize(win.id)}
       >
         <span className="win-dot" aria-hidden="true" />
-        <span className="win-name">{win.label}</span>
+        {profile ? (
+          // A role window says whose it is first and where it is second. The
+          // workspace-and-index label is still there, just demoted.
+          <span className="win-ident">
+            <span className="win-role">{profile.name}</span>
+            <span className="win-sub">{win.label}</span>
+          </span>
+        ) : (
+          <span className="win-name">{win.label}</span>
+        )}
         <span className="win-title">{win.title ?? ''}</span>
         <span className="win-state">{STATUS_LABEL[win.status]}</span>
         <span className="win-buttons">
@@ -197,6 +220,16 @@ export const TermWindow = memo(function TermWindow({
       </header>
 
       <div className="win-body">
+        {showBand && profile ? (
+          <PromptBand
+            profileName={profile.name}
+            prompt={profile.prompt}
+            // xterm's paste() wraps the text in bracketed-paste markers, so a
+            // multi-line prompt reaches the composer as one unsent block.
+            onSend={term ? (text) => term.paste(text) : null}
+            onDismiss={() => onPromptDone(win.id)}
+          />
+        ) : null}
         <SshTerminal
           key={`${win.id}:${win.generation}`}
           config={config}
@@ -204,6 +237,7 @@ export const TermWindow = memo(function TermWindow({
           onFocus={() => onRaise(win.id)}
           onStatusChange={(status, detail) => onStatus(win.id, status, detail)}
           onTitleChange={(title) => onTitle(win.id, title)}
+          onTerminal={setTerm}
         />
       </div>
 

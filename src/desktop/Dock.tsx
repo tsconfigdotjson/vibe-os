@@ -3,8 +3,9 @@ import type { WindowState } from './useWindows';
 export interface DockProps {
   windows: WindowState[];
   hues: Record<string, string>;
+  /** Display name per window id — the role's name when it has one. */
+  labels: Record<string, string>;
   focused: string | null;
-  workspaceName: string | null;
   onSpawn: () => void;
   onSelect: (id: string) => void;
   onWallpaper: () => void;
@@ -15,7 +16,7 @@ export interface DockProps {
  * session is listed — including minimised ones, which have no other
  * representation on screen.
  */
-export function Dock({ windows, hues, focused, workspaceName, onSpawn, onSelect, onWallpaper }: DockProps) {
+export function Dock({ windows, hues, labels, focused, onSpawn, onSelect, onWallpaper }: DockProps) {
   return (
     <div className="dock-wrap">
       <nav className="dock glass" aria-label="Windows">
@@ -44,7 +45,7 @@ export function Dock({ windows, hues, focused, workspaceName, onSpawn, onSelect,
                 <span className="dock-chip" aria-hidden="true">
                   {win.idx}
                 </span>
-                <span className="dock-label">{workspaceName ? `${workspaceName}-${win.idx}` : `window ${win.idx}`}</span>
+                <span className="dock-label">{labels[win.id]}</span>
               </button>
             </li>
           ))}
