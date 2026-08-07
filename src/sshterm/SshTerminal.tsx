@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { startSshSession } from './runtime';
+import { writeClipboard } from '../clipboard';
 import type { SshStatus, SshTermConfig } from './types';
 
 export interface SshTerminalProps {
@@ -169,12 +170,42 @@ export function SshTerminal({
     resizeObserver.observe(host);
 
     // Match upstream sshterm ergonomics: copy on select, paste on
-    // right-click / middle-click. Both need a secure context, which plain HTTP
-    // on an IP address is not, so they silently no-op there.
+    // right-click / middle-click. Paste needs a secure context, which plain
+    // HTTP on an IP address is not, so it silently no-ops there; copy has a
+    // fallback that works anywhere.
     const copySelection = () => {
       const selection = term.getSelection();
-      if (selection !== '' && navigator.clipboard) {
-        void navigator.clipboard.writeText(selection).catch(() => {});
+      if (selection !== '') void writeClipboard(selection);
+    };
+
+    /**
+     * OSC 52 — how a program running in the terminal asks to set the clipboard.
+     *
+     * This is the sequence Claude Code, vim and tmux's own copy-mode emit when
+     * they copy something, and it is the only way a copy that happens *inside*
+     * the session can reach the browser. tmux forwards it outward by default
+     * (`set-clipboard external`), but xterm.js ships handlers for OSC 0, 1, 2,
+     * 4, 8, 10-12 and 104-112 — not 52 — so without this it arrives and is
+     * dropped, and copying in Claude appears to do nothing.
+     *
+     * The payload is `<targets>;<base64>`. A payload of `?` is a *read*: the
+     * program is asking what is on the clipboard. That is deliberately refused.
+     * Anything running in a pane could otherwise exfiltrate whatever the person
+     * at the keyboard last copied — a password, a token — and no terminal
+     * should hand that over for free.
+     */
+    const onOsc52 = (data: string): boolean => {
+      const semi = data.indexOf(';');
+      if (semi === -1) return false;
+      const payload = data.slice(semi + 1);
+      if (payload === '?' || payload === '') return false;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        void writeClipboard(new TextDecoder().decode(bytes));
+        return true;
+      } catch {
+        // Not valid base64 — let the sequence fall through untouched.
+        return false;
       }
     };
     const paste = () => {
@@ -194,6 +225,7 @@ export function SshTerminal({
     };
 
     const disposables = [
+      term.parser.registerOscHandler(52, onOsc52),
       term.onSelectionChange(copySelection),
       term.onTitleChange((title) => handlers.current.onTitleChange?.(title)),
       term.onBell(() => handlers.current.onBell?.()),

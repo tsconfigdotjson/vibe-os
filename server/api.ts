@@ -121,6 +121,20 @@ export function windowCommand(
   // Session options, never global (`set -g`): a vibe-os window must not restyle
   // tmux sessions the user started themselves on the same server.
   const cmds: string[] = [];
+
+  /*
+   * Let a program inside the pane put something on the browser's clipboard.
+   *
+   * When Claude copies, it emits OSC 52. tmux's default is `external`, which
+   * despite the name means it will set the outer clipboard from its *own* copy
+   * mode but ignores the same sequence coming from an application — so a copy
+   * inside Claude goes nowhere. `on` accepts it and passes it out to the
+   * terminal, where the browser side turns it into a real clipboard write.
+   *
+   * Measured rather than assumed: with `external` the sequence never reaches
+   * xterm at all; with `on` it arrives.
+   */
+  cmds.push('set set-clipboard on');
   if (!config.tmuxStatus) {
     // The window's own title bar already carries the session name and state.
     cmds.push('set status off');
