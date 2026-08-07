@@ -57,7 +57,7 @@ export function ProjectPicker({ projects, current, scanning, onSelect, onRescan 
       </button>
 
       {open ? (
-        <div className="picker-menu glass" role="listbox">
+        <div className="picker-menu glass-solid" role="listbox">
           <div className="picker-head">
             <span>Projects</span>
             <button

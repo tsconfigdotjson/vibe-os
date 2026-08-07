@@ -31,6 +31,16 @@
   --glass-sheen: inset 0 1px 0 rgb(255 255 255 / 14%);
   --glass-shadow: 0 16px 50px rgb(0 0 0 / 45%), 0 2px 8px rgb(0 0 0 / 35%);
 
+  /*
+   * Popovers get an opaque base under the glass tint.
+   * `.glass` alone is a translucent white film: lovely floating over a photo or
+   * an overlapping window, and nearly invisible over a flat dark desktop, which
+   * is exactly where menus tend to open. Anything you have to *read* — menus,
+   * panels — layers the tint over this instead.
+   */
+  --popover: rgb(16 20 28 / 94%);
+  --popover-edge: rgb(255 255 255 / 14%);
+
   /* The plate terminals sit on.
      This number is the whole legibility-vs-glass tradeoff. At 82% the glass is
      technically working and invisible; below ~50% terminal text starts fighting
@@ -89,6 +99,15 @@ button {
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow), var(--glass-sheen);
+}
+
+/* Glass you can read through, for menus and panels. */
+.glass-solid {
+  background: linear-gradient(160deg, rgb(255 255 255 / 7%), rgb(255 255 255 / 2%)), var(--popover);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--popover-edge);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 62%), 0 2px 10px rgb(0 0 0 / 45%), var(--glass-sheen);
 }
 
 /* ── desktop ──────────────────────────────────────────────────────────── */
@@ -765,7 +784,8 @@ button {
 }
 
 .thumb-remove:hover {
-  background: var(--err);
+  background: rgb(255 255 255 / 22%);
+  color: #fff;
 }
 
 .upload {
@@ -853,9 +873,26 @@ button {
   display: grid;
   place-content: center;
   justify-items: center;
-  gap: 10px;
   text-align: center;
   pointer-events: none;
+}
+
+/*
+ * Ambient glass, the same material as the dock — not the opaque `.glass-solid`
+ * used by the project menu and the wallpaper panel. Those are opaque because a
+ * dense list has to stay readable over any wallpaper; this is a headline and a
+ * button, so it can tint with the desktop like the rest of the floating chrome.
+ * Using the menu surface here made it visibly muddier than the dock beneath it.
+ */
+.empty-card {
+  display: grid;
+  justify-items: center;
+  gap: 11px;
+  padding: 26px 34px 24px;
+  border-radius: 16px;
+  pointer-events: auto;
+  max-width: min(420px, 80vw);
+  animation: panel-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
 .empty-line {
@@ -1004,10 +1041,12 @@ kbd {
 .picker-branch {
   font-family: var(--mono);
   font-size: 10px;
-  color: var(--muted);
+  /* Was --muted on a faint fill, which came out almost invisible against the
+     trigger's own translucency. */
+  color: var(--text-dim);
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgb(255 255 255 / 7%);
+  background: rgb(255 255 255 / 12%);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1021,13 +1060,15 @@ kbd {
 
 .picker-menu {
   position: absolute;
-  top: calc(100% + 7px);
+  /* Clear of the menu bar rather than hugging it, so the menu reads as a
+     separate surface floating over the desktop. */
+  top: calc(100% + 11px);
   left: 0;
-  width: min(420px, 78vw);
+  width: min(430px, 78vw);
   max-height: 60vh;
   overflow-y: auto;
-  border-radius: 13px;
-  padding: 7px;
+  border-radius: 14px;
+  padding: 10px;
   z-index: 70;
   animation: panel-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
@@ -1036,7 +1077,9 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 3px 7px 7px;
+  padding: 2px 4px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgb(255 255 255 / 7%);
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.09em;
@@ -1075,14 +1118,16 @@ kbd {
   list-style: none;
   margin: 0;
   padding: 0;
+  display: grid;
+  gap: 2px;
 }
 
 .picker-list button {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 2px 8px;
+  gap: 3px 10px;
   width: 100%;
-  padding: 7px 9px;
+  padding: 9px 10px;
   border-radius: 9px;
   text-align: left;
   transition: background-color 120ms ease;
@@ -1105,7 +1150,7 @@ kbd {
   grid-column: 1;
   font-family: var(--mono);
   font-size: 10px;
-  color: var(--muted);
+  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1120,7 +1165,7 @@ kbd {
   color: var(--text-dim);
   padding: 2px 6px;
   border-radius: 5px;
-  background: rgb(255 255 255 / 7%);
+  background: rgb(255 255 255 / 10%);
   max-width: 14ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1132,17 +1177,27 @@ kbd {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-width: 0 1px 0 0;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 10px 8px;
+  padding: 10px 0 10px 8px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  /* The divider is an inset shadow rather than a border because children paint
+     over it: that is what lets the active row reach the edge and cover it,
+     without the 1px negative margin that used to hang past the list and give
+     the sidebar a horizontal scrollbar (overflow-y:auto makes overflow-x
+     compute to auto, so a single pixel is enough). */
+  box-shadow: inset -1px 0 0 rgb(255 255 255 / 8%);
 }
 
 .sidebar-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 4px 9px;
+  /* Matches the rows: 10px lines the title up with the workspace names, and
+     12px right puts the + where the row text ends rather than jammed against
+     the divider (the sidebar itself has no right padding, so the active row can
+     bleed to the edge). */
+  padding: 0 12px 9px 10px;
 }
 
 .sidebar-title {
@@ -1192,7 +1247,14 @@ kbd {
   list-style: none;
   margin: 0;
   padding: 0;
+  /* Same 2px rhythm as the project menu's list, so the two lists in the chrome
+     are spaced alike. */
+  display: grid;
+  gap: 2px;
+  align-content: start;
   overflow-y: auto;
+  /* Nothing here should ever scroll sideways; names ellipsize instead. */
+  overflow-x: clip;
   min-height: 0;
   scrollbar-width: thin;
   scrollbar-color: rgb(255 255 255 / 14%) transparent;
@@ -1204,13 +1266,26 @@ kbd {
   align-items: center;
 }
 
+/*
+ * Every row is the same shape — full-bleed to the sidebar's edge with a square
+ * right side — and only the fill changes. Hover is therefore a preview of what
+ * selecting looks like rather than a different silhouette, and nothing resizes
+ * under the cursor.
+ *
+ * The active row reads as a tab joined to the surface it owns: its fill is
+ * opaque, so it covers the divider and connects to the terminals on the right.
+ * A hover fill is translucent and lets the divider show through, so only the
+ * selected row fully joins. No accent colour is involved, which keeps this from
+ * competing with the per-window hues that already carry meaning.
+ */
+
 .ws {
   flex: 1;
   min-width: 0;
   display: grid;
   gap: 1px;
-  padding: 7px 9px;
-  border-radius: 9px;
+  padding: 8px 12px 8px 10px;
+  border-radius: 9px 0 0 9px;
   text-align: left;
   transition: background-color 120ms ease;
 }
@@ -1219,30 +1294,42 @@ kbd {
   background: rgb(255 255 255 / 7%);
 }
 
-/* The active workspace gets a lit edge — it is the thing the terminals belong
-   to, so it should read as selected rather than merely hovered. */
 .ws[data-active] {
-  background: color-mix(in oklab, var(--accent) 15%, rgb(255 255 255 / 5%));
-  box-shadow: inset 2px 0 0 var(--accent);
+  /* The same plate the terminals sit on, so row and surface are one material. */
+  background: var(--plate);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%);
 }
 
 .ws-name {
   font-family: var(--mono);
   font-size: 11.5px;
-  color: var(--text);
+  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 120ms ease;
+}
+
+.ws[data-active] .ws-name {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .ws-meta {
-  font-size: 10px;
-  color: var(--muted);
+  font-size: 10.5px;
+  /* --muted is for things you are meant to skim past; this is the one piece of
+     information that tells you which workspace you were last in, so it has to
+     be legible over the translucent sidebar. */
+  color: var(--text-dim);
+}
+
+.ws[data-active] .ws-meta {
+  color: var(--text-dim);
 }
 
 .ws-remove {
   position: absolute;
-  right: 5px;
+  right: 6px;
   width: 18px;
   height: 18px;
   border-radius: 6px;
@@ -1259,28 +1346,80 @@ kbd {
 }
 
 .ws-remove:hover {
-  background: color-mix(in oklab, var(--err) 65%, transparent);
-  color: #fff;
+  background: rgb(255 255 255 / 14%);
+  color: var(--text);
 }
 
-.ws-confirm {
-  position: absolute;
-  right: 4px;
-  display: flex;
-  gap: 3px;
+/*
+ * Confirming reuses the row's own box, so the workspace name stays exactly
+ * where it was and the block inherits the list's padding, radius and type. The
+ * only additions are the explanatory line and the buttons; the danger colour
+ * lives on the Delete button alone rather than ringing the whole container,
+ * which is a shape nothing else in the UI has.
+ */
+.ws-confirming {
+  cursor: default;
+  background: rgb(255 255 255 / 7%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 7%);
+  /* The list gap covers the top; this is the extra room below so the block does
+     not butt against the next workspace. */
+  margin: 1px 0 7px;
+  border-radius: 9px;
+  padding-right: 10px;
 }
 
-.ws-confirm button {
-  font-size: 10px;
-  padding: 3px 6px;
-  border-radius: 6px;
-  background: rgb(5 7 10 / 78%);
+.ws-confirming .ws-meta {
   color: var(--text-dim);
+  white-space: normal;
+  line-height: 1.45;
 }
 
-.ws-confirm button:first-child {
-  color: #fff;
-  background: color-mix(in oklab, var(--err) 72%, transparent);
+.ws-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+/* One button shape, matching the compact controls elsewhere in the chrome. */
+.btn {
+  padding: 6px 0;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: center;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.btn-quiet {
+  color: var(--text-dim);
+  background: rgb(255 255 255 / 7%);
+  border: 1px solid rgb(255 255 255 / 9%);
+}
+
+.btn-quiet:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 12%);
+}
+
+/*
+ * The confirming action carries no warning colour.
+ * You have already been asked a question with the word "Delete" in it, so red
+ * is decoration at that point — and it was the only saturated red in the UI,
+ * which made it read as an alarm rather than a button. Contrast does the work
+ * instead: this is the one inverted control in the app, which is what marks it
+ * as the primary action. --err stays reserved for things that actually went
+ * wrong, like a session dropping.
+ */
+.btn-danger {
+  color: #06080c;
+  background: var(--text);
+  border: 1px solid transparent;
+  font-weight: 600;
+}
+
+.btn-danger:hover {
+  background: #fff;
 }
 
 .linkish {
