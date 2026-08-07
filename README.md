@@ -4,15 +4,25 @@ A coding desktop in the browser, on a box you own. Switch between the git repos
 on a machine, spin up a worktree per piece of work, and open terminals into it —
 all over HTTP from anything with a browser.
 
-> **Status:** works end to end, and has only ever run in Docker. `--domain`
-> (Let's Encrypt) and `install-service` have not been exercised on real
-> hardware. No release binaries are published yet, so build one (below) or run
-> the container.
+> **Status:** works end to end, and has only ever run in containers. The
+> compiled x86\_64 binary is verified from blank Debian 12/13 and Ubuntu
+> 24.04/26.04 — certificate issued, SSH login, tmux, harness running in the
+> worktree — but never on a real VPS. `systemctl`, `tailscale serve` and
+> `--domain` (Let's Encrypt) are what only real hardware exercises. No release
+> binaries are published yet, so build one (below) or run the container.
 
 Open the desktop and you get a project picker, a sidebar of workspaces, and
 windows you can drag around a snap grid over a wallpaper. Every window is a tmux
 session in its workspace's worktree, so closing the tab and coming back tomorrow
 finds whatever was running still running.
+
+Down the right is a rail of **profiles** — the roles you work as. *QA Engineer*,
+*Backend Manager*, whatever your work divides into. Each carries a colour, a
+harness with its settings, and a standing prompt that can leave blanks for you
+to fill in. Click one and you get a window tinted in its colour with Claude
+already running in the worktree and the prompt waiting above it. Any terminal
+can be popped out into its own browser window and brought back, with everything
+still running.
 
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
 edit, no `sshd_config` change, and no root.
@@ -505,19 +515,33 @@ argument containing a semicolon, not two commands. The browser never sends a
 command at all: the window row says which profile it was opened as, and the
 server resolves the rest, exactly as it already does for the worktree path.
 
-The editor offers a few Claude flags as one-click chips; everything else goes in
-the arguments field, which takes whatever the harness understands. Two of the
-chips are worth knowing the shape of:
+The editor does not ask you to know any of that. A model dropdown, a permission
+dropdown, and a few switches; the flags they produce are folded behind
+**Advanced**, along with a field for anything else and a preview of the exact
+command that will run.
 
-- **`--remote-control`** works anywhere. It needs nothing on the box beyond
-  outbound network, which makes it a natural fit here — the session is on the
-  VPS either way, and this just gives you a second way to reach it.
-- **`--chrome`** needs Chrome, with the Claude extension, running on the *same
-  machine as Claude Code*: the two talk over a native messaging host, which is a
-  local process the browser spawns. So it works when you run vibe-os on your own
-  machine, and does not when Claude is on a VPS and Chrome is on your laptop.
-  Passing it on a box with no Chrome is harmless — the session starts normally,
-  just without browser tools.
+The model list is read off the Claude binary installed on the server, so it
+follows Claude's releases rather than this project's. Aliases come first and
+full versions after, because an alias is almost always what you want: a role
+written today should get the best Opus, not the one that was current the day it
+was written. Permission modes come from the CLI's own help output, so a mode
+added upstream appears without a change here.
+
+Two switches are worth knowing the shape of:
+
+- **Remote control** works anywhere. It needs nothing on the box beyond outbound
+  network, which makes it a natural fit here — the session is on the VPS either
+  way, and this just gives you a second way to reach it.
+- **Browser tools** (`--chrome`) is the one to be careful about. The
+  [documentation](https://code.claude.com/docs/en/chrome) describes a native
+  messaging host, which requires Chrome and Claude Code on the same machine and
+  would rule out a VPS entirely. The binary tells a fuller story: it also
+  contains a WebSocket bridge and errors about the extension and Claude Code
+  being logged into *different* claude.ai accounts, which only makes sense if
+  the two can pair over the network. **Untested here** — if you want it, sign in
+  on both ends and run `/chrome` to see whether it pairs before building any
+  infrastructure. Passing it on a box with no Chrome is harmless either way; the
+  session starts normally, just without browser tools.
 
 The harness runs as `<command> <args>; exec "$SHELL"`. The tail matters — tmux
 ends a session when its last pane exits, so without it, quitting Claude would
