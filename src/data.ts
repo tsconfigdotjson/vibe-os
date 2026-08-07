@@ -159,6 +159,30 @@ export function useProfiles(projectId: string | null) {
   return { profiles: data ?? [], error, isLoading, create, update, remove, mutate };
 }
 
+/** What the installed Claude CLI on the server accepts. */
+export interface HarnessInfo {
+  available: boolean;
+  version: string | null;
+  aliases: string[];
+  models: string[];
+  permissionModes: string[];
+}
+
+/**
+ * Read from the binary on the server rather than hardcoded here.
+ *
+ * Claude ships models faster than this project ships anything, so a list baked
+ * into the UI would be wrong within a release or two. Fetched once — it
+ * describes an installed binary, which does not change while the page is open.
+ */
+export function useHarness() {
+  const { data } = useSWR<HarnessInfo>('/api/harness/claude', fetcher, {
+    revalidateOnFocus: false,
+    refreshInterval: 0,
+  });
+  return data ?? null;
+}
+
 /** What the editor sends. `args` is free text; the server tokenises it. */
 export interface ProfileInput {
   name?: string;

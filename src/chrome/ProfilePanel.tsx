@@ -1,10 +1,20 @@
 import { useMemo, useState } from 'react';
-import type { Harness, Profile, ProfileInput } from '../data';
+import type { Harness, HarnessInfo, Profile, ProfileInput } from '../data';
+import {
+  TOGGLES,
+  buildArgs,
+  detokenize,
+  modeLabel,
+  parseSettings,
+  type ClaudeSettings,
+} from './claudeFlags';
 
 export interface ProfilePanelProps {
   /** The profile being edited, or null when creating a new one. */
   profile: Profile | null;
   palette: readonly string[];
+  /** What the installed CLI accepts, or null while it is still being read. */
+  harnessInfo: HarnessInfo | null;
   onSave: (input: ProfileInput) => Promise<unknown>;
   onDelete: (() => Promise<unknown>) | null;
   onClose: () => void;
@@ -16,72 +26,43 @@ const HARNESSES: { value: Harness; label: string; hint: string }[] = [
   { value: 'custom', label: 'Custom', hint: 'any command on the box' },
 ];
 
-/**
- * A few flags worth one click. Everything else goes in the arguments field.
- *
- * Kept short on purpose: a long hardcoded list of someone else's CLI flags is a
- * list that quietly goes stale, and the free-text field already accepts
- * anything the harness understands.
- */
-const CLAUDE_CHIPS: { flag: string; label: string; hint: string; warn?: boolean }[] = [
-  {
-    flag: '--dangerously-skip-permissions',
-    label: 'skip permissions',
-    hint: 'Bypass every permission check. Fine for a box that is already a sandbox.',
-    warn: true,
-  },
-  {
-    flag: '--remote-control',
-    label: 'remote control',
-    hint: 'Drive this session from claude.ai. Needs nothing on the box beyond outbound network.',
-  },
-  {
-    flag: '--chrome',
-    label: 'chrome',
-    hint:
-      'Browser automation. Needs Chrome with the Claude extension running on the same machine as ' +
-      'Claude — so it works when vibe-os runs on your own machine, not when Claude is on a remote box.',
-  },
-  { flag: '--continue', label: 'continue last', hint: 'Resume the most recent conversation in this directory.' },
-  { flag: '--verbose', label: 'verbose', hint: 'Show full tool output rather than the collapsed form.' },
-];
-
-/** Mirrors the server's `detokenize` so the field round-trips what was saved. */
-function argsToText(tokens: string[]): string {
-  return tokens
-    .map((t) => (t === '' || /[\s"']/.test(t) ? `'${t.replaceAll("'", `'\\''`)}'` : t))
-    .join(' ');
-}
-
-export function ProfilePanel({ profile, palette, onSave, onDelete, onClose }: ProfilePanelProps) {
+export function ProfilePanel({ profile, palette, harnessInfo, onSave, onDelete, onClose }: ProfilePanelProps) {
   const [name, setName] = useState(profile?.name ?? '');
   const [color, setColor] = useState(profile?.color ?? palette[0] ?? 'cyan');
   const [harness, setHarness] = useState<Harness>(profile?.harness ?? 'claude');
   const [command, setCommand] = useState(profile?.command ?? '');
-  const [args, setArgs] = useState(argsToText(profile?.args ?? ['--dangerously-skip-permissions']));
   const [prompt, setPrompt] = useState(profile?.prompt ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
-  // Chip state is derived from the text rather than tracked alongside it, so
-  // typing a flag by hand lights its chip and there is only one source of truth.
-  const tokens = useMemo(() => args.split(/\s+/).filter(Boolean), [args]);
+  // The dropdowns and the advanced field are two views of one argv list. State
+  // is held in the structured shape and flattened on save, so the raw text can
+  // never drift out of step with the controls above it.
+  const [settings, setSettings] = useState<ClaudeSettings>(() =>
+    parseSettings(profile?.args ?? ['--dangerously-skip-permissions']),
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const patch = (next: Partial<ClaudeSettings>) => setSettings((s) => ({ ...s, ...next }));
 
-  const toggleFlag = (flag: string) => {
-    setArgs((current) => {
-      const present = current.split(/\s+/).filter(Boolean);
-      return present.includes(flag)
-        ? present.filter((t) => t !== flag).join(' ')
-        : [...present, flag].join(' ');
-    });
-  };
+  // For the custom harness there are no known flags to offer, so the whole
+  // argument list is free text and the structured controls stay out of it.
+  const [customArgs, setCustomArgs] = useState(detokenize(profile?.args ?? []));
+
+  const composed = useMemo(() => buildArgs(settings), [settings]);
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      await onSave({ name, color, harness, command: harness === 'custom' ? command : null, args, prompt });
+      await onSave({
+        name,
+        color,
+        harness,
+        command: harness === 'custom' ? command : null,
+        args: harness === 'claude' ? composed : harness === 'custom' ? customArgs : '',
+        prompt,
+      });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -171,32 +152,141 @@ export function ProfilePanel({ profile, palette, onSave, onDelete, onClose }: Pr
           </div>
         ) : null}
 
-        {harness !== 'shell' ? (
-          <div className="field">
-            <label htmlFor="profile-args">Arguments</label>
-            {harness === 'claude' ? (
-              <div className="chips">
-                {CLAUDE_CHIPS.map((chip) => (
-                  <button
-                    key={chip.flag}
-                    type="button"
-                    className="chip"
-                    data-active={tokens.includes(chip.flag) || undefined}
-                    data-warn={chip.warn || undefined}
-                    onClick={() => toggleFlag(chip.flag)}
-                    title={`${chip.flag}\n\n${chip.hint}`}
-                  >
-                    {chip.label}
-                  </button>
+        {harness === 'claude' ? (
+          <>
+            <div className="field">
+              <label htmlFor="profile-model">Model</label>
+              <div className="row">
+                <select
+                  id="profile-model"
+                  className="text-input select"
+                  value={settings.model}
+                  onChange={(event) => patch({ model: event.target.value })}
+                >
+                  <option value="">Default — whatever Claude picks</option>
+                  {/* Aliases first, and they are the right answer for almost
+                      every profile: they always mean the newest model of that
+                      tier, so a role written today does not quietly get worse
+                      as better models ship. */}
+                  <optgroup label="Latest of its tier">
+                    {(harnessInfo?.aliases ?? []).filter((a) => a !== 'default').map((alias) => (
+                      <option key={alias} value={alias}>
+                        {alias[0].toUpperCase() + alias.slice(1)}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {harnessInfo && harnessInfo.models.length > 0 ? (
+                    <optgroup label="Pinned to one version">
+                      {harnessInfo.models.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                  {/* A model this build has not heard of still has to survive a
+                      round trip, so it is offered back rather than reset. */}
+                  {settings.model &&
+                  !(harnessInfo?.aliases ?? []).includes(settings.model) &&
+                  !(harnessInfo?.models ?? []).includes(settings.model) ? (
+                    <option value={settings.model}>{settings.model}</option>
+                  ) : null}
+                </select>
+                <label className="check" title="Ask for the million-token context window">
+                  <input
+                    type="checkbox"
+                    checked={settings.longContext}
+                    disabled={!settings.model}
+                    onChange={(event) => patch({ longContext: event.target.checked })}
+                  />
+                  1M context
+                </label>
+              </div>
+            </div>
+
+            <div className="field">
+              <label htmlFor="profile-permission">Permissions</label>
+              <select
+                id="profile-permission"
+                className="text-input select"
+                data-warn={settings.permission === 'skip' || undefined}
+                value={settings.permission}
+                onChange={(event) => patch({ permission: event.target.value })}
+              >
+                <option value="">Ask before each action</option>
+                {(harnessInfo?.permissionModes ?? []).map((mode) => (
+                  <option key={mode} value={mode}>
+                    {modeLabel(mode)}
+                  </option>
+                ))}
+                <option value="skip">Skip every check — no prompts at all</option>
+              </select>
+              {settings.permission === 'skip' ? (
+                <p className="field-hint field-warn">
+                  This session will not ask before editing, running or deleting anything. Reasonable on a box
+                  that is already a sandbox; think twice anywhere else.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="field">
+              <label>Options</label>
+              <div className="switches">
+                {TOGGLES.map((toggle) => (
+                  <label key={toggle.flag} className="check" title={toggle.hint}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settings.toggles[toggle.flag])}
+                      onChange={(event) =>
+                        patch({ toggles: { ...settings.toggles, [toggle.flag]: event.target.checked } })
+                      }
+                    />
+                    {toggle.label}
+                  </label>
                 ))}
               </div>
-            ) : null}
+            </div>
+
+            <div className="field">
+              <button
+                type="button"
+                className="disclosure"
+                aria-expanded={showAdvanced}
+                onClick={() => setShowAdvanced((open) => !open)}
+              >
+                <span className="disclosure-caret" aria-hidden="true">
+                  {showAdvanced ? '\u25be' : '\u25b8'}
+                </span>
+                Advanced
+              </button>
+              {showAdvanced ? (
+                <>
+                  <input
+                    className="text-input mono"
+                    value={settings.extra}
+                    placeholder="--append-system-prompt &quot;…&quot;"
+                    onChange={(event) => patch({ extra: event.target.value })}
+                  />
+                  <p className="field-hint">
+                    Anything else to pass through. The controls above own their own flags; whatever you put
+                    here is kept exactly as typed.
+                  </p>
+                  <p className="field-hint mono command-preview">claude {composed || '(no arguments)'}</p>
+                </>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+
+        {harness === 'custom' ? (
+          <div className="field">
+            <label htmlFor="profile-args">Arguments</label>
             <input
               id="profile-args"
               className="text-input mono"
-              value={args}
-              placeholder="--model opus"
-              onChange={(event) => setArgs(event.target.value)}
+              value={customArgs}
+              placeholder="--serve --port 8080"
+              onChange={(event) => setCustomArgs(event.target.value)}
             />
             <p className="field-hint">
               Split like a shell would, quotes included — but run as a list, so a <code>;</code> inside an

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchServerConfig, type ServerConfig } from './api';
-import { useProfiles, useProjects, useWorkspaces, type ProfileInput } from './data';
+import { useHarness, useProfiles, useProjects, useWorkspaces, type ProfileInput } from './data';
 import { useWindows, type Rect } from './desktop/useWindows';
 import { TermWindow } from './desktop/TermWindow';
 import { Dock } from './desktop/Dock';
@@ -96,6 +96,7 @@ function Desktop() {
   const { profiles, create: createProfile, update: updateProfile, remove: removeProfile } = useProfiles(projectId);
   const wallpaper = useWallpaper();
   const popouts = usePopoutHost();
+  const harnessInfo = useHarness();
 
   const {
     windows,
@@ -493,6 +494,7 @@ function Desktop() {
           key={editing}
           profile={editing === 'new' ? null : (profileById.get(editing) ?? null)}
           palette={server.palette}
+          harnessInfo={harnessInfo}
           onSave={(input: ProfileInput) =>
             editing === 'new' ? createProfile(input) : updateProfile(editing, input)
           }

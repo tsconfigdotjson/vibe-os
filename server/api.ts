@@ -25,6 +25,7 @@ import {
   PALETTE,
   type Profile,
 } from './profiles.ts';
+import { discoverClaude } from './harness.ts';
 import { listWindows, createWindow, updateWindow, deleteWindow, sessionNameFor } from './windows.ts';
 import { log } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
@@ -154,6 +155,12 @@ export function createApi(deps: ApiDeps) {
     if (!p.startsWith('/api/')) return null;
 
     if (p === '/api/health') return json({ ok: true });
+
+    // What the installed Claude CLI accepts, so the editor can offer it as
+    // dropdowns rather than asking people to remember flag spellings.
+    if (p === '/api/harness/claude' && req.method === 'GET') {
+      return json(await discoverClaude());
+    }
 
     if (p === '/api/config' && req.method === 'GET') {
       const body: ClientConfig = {

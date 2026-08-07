@@ -7,6 +7,7 @@ import { log, color } from './log.ts';
 import { SshCa, discoverHostKey, fingerprint, requireSshKeygen } from './ssh-ca.ts';
 import { createStaticServer } from './static.ts';
 import { createApi, windowCommand } from './api.ts';
+import { discoverClaude } from './harness.ts';
 import { createBridgeHandlers, originAllowed, bridgeConnections, type BridgeData } from './bridge.ts';
 import { createGate } from './auth.ts';
 import { ensureWasm, ensureWebRoot } from './preflight.ts';
@@ -98,6 +99,12 @@ export async function startServer(config: Config): Promise<RunningServer> {
   // Warm the project list before the first request so the picker is populated
   // on the very first page load rather than one poll later.
   await scanProjects(db, config, { force: true });
+
+  // Warmed here, deliberately not awaited: asking the Claude binary what it
+  // supports costs a few seconds of its startup, and the answer is only needed
+  // the first time someone opens the profile editor. Doing it now means it is
+  // ready by then; doing it there would make the panel hang on first open.
+  void discoverClaude();
 
   const gate = createGate(config.token);
   const serveStatic = createStaticServer(config.webRoot);
