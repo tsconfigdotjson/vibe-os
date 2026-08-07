@@ -7,6 +7,7 @@
 // installed. Update Claude Code and the dropdowns follow.
 
 import { execFile } from 'node:child_process';
+import { stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { log } from './log.ts';
 
@@ -45,19 +46,44 @@ const EMPTY: HarnessInfo = {
  */
 const KNOWN_ALIASES = ['default', 'opus', 'sonnet', 'haiku', 'fable', 'opusplan'];
 
+/**
+ * Where the native installers put things, when PATH does not say so.
+ *
+ * A login shell picks `~/.local/bin` up from `.profile`; a systemd service does
+ * not, and vibe-os is meant to run as one. Without this the server cannot find
+ * a Claude that the harness will happily launch a moment later, because the
+ * harness runs under a login shell and the server does not — so the dropdowns
+ * come up empty on exactly the deployment the docs recommend.
+ */
+const EXTRA_PATHS = [
+  `${process.env.HOME ?? ''}/.local/bin/claude`,
+  '/usr/local/bin/claude',
+  '/opt/claude/.local/bin/claude',
+];
+
 /** Resolves `claude` through any symlinks to the real executable. */
 async function resolveBinary(): Promise<string | null> {
+  const candidates: string[] = [];
   try {
     const { stdout } = await run('/bin/sh', ['-c', 'command -v claude'], { timeout: 5_000 });
-    const found = stdout.trim();
-    if (!found) return null;
-    const { stdout: real } = await run('/bin/sh', ['-c', `readlink -f ${JSON.stringify(found)}`], {
-      timeout: 5_000,
-    });
-    return real.trim() || found;
+    if (stdout.trim()) candidates.push(stdout.trim());
   } catch {
-    return null;
+    // not on PATH — the explicit locations below may still have it
   }
+  candidates.push(...EXTRA_PATHS.filter(Boolean));
+
+  for (const candidate of candidates) {
+    try {
+      await stat(candidate);
+      const { stdout: real } = await run('/bin/sh', ['-c', `readlink -f ${JSON.stringify(candidate)}`], {
+        timeout: 5_000,
+      });
+      return real.trim() || candidate;
+    } catch {
+      // next
+    }
+  }
+  return null;
 }
 
 /**
@@ -86,9 +112,9 @@ async function embeddedModels(binary: string): Promise<string[]> {
 }
 
 /** The choices `--permission-mode` lists in its own help output. */
-async function permissionModes(): Promise<string[]> {
+async function permissionModes(binary: string): Promise<string[]> {
   try {
-    const { stdout } = await run('claude', ['--help'], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout } = await run(binary, ['--help'], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
     // Help text wraps, so the list is matched across newlines and whitespace.
     const section = /--permission-mode[\s\S]{0,400}?\(choices:([\s\S]{0,300}?)\)/.exec(stdout);
     if (!section) return [];
@@ -118,11 +144,11 @@ export function discoverClaude(): Promise<HarnessInfo> {
     // Concurrently, because each `claude` invocation costs a couple of seconds
     // of its own startup and there is no reason to pay for them in series.
     const [version, models, modes] = await Promise.all([
-      run('claude', ['--version'], { timeout: 15_000 })
+      run(binary, ['--version'], { timeout: 15_000 })
         .then(({ stdout }) => stdout.trim().split(/\s+/)[0] ?? null)
         .catch(() => null),
       embeddedModels(binary),
-      permissionModes(),
+      permissionModes(binary),
     ]);
 
     // A tier that shows up in the binary but not in the list above still gets

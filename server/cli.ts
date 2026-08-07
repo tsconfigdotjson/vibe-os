@@ -130,6 +130,11 @@ Wants=network-online.target
 Type=simple
 User=${user}
 Environment=HOME=${home}
+# systemd hands a service a minimal PATH, which omits the ~/.local/bin that the
+# Claude installer — and most "curl | sh" installers — write to. A login shell
+# gets it from .profile, so without this the harness a window launches resolves
+# and the server's own lookup of the same binary does not.
+Environment=PATH=${home}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NODE_ENV=production
 WorkingDirectory=${home}
 ExecStart=${command} start${forwarded.length ? ` ${forwarded.join(' ')}` : ''}
