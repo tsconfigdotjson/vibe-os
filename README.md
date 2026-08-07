@@ -448,6 +448,32 @@ The setting lands on the project repository, because worktrees share their
 repository's config. It is skipped for a project with no remote, and an existing
 value is left alone — including a deliberate `false`.
 
+### What terminals in a workspace share
+
+Every window in a workspace opens in the same worktree, so they share one
+checkout, one branch, and one git index — `.git/worktrees/<name>/index`. Editing
+a file in one window changes it for all of them, which is the point: a workspace
+is one piece of work, and the roles on the rail are people looking at it
+together.
+
+The catch is that git takes a lock on that index for anything that writes, so
+two agents running `git add` or `git commit` in the same workspace at the same
+moment will collide:
+
+```
+fatal: Unable to create '.../index.lock': File exists.
+```
+
+Nothing is corrupted — one of them simply loses and has to retry — but it is
+worth knowing before you point three Claude sessions at one workspace and ask
+them all to commit. Reading, building, testing and analysing in parallel is
+fine; it is only the index that is exclusive.
+
+If two pieces of work genuinely need to proceed independently, give them a
+workspace each. Different workspaces have different worktrees, different
+branches and different index files, so they never contend at all — which is what
+workspaces are for.
+
 State lives in SQLite in the state directory, reached over the API, so a desktop
 follows you between browsers and machines. The sidebar polls once a minute and
 on window focus — a VPS is not a realtime database and a minute of staleness
