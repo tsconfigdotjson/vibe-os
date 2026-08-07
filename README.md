@@ -432,6 +432,22 @@ left keep running — switching detaches, only ✕ ends anything.
 Every terminal starts in its workspace's worktree. That path is resolved
 server-side from the window id; the browser never names a directory.
 
+**`git push` works with no arguments** from a new workspace. A branch made by
+`worktree add -b` normally has no upstream, so the first push stops with a
+command to copy — a papercut on every workspace, which is most of them. So
+creating a workspace sets `push.autoSetupRemote` on the project, and push
+establishes the tracking branch itself when it creates the remote branch.
+
+Nothing is pushed for you, and no branch appears on the remote until you push
+one. The alternative — writing the tracking config up front — points the branch
+at a ref that does not exist yet, so `git status` reads
+`## name...origin/name [gone]` until the first push, and "gone" is what git says
+about an upstream someone deleted. This way status stays clean.
+
+The setting lands on the project repository, because worktrees share their
+repository's config. It is skipped for a project with no remote, and an existing
+value is left alone — including a deliberate `false`.
+
 State lives in SQLite in the state directory, reached over the API, so a desktop
 follows you between browsers and machines. The sidebar polls once a minute and
 on window focus — a VPS is not a realtime database and a minute of staleness

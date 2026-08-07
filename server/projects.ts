@@ -202,6 +202,45 @@ export function getWorkspace(db: Db, id: string) {
 }
 
 /**
+ * Makes the first `git push` out of a new worktree work on its own.
+ *
+ * A branch created with `worktree add -b` has no upstream, so pushing it stops
+ * with "the current branch has no upstream branch" and a command to copy. That
+ * is a papercut on every single workspace, which is most of them.
+ *
+ * The tempting fix — writing `branch.<name>.remote` and `branch.<name>.merge`
+ * at creation — does make push work, but it points the branch at a ref that
+ * does not exist yet, so until the first push `git status` reads
+ * `## name...origin/name [gone]`. "Gone" is what git says about an upstream
+ * that was deleted, and it is alarming for something that was simply never
+ * created. `push.autoSetupRemote` gets the same outcome by letting push set the
+ * upstream when it actually creates the branch, and status stays clean.
+ *
+ * Worktrees share their repository's config, so this is set once on the project
+ * and applies to every workspace cut from it. Two things keep that polite: it
+ * is skipped when there is no remote to track, and an explicit existing value
+ * is left alone rather than overwritten.
+ */
+async function enableAutoSetupRemote(repo: string, projectName: string): Promise<void> {
+  try {
+    const remotes = (await git(repo, ['remote'])).split('\n').map((r) => r.trim());
+    if (!remotes.includes('origin')) return;
+
+    // `config --get` exits non-zero when unset, which is the "not configured"
+    // signal — a set value, including a deliberate false, means hands off.
+    const existing = await git(repo, ['config', '--local', '--get', 'push.autoSetupRemote']).catch(() => '');
+    if (existing !== '') return;
+
+    await git(repo, ['config', '--local', 'push.autoSetupRemote', 'true']);
+    log.info(`set push.autoSetupRemote in ${projectName} so a new workspace can push without --set-upstream`);
+  } catch (err) {
+    // Never fatal: a workspace that exists but needs `git push -u` once is a
+    // far better outcome than a workspace that failed to be created.
+    log.debug(`could not set push.autoSetupRemote in ${repo}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Creates a git worktree and records it as a workspace.
  *
  * The worktree gets its own branch named after the workspace, branched from
@@ -233,6 +272,7 @@ export async function createWorkspace(
   // -b creates the branch; git refuses if it already exists, which is the
   // behaviour we want rather than silently reusing someone else's work.
   await git(project.path, ['worktree', 'add', '-b', name, target]);
+  await enableAutoSetupRemote(project.path, project.name);
 
   const now = Date.now();
   const id = newId();
