@@ -77,7 +77,7 @@ things and logs in through the machine's own sshd. These are the prerequisites:
 | `openssh-client` | `ssh-keygen` signs certificates, `ssh-keyscan` finds the host key to pin | **the server refuses to start** |
 | `tmux` | wraps every window | windows become plain shells that die on reload, and **profiles launch no harness at all** |
 | `git` | projects and worktrees | no projects |
-| `gh` | opening and merging pull requests from a window | the workflow stops at `git push` |
+| `gh` | pull requests, issues and reviews — *optional* | git still works; the GitHub API does not |
 | `claude` | the Claude harness | those profiles fall back to a shell |
 
 ```bash
@@ -284,13 +284,20 @@ git config --global user.name  "Your Name"
 git config --global user.email "you@example.com"   # must match a verified GitHub email
 ```
 
-Then install the GitHub CLI and log in, because `gh` is what opens and merges
-pull requests — an SSH key alone does not:
+That key covers the git protocol — clone, fetch, pull, push. It does **not**
+cover the GitHub API, which is a separate authentication system: pull requests,
+issues and reviews are HTTPS calls that take an OAuth token, and no SSH key can
+sign one. So if you want to open or merge a PR from a window — or want an agent
+in one to do it — the CLI needs its own login:
 
 ```bash
 sudo apt install -y gh
-gh auth login          # choose SSH, and the key you just made
+gh auth login          # choose SSH, so git keeps using the key above
 ```
+
+Skip it if your habit is to push from the box and open the PR in a browser
+somewhere else; nothing else degrades. Choosing SSH at the prompt is what keeps
+the token confined to API calls rather than taking over git as well.
 
 Check both halves before trusting them:
 
