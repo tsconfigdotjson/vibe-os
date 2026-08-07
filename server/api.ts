@@ -87,7 +87,23 @@ export function harnessCommand(profile: Profile): string | undefined {
   const executable = profile.harness === 'claude' ? 'claude' : profile.harness === 'custom' ? profile.command : null;
   if (!executable) return undefined;
   const argv = [executable, ...profile.args].map(shellQuote).join(' ');
-  return `${argv}; exec "\${SHELL:-/bin/sh}"`;
+
+  /*
+   * The PATH a forced command gets is not the PATH you get when you log in.
+   *
+   * sshd runs a certificate's force-command as `$SHELL -c`, which for bash is
+   * neither a login shell nor an interactive one — so `.profile` never runs,
+   * and `~/.local/bin` is missing. That is exactly where Claude's native
+   * installer puts its binary, and where most `curl | sh` installers put
+   * theirs, so the harness fails with "command not found" while typing the
+   * same name by hand in the same window works perfectly.
+   *
+   * Restored here rather than by asking for a login shell: `$SHELL -lc` would
+   * mean another layer of quoting around an already twice-quoted string, and
+   * a `.profile` is entitled to do surprising things like change directory,
+   * which would undo the `-c` this window was started with.
+   */
+  return `export PATH="$HOME/.local/bin:$PATH"; ${argv}; exec "\${SHELL:-/bin/sh}"`;
 }
 
 /**
