@@ -67,16 +67,18 @@ things and logs in through the machine's own sshd. These are the prerequisites:
 | `openssh-client` | `ssh-keygen` signs certificates, `ssh-keyscan` finds the host key to pin | **the server refuses to start** |
 | `tmux` | wraps every window | windows become plain shells that die on reload, and **profiles launch no harness at all** |
 | `git` | projects and worktrees | no projects |
+| `gh` | opening and merging pull requests from a window | the workflow stops at `git push` |
 | `claude` | the Claude harness | those profiles fall back to a shell |
 
 ```bash
-sudo apt update && sudo apt install -y openssh-server openssh-client tmux git
+sudo apt update && sudo apt install -y openssh-server openssh-client tmux git gh
 curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
 ```
 
-Verified on **Debian 12 and 13** and **Ubuntu 24.04 LTS**, x86\_64, from the
-compiled binary. The binary is dynamically linked against glibc and was built
-against an old baseline, so anything from bookworm onward is fine.
+Verified on **Debian 12 and 13** and **Ubuntu 24.04 and 26.04 LTS**, x86\_64,
+from the compiled binary — `vibe-os doctor` clean on each. The binary is
+dynamically linked against glibc and was built against an old baseline, so
+anything from bookworm onward is fine.
 
 If you intend to run a real browser on this box for Claude's Chrome
 integration, install **Google Chrome's own .deb** rather than the distribution's
@@ -236,6 +238,63 @@ su - vibe          # and do the rest from here
 `install-service` refuses to write a unit that runs as root rather than letting
 you find out later, and the CA line only means anything in the home directory of
 the user who actually logs in.
+
+### Give the box a GitHub identity
+
+Workspaces are git worktrees on their own branches, and vibe-os deliberately
+stops there — pushing, PRs and merging happen in the terminal. So a box with no
+GitHub credentials is a box where the whole workflow dead-ends at the first
+`git push`. Do this as the login user, not root: the key has to live in the home
+directory that windows actually log into.
+
+```bash
+ssh-keygen -t ed25519 -C "vibe-os@$(hostname)" -f ~/.ssh/id_ed25519 -N ""
+cat ~/.ssh/id_ed25519.pub
+```
+
+No passphrase, deliberately. An agent-less passphrase prompt appears inside
+whichever window happens to run `git push`, which is not somewhere an agent can
+answer it. The security boundary here is who can reach the box, not the key file.
+
+Add that public key to GitHub **twice**, at
+[github.com/settings/keys](https://github.com/settings/keys):
+
+- as an **Authentication key**, which is what makes clone and push work
+- as a **Signing key**, if you want commits made here to show as *Verified*
+
+Signing is worth the extra minute when an agent is doing the committing, because
+it is the only thing that distinguishes a commit that really came from your
+machine:
+
+```bash
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+git config --global user.name  "Your Name"
+git config --global user.email "you@example.com"   # must match a verified GitHub email
+```
+
+Then install the GitHub CLI and log in, because `gh` is what opens and merges
+pull requests — an SSH key alone does not:
+
+```bash
+sudo apt install -y gh
+gh auth login          # choose SSH, and the key you just made
+```
+
+Check both halves before trusting them:
+
+```bash
+ssh -T git@github.com     # "Hi <you>! You've successfully authenticated"
+gh auth status
+```
+
+One thing to be clear-eyed about: a push-capable key on this box means anyone
+who gets a shell here can push to your repositories, and vibe-os hands out
+shells. That is an argument for the token gate and the firewall rules above, and
+for keeping this box as trusted as the laptop you would otherwise be typing on.
+If you would rather it could not push everywhere, use a per-repository deploy
+key instead and accept that `gh` will not work.
 
 ### Keeping it running
 
