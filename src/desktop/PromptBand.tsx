@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { writeClipboard } from '../clipboard';
 
 export interface PromptBandProps {
   profileName: string;
@@ -6,42 +7,6 @@ export interface PromptBandProps {
   /** Writes the text into the live SSH session. Absent until the term is up. */
   onSend: ((text: string) => void) | null;
   onDismiss: () => void;
-}
-
-/**
- * Copies text without requiring a secure context.
- *
- * `navigator.clipboard` is undefined on plain HTTP reached by IP, which is
- * exactly how vibe-os is meant to be deployed — so the modern API alone would
- * leave the button dead on the one deployment that matters. The textarea and
- * `execCommand` route is deprecated but has no such requirement, and it is the
- * only thing that works there. Tried in that order rather than instead of.
- */
-async function copyText(text: string): Promise<boolean> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // Blocked or insecure — fall through to the old way.
-    }
-  }
-
-  const scratch = document.createElement('textarea');
-  scratch.value = text;
-  // Off-screen rather than hidden: execCommand ignores an unfocusable element.
-  scratch.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0';
-  scratch.setAttribute('readonly', '');
-  document.body.appendChild(scratch);
-  try {
-    scratch.select();
-    scratch.setSelectionRange(0, scratch.value.length);
-    return document.execCommand('copy');
-  } catch {
-    return false;
-  } finally {
-    scratch.remove();
-  }
 }
 
 /**
@@ -64,7 +29,7 @@ export function PromptBand({ profileName, prompt, onSend, onDismiss }: PromptBan
   }, []);
 
   const copy = async () => {
-    const ok = await copyText(prompt);
+    const ok = await writeClipboard(prompt);
     setCopied(ok ? 'ok' : 'failed');
     // A failed copy leaves the band open — dismissing it would throw away the
     // only copy of the text on the strength of a button that did nothing.

@@ -646,6 +646,15 @@ secure context — so copy-on-select and paste-on-right-click stop working. A
 profile's prompt is unaffected either way: its **Send** button writes into the
 session directly and never touches the clipboard.
 
+Copying *inside* a session — from Claude, from vim, from tmux's own copy mode —
+reaches the browser clipboard as well. Programs ask for that with OSC 52, and
+two things had to be true for it to arrive: tmux is told `set-clipboard on`,
+because its default of `external` sets the clipboard from tmux's own copy mode
+but ignores the same sequence coming from an application; and the browser side
+handles OSC 52, which xterm.js does not do on its own. Clipboard *reads* over
+OSC 52 are refused — anything running in a pane could otherwise ask what you
+last copied.
+
 There are two ways to get a secure origin, and the second is easier than the
 first: `--domain` and Let's Encrypt, or [`tailscale serve`](#behind-tailscale),
 which provisions a certificate for your `.ts.net` name with no domain to own, no
