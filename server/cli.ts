@@ -1,13 +1,16 @@
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
 import { promisify } from 'node:util';
 
 import { parseCliArgs, resolveConfig, savePersisted, type Config } from './config.ts';
 import { startServer } from './index.ts';
 import { runDoctor, homeFor, type Check } from './doctor.ts';
 import { IS_COMPILED } from './runtime.ts';
+import { openDb } from './db.ts';
+import { resolveTarget, listTargets, commandFor, liveSessions, type AttachTarget } from './attach.ts';
 import { log, color } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
 
@@ -22,6 +25,7 @@ const HELP = `
 
   ${color.bold('Usage')}
     vibe-os [start]              serve the UI and the SSH bridge
+    vibe-os attach [window]      attach a real terminal to a window's session
     vibe-os doctor               check this machine is ready
     vibe-os install-service      write and enable a systemd unit (needs root)
     vibe-os fetch-wasm           (re)download the SSH WASM runtime
@@ -39,6 +43,9 @@ const HELP = `
 
     --ssh-host <addr>   SSH target for the bridge (default 127.0.0.1)
     --ssh-port <n>      SSH target port (default 22)
+    --ssh-advertise <host[:port]>
+                        host to print in attach commands, when it is not the
+                        one the browser reached the desktop on
     --user <name>       unix user to log in as (default: current user)
     --no-tmux           plain login shells instead of persistent tmux sessions
     --tmux-status       show tmux's own status bar inside each window
@@ -162,6 +169,102 @@ WantedBy=multi-user.target
   return 0;
 }
 
+/**
+ * Lets someone pick a window when they did not name one.
+ *
+ * The reason this exists: on your own laptop you do not have a window id or a
+ * ref, you have "the thing I was doing yesterday". `ssh -t box vibe-os attach`
+ * with nothing after it is the command worth remembering, and this is what
+ * makes it answerable.
+ *
+ * Returns undefined when the person backs out, which must not be confused with
+ * a failure — quitting the picker is a perfectly good outcome.
+ */
+async function pickTarget(targets: AttachTarget[]): Promise<AttachTarget | undefined> {
+  const live = await liveSessions();
+  console.log('');
+  console.log(`  ${color.bold(color.cyan('vibe-os'))} ${color.dim(`· ${targets.length} window${targets.length === 1 ? '' : 's'}`)}`);
+  console.log('');
+  targets.forEach((t, i) => {
+    const n = color.bold(String(i + 1).padStart(3));
+    const state = live.has(t.session) ? color.green('live') : color.dim('idle');
+    const role = t.role ?? color.dim('terminal');
+    console.log(`  ${n}  ${state}  ${t.ref.padEnd(28)} ${role.padEnd(22)} ${color.dim(`${t.project}/${t.workspace}`)}`);
+  });
+  console.log('');
+
+  // Closed before anything is spawned: tmux needs the terminal in raw mode and
+  // readline holds it in canonical mode until it lets go.
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await rl.question(`  attach [1-${targets.length}, q to quit]: `);
+  rl.close();
+
+  const choice = Number(answer.trim());
+  if (!Number.isInteger(choice) || choice < 1 || choice > targets.length) return undefined;
+  return targets[choice - 1];
+}
+
+/**
+ * Attaches this terminal to a window's session.
+ *
+ * The command comes from session.ts, which is the same place the certificate
+ * signer gets it — so arriving over ssh puts you in the same session, in the
+ * same worktree, running the same harness as the browser would. Composing a
+ * tmux invocation here instead would be one line shorter and would drift away
+ * from the browser's the first time either changed.
+ */
+async function attach(config: Config, ref: string | undefined): Promise<number> {
+  if (!config.tmux) {
+    log.error('attach needs tmux — this server runs plain login shells (--no-tmux)');
+    return 1;
+  }
+
+  const db = openDb(config.stateDir);
+  const targets = listTargets(db);
+  if (targets.length === 0) {
+    log.error(`no windows in ${config.stateDir}`);
+    // Almost always the cause: sshd logged you in as someone else, so the
+    // state directory resolved to a different home and vibe-os made an empty
+    // database there rather than reading the one with the windows in it.
+    log.error(`open the desktop and make one, or check you are logged in as the user vibe-os runs as`);
+    return 1;
+  }
+
+  const target = ref ? resolveTarget(db, ref) : await pickTarget(targets);
+  if (ref && !target) {
+    log.error(`no window called ${ref}`);
+    console.log('');
+    for (const t of targets) console.log(`    ${t.ref}`);
+    console.log('');
+    return 1;
+  }
+  if (!target) return 0;
+
+  const command = commandFor(db, config, target);
+  if (!command) {
+    log.error(`could not build a command for ${target.ref}`);
+    return 1;
+  }
+
+  /*
+   * Run through a shell, because that is what the string is written for.
+   *
+   * It is the same string sshd hands to `$SHELL -c` as a forced command, `\;`
+   * separators and two layers of quoting included. Handing it to a shell here
+   * is what makes the two paths identical rather than merely similar.
+   *
+   * spawnSync rather than a detached child: tmux needs this terminal, and the
+   * exit code needs to be ours. There is no exec() to replace the process with
+   * in a Bun binary, so this one stays resident and idle for the session.
+   */
+  const child = spawnSync('/bin/sh', ['-c', command], { stdio: 'inherit' });
+  if (child.error) {
+    log.error(`could not start tmux: ${child.error.message}`);
+    return 1;
+  }
+  return child.status ?? 0;
+}
+
 export async function main(argv: string[]): Promise<number> {
   let parsed;
   try {
@@ -193,6 +296,8 @@ export async function main(argv: string[]): Promise<number> {
       await startServer(config);
       return -1; // keep running
     }
+    case 'attach':
+      return attach(config, positionals[1]);
     case 'doctor':
       return printChecks(await runDoctor(config));
     case 'install-service':

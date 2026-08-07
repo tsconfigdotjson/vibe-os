@@ -53,12 +53,29 @@ export function listWindows(db: Db, workspaceId: string) {
     .where(eq(windows.workspaceId, workspaceId))
     .orderBy(windows.z)
     .all()
-    .map((w) => ({ ...w, minimized: Boolean(w.minimized), promptDone: Boolean(w.promptDone) }));
+    .map(toRow);
 }
 
 export function getWindow(db: Db, id: string) {
   const row = db.select().from(windows).where(eq(windows.id, id)).get();
-  return row ? { ...row, minimized: Boolean(row.minimized), promptDone: Boolean(row.promptDone) } : undefined;
+  return row ? toRow(row) : undefined;
+}
+
+/**
+ * SQLite has no booleans, so the flags come back as 0 and 1.
+ *
+ * Concrete in its parameter rather than generic: a generic here produces
+ * `T & { minimized: boolean }`, and intersecting `number` with `boolean` is
+ * `never`, which makes every field of the result unreadable.
+ */
+function toRow(w: typeof windows.$inferSelect) {
+  return {
+    ...w,
+    minimized: Boolean(w.minimized),
+    promptDone: Boolean(w.promptDone),
+    handoffSeen: Boolean(w.handoffSeen),
+    handoff: (w.handoff as 'ssh' | null) ?? null,
+  };
 }
 
 /**

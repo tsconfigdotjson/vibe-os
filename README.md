@@ -80,7 +80,7 @@ things and logs in through the machine's own sshd. These are the prerequisites:
 | `tmux` | wraps every window | windows become plain shells that die on reload, and **profiles launch no harness at all** |
 | `git` | projects and worktrees | no projects |
 | `gh` | pull requests, issues and reviews — *optional* | git still works; the GitHub API does not |
-| `claude` | the Claude harness | those profiles fall back to a shell |
+| `claude` | the Claude harness | those profiles open a window that closes again immediately |
 
 ```bash
 sudo apt update && sudo apt install -y openssh-server openssh-client tmux git gh
@@ -368,8 +368,18 @@ Tailscale path above — harmless, but that is why it is there.
 │   ssh.wasm      │ ─────────────────────► │    :80 / :443    │ ─────► │  :22 │
 │  private key    │                        │   byte pipe      │        │      │
 │  in IndexedDB   │   POST /api/ssh/…      │   + SSH CA       │        │ tmux │
-└─────────────────┘ ─────────────────────► └──────────────────┘        └──────┘
+└─────────────────┘ ─────────────────────► └──────────────────┘        └───▲──┘
+                                                                           │
+┌─────────────────┐                                                        │
+│  your terminal  │   ssh -t … vibe-os attach quiet-amber-otter-1           │
+│    ssh + tmux   │ ──────────────────────────────────────────────────────►─┘
+└─────────────────┘
 ```
+
+The bottom route is the same session by a different door: your own ssh client,
+your own key, straight to sshd, with vibe-os nowhere in the path except to have
+told you what to type. See [popping out to a real
+terminal](#popping-out-to-a-real-terminal).
 
 **The SSH protocol runs inside the browser.** Key exchange, authentication and
 channel multiplexing all happen in a Go/WASM sandbox in the tab. The server is a
@@ -428,6 +438,11 @@ upstream's `session.Run(command)` path, which requests **no PTY and installs no
 resize handler**. tmux fails outright there. The command has to travel in the
 certificate instead.
 
+That command is built in one place, `server/session.ts`, and has two callers:
+the certificate signer above, and `vibe-os attach`. They must not drift — a
+window has to be the same window whichever door you come in by — so neither
+composes a tmux invocation of its own.
+
 ---
 
 ## Commands
@@ -435,6 +450,7 @@ certificate instead.
 | command | what it does |
 | --- | --- |
 | `vibe-os` / `vibe-os start` | serve the UI and the SSH bridge |
+| `vibe-os attach [window]` | attach this terminal to a window's session |
 | `vibe-os doctor` | check this machine is ready, and say what is missing |
 | `sudo vibe-os install-service` | write and enable a systemd unit |
 | `vibe-os fetch-wasm` | re-download the SSH WASM runtime |
@@ -453,6 +469,9 @@ certificate instead.
 
 --ssh-host <addr>   SSH target for the bridge (default 127.0.0.1)
 --ssh-port <n>      SSH target port (default 22)
+--ssh-advertise <host[:port]>
+                    host to print in attach commands, when sshd is not on
+                    the name the browser reached the desktop on
 --user <name>       unix user to log in as (default: current user)
 --no-tmux           plain login shells instead of persistent tmux sessions
 --tmux-status       show tmux's own status bar inside each window
@@ -542,6 +561,18 @@ the point of the thing: it tints the window, its title bar and its dock entry,
 so three roles running at once are distinguishable without reading anything. A
 role window also gets a taller header with the role's name at the top of the
 hierarchy and the tmux session name demoted beneath it.
+
+**Quitting the harness closes the window.** A window opened as a role exists to
+run that role, so leaving Claude ends the session rather than dropping you into
+a shell in the worktree — which would leave a window behind to be tidied up by
+hand after every finished conversation. It closes everywhere at once, the
+browser tile and any terminal attached to the same session, because there is
+only one session underneath. ⟳ opens it again with the harness relaunched.
+
+The cost is that a harness which cannot start at all — the wrong command, or a
+PATH that does not reach it — closes the window before the error can be read.
+`vibe-os doctor` and `journalctl -u vibe-os` are where that shows up. If you
+want a shell in the worktree, that is what a plain-shell profile is for.
 
 Clicking a role that is already open **raises that window** rather than starting
 a second one — a workspace usually wants one of each. Alt-click when it does
@@ -684,25 +715,104 @@ sessions with real work in them. The window just becomes an ordinary terminal.
 
 ### Popping a terminal out
 
-The ⇗ button in a window's title bar opens that terminal in its own browser
-window, which is worth having when a role needs a whole screen rather than a
-tile on someone else's.
+The ⇗ button in a window's title bar offers two places to send that terminal:
 
-There is nothing clever underneath. Both views address the same window id, the
-server turns that into the same tmux session, and tmux is what actually holds
-the terminal — so popping out is just detaching one client and attaching
-another, and everything running carries on.
+- **Browser window** — its own window on this screen, worth having when a role
+  needs a whole screen rather than a tile on someone else's.
+- **SSH session** — a real terminal on your own machine, over plain `ssh`.
 
-The desktop shows a placeholder while a terminal is popped out, rather than
-mirroring it. tmux is perfectly happy with two clients on one session and would
-show the same thing in both, but it sizes a session to its *smallest* client, so
-a mirrored pair drags itself down to whichever window is narrower. One client at
-a time means the pop-out gets the size it actually has.
+There is nothing clever underneath either one. Every route addresses the same
+window id, the server turns that into the same tmux session, and tmux is what
+actually holds the terminal — so popping out is just detaching one client and
+attaching another, and everything running carries on.
 
-Closing the pop-out, or pressing **Bring it back**, returns the terminal to the
-desktop with its scrollback intact. Reloading the desktop while a pop-out is
-open does not disturb it: the desktop asks who is out there and every live
-pop-out answers, so it knows to keep showing the placeholder.
+The desktop shows a placeholder while a terminal is out, rather than mirroring
+it. tmux is perfectly happy with two clients on one session and would show the
+same thing in both, but it sizes a session to its *smallest* client, so a
+mirrored pair drags itself down to whichever window is narrower. One client at a
+time means whatever picked the terminal up gets the size it actually has.
+
+**Bring it back** returns the terminal to the desktop with its scrollback
+intact, and closing a browser pop-out does the same. Reloading the desktop
+disturbs neither: a browser pop-out is asked who is out there and answers, and
+an SSH handoff is a column on the window row, so it survives anything the
+browser does.
+
+### Popping out to a real terminal
+
+Choosing **SSH session** hands the window over and shows you two ways to pick it
+up. One is plain ssh:
+
+```bash
+ssh -t vibe@vibe-os.tail76dd79.ts.net vibe-os attach quiet-amber-otter-1
+```
+
+The other is a URL you type into a terminal:
+
+```bash
+sh -c "$(curl -sSL https://vibe-os.tail76dd79.ts.net/t/quiet-amber-otter-1)"
+```
+
+That URL answers with a three-line shell script that `exec`s an `ssh` command,
+so `curl` on its own shows you exactly what you are about to run. Everything is
+resolved server-side, so the box needs nothing installed for it. Use
+`sh -c "$(…)"` and not `curl … | sh`: a pipe makes the script's stdin the pipe,
+leaving `ssh -t` with no terminal to allocate, and tmux fails on arrival.
+
+**Which one is listed first depends on the token gate.** The URL is the nicer
+answer right up until there is a token, because the token has to travel in the
+query string for `curl` to get past the gate — and a URL you can no longer type
+from memory, that also lands your token in your shell history, has lost every
+advantage it had over the ssh command beside it. So an ungated server offers the
+URL first and a gated one offers ssh first.
+
+The ssh form has no matching caveat. It names vibe-os by an absolute path
+whenever the binary is somewhere sshd's PATH would not find it, so it resolves
+wherever it happens to be installed.
+
+`vibe-os attach` with no window gives you a picker of every window on the box,
+newest workspace first, which is the one worth remembering — on your laptop you
+do not have a window id, you have "the thing I was doing yesterday".
+
+```
+  vibe-os · 3 windows
+
+    1  live  quiet-amber-otter-1   QA Engineer       vibe-os/quiet-amber-otter
+    2  idle  quiet-amber-otter-2   terminal          vibe-os/quiet-amber-otter
+    3  live  brave-copper-lynx-1   Backend Manager   vibe-os/brave-copper-lynx
+
+  attach [1-3, q to quit]:
+```
+
+Both routes build their command with the same function that fills in a
+certificate's `force-command`, so arriving over ssh puts you in the same
+session, in the same worktree, running the same harness the browser would have
+started. Nothing is special-cased for terminals.
+
+**This grants no access.** The ssh connection authenticates with your own key in
+`~/.ssh/authorized_keys`, or with your tailnet identity under `tailscale up
+--ssh`; vibe-os is not in the auth path at all and `--token` does not gate it.
+Anyone who can ssh to the box as that user could already type `tmux attach`.
+What this adds is knowing what to attach *to*.
+
+Tailscale SSH is worth turning on for exactly this — it makes the command work
+with no key to distribute, and it coexists with the bridge, which dials
+`127.0.0.1:22` and is not intercepted.
+
+**Bring it back** runs `tmux detach-client` on the session, which is the
+server-side equivalent of closing a browser pop-out: your terminal drops back to
+its shell, and the desktop takes the window over. Nothing running is disturbed.
+
+The desktop also takes a window back on its own when the terminal goes away, so
+closing your laptop lid does not leave a placeholder behind forever. It waits
+for a client to actually show up before it starts watching — otherwise it would
+reclaim the window while the command was still on your clipboard — and gives up
+after fifteen minutes on a handoff nobody ever used.
+
+The host in those commands is the host your browser used to reach the desktop,
+which is almost always the one sshd answers on. `--ssh-advertise host[:port]`
+overrides it for when the two genuinely differ, such as a reverse proxy in front
+of the web port.
 
 ### The desktop
 

@@ -86,6 +86,17 @@ export const windows = sqliteTable(
     profileId: text('profile_id'),
     /** The prompt band has been handed off and should stay closed. */
     promptDone: integer('prompt_done').notNull().default(0),
+    /**
+     * 'ssh' while this window's terminal belongs to an ssh client instead of
+     * the desktop, or null. A browser pop-out is not recorded here: those two
+     * documents share an origin and settle it over a BroadcastChannel, and a
+     * flag that outlived a closed pop-up would strand the window.
+     */
+    handoff: text('handoff'),
+    /** When the handoff was made, so one that never got used can be reaped. */
+    handoffAt: integer('handoff_at'),
+    /** Set once a terminal has actually attached to this window's session. */
+    handoffSeen: integer('handoff_seen').notNull().default(0),
     createdAt: integer('created_at').notNull(),
   },
   (t) => [index('windows_workspace_idx').on(t.workspaceId)],
@@ -135,6 +146,9 @@ const DDL = [
      minimized INTEGER NOT NULL DEFAULT 0,
      profile_id TEXT,
      prompt_done INTEGER NOT NULL DEFAULT 0,
+     handoff TEXT,
+     handoff_at INTEGER,
+     handoff_seen INTEGER NOT NULL DEFAULT 0,
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS windows_workspace_idx ON windows (workspace_id)`,
@@ -151,6 +165,9 @@ const DDL = [
 const ADDED_COLUMNS: [table: string, column: string, decl: string][] = [
   ['windows', 'profile_id', 'TEXT'],
   ['windows', 'prompt_done', 'INTEGER NOT NULL DEFAULT 0'],
+  ['windows', 'handoff', 'TEXT'],
+  ['windows', 'handoff_at', 'INTEGER'],
+  ['windows', 'handoff_seen', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 function ensureColumn(sqlite: Database, table: string, column: string, decl: string): void {

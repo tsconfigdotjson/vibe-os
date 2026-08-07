@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SshStatus } from '../sshterm';
 import { onRuntimeDead } from '../sshterm';
-import { useWindowRows, windowApi, type WindowRow } from '../data';
+import { useWindowRows, windowApi, nudgeWindows, type WindowRow } from '../data';
 
 /**
  * Window geometry lives in grid units, not pixels.
@@ -36,6 +36,8 @@ export interface WindowState {
   profileId: string | null;
   /** The prompt band has been handed off; it stays closed from then on. */
   promptDone: boolean;
+  /** 'ssh' while a real terminal holds this window's session. */
+  handoff: 'ssh' | null;
   status: SshStatus;
   detail?: string;
   title?: string;
@@ -116,6 +118,7 @@ export function useWindows(workspaceId: string | null) {
       minimized: r.minimized,
       profileId: r.profileId,
       promptDone: r.promptDone,
+      handoff: r.handoff ?? null,
       status: 'loading' as SshStatus,
       ...runtime[r.id],
     }));
@@ -248,6 +251,39 @@ export function useWindows(workspaceId: string | null) {
     [applyRow],
   );
 
+  /**
+   * Hands this window's terminal to a real terminal, or takes it back.
+   *
+   * The two directions are deliberately not symmetric. Handing off is
+   * optimistic: unmounting our terminal early is harmless, and it is what makes
+   * the ssh command appear the instant you ask for it. Taking it back waits for
+   * the server, because the server is what detaches the ssh client — remounting
+   * first would put two clients on the session for as long as the round trip
+   * takes, which is precisely the state this whole dance exists to prevent.
+   */
+  const handoff = useCallback(
+    async (id: string, mode: 'ssh' | null) => {
+      // Other tabs are showing this same window and have to let go of it too,
+      // or they stay attached and the terminal ends up sharing the session.
+      const tell = () => workspaceId && nudgeWindows(workspaceId);
+
+      if (mode === 'ssh') {
+        applyRow(id, { handoff: 'ssh' }, () => windowApi.handoff(id, 'ssh').then((row) => (tell(), row)));
+        return;
+      }
+      try {
+        const row = await windowApi.handoff(id, null);
+        await mutate((current) => (current ?? []).map((r) => (r.id === id ? { ...r, ...row } : r)), {
+          revalidate: false,
+        });
+        tell();
+      } catch {
+        void mutate();
+      }
+    },
+    [applyRow, mutate, workspaceId],
+  );
+
   const setStatus = useCallback(
     (id: string, status: SshStatus, detail?: string) => {
       patchRuntime(id, { status, detail, ...(status === 'ready' ? { readyAt: Date.now() } : {}) });
@@ -286,6 +322,7 @@ export function useWindows(workspaceId: string | null) {
     spawn,
     openProfile,
     markPromptDone,
+    handoff,
     close,
     restart,
     move,

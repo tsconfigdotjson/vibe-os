@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
 
 /**
@@ -61,7 +62,36 @@ export interface WindowRow {
   minimized: boolean;
   profileId: string | null;
   promptDone: boolean;
+  /**
+   * 'ssh' while this window's terminal belongs to a real terminal instead of
+   * the desktop. Persisted, unlike a browser pop-out, because the point of it
+   * is that you close the laptop and the terminal keeps running.
+   */
+  handoff: 'ssh' | null;
+  handoffAt: number | null;
+  /** A terminal has actually attached, so its departure is reaped at once. */
+  handoffSeen: boolean;
   createdAt: number;
+}
+
+/** Mirrors AttachForm in server/attach.ts. */
+export interface AttachForm {
+  key: 'command' | 'url';
+  hint: string;
+  command: string;
+}
+
+/** Mirrors AttachInfo in server/attach.ts. */
+export interface AttachInfo {
+  ref: string;
+  session: string;
+  cwd: string;
+  workspace: string;
+  project: string;
+  role: string | null;
+  endpoint: { user: string; host: string; port: number };
+  /** Ways to reach the window, best first — the server decides the order. */
+  forms: AttachForm[];
 }
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -233,11 +263,57 @@ export interface ProfileInput {
 export function useWindowRows(workspaceId: string | null) {
   const key = workspaceId ? `/api/workspaces/${workspaceId}/windows` : null;
   const { data, error, isLoading, mutate } = useSWR<WindowRow[]>(key, fetcher, {
-    revalidateOnFocus: false,
-    refreshInterval: 0,
+    revalidateOnFocus: true,
+    /*
+     * Fast while something is handed to a terminal, slow otherwise.
+     *
+     * Not conditional on *this* tab already knowing about a handoff, which is
+     * the trap: gate the poll on `handoff === 'ssh'` alone and a desktop only
+     * ever polls once it has already found out, so a second tab or another
+     * machine never learns at all. It keeps its terminal mounted, and then
+     * there are two clients on one tmux session — the size fight the whole
+     * handoff exists to prevent. The baseline poll is what closes that, and
+     * focus revalidation is what makes it immediate in the case that actually
+     * happens: coming back to a tab you left.
+     */
+    refreshInterval: (latest) => (latest?.some((r) => r.handoff === 'ssh') ? 5_000 : POLL_MS),
   });
 
+  /*
+   * Tabs in one browser tell each other at once rather than waiting a minute.
+   *
+   * Same trick the pop-out uses, and for the same reason: two documents on one
+   * origin with no shared state. This only nudges — the message carries no
+   * data, so there is no second source of truth to disagree with the server,
+   * and a tab that misses it still catches up on its own poll.
+   */
+  useEffect(() => {
+    if (!workspaceId || typeof BroadcastChannel === 'undefined') return;
+    const bc = new BroadcastChannel(WINDOWS_CHANNEL);
+    bc.onmessage = (event: MessageEvent<{ workspaceId: string }>) => {
+      if (event.data?.workspaceId === workspaceId) void mutate();
+    };
+    return () => bc.close();
+  }, [workspaceId, mutate]);
+
   return { rows: data, error, isLoading, mutate, key };
+}
+
+const WINDOWS_CHANNEL = 'vibe-os:windows:v1';
+
+/**
+ * Tells other tabs a window's handoff changed, so they let go of its terminal.
+ *
+ * Sent on a channel of its own rather than a long-lived one, for the reason
+ * usePopouts documents: a ref to a listening channel is null between an
+ * effect's cleanup and its next run, and a send landing in that gap posts
+ * nothing at all, silently.
+ */
+export function nudgeWindows(workspaceId: string): void {
+  if (typeof BroadcastChannel === 'undefined') return;
+  const bc = new BroadcastChannel(WINDOWS_CHANNEL);
+  bc.postMessage({ workspaceId });
+  bc.close();
 }
 
 export const windowApi = {
@@ -246,4 +322,11 @@ export const windowApi = {
   patch: (id: string, patch: Partial<WindowRow> & { raise?: boolean }) =>
     send<WindowRow>(`/api/windows/${id}`, 'PATCH', patch),
   remove: (id: string) => send<{ ok: true }>(`/api/windows/${id}`, 'DELETE'),
+  /** How to reach this window from a real terminal. Composes strings only. */
+  attachInfo: (id: string) => fetcher<AttachInfo>(`/api/windows/${id}/attach`),
+  /**
+   * Hands the terminal to an ssh client, or takes it back — which detaches
+   * whoever is attached, so the desktop never becomes a second tmux client.
+   */
+  handoff: (id: string, mode: 'ssh' | null) => send<WindowRow>(`/api/windows/${id}/handoff`, 'POST', { mode }),
 };

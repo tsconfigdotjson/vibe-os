@@ -421,6 +421,88 @@ button {
   color: #fff;
 }
 
+/*
+ * The pop-out menu.
+ *
+ * Anchored to its own button rather than the button row, so it stays put as
+ * buttons fade in and out. It has to escape the title bar, which is why the
+ * bar cannot clip its overflow — and it sits above every window's z-index,
+ * because the menu of a window behind another must still be readable.
+ */
+.win-menu-anchor {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.win-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  width: 208px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  gap: 1px;
+  border-radius: 10px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  background: color-mix(in oklab, var(--void) 88%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 52%);
+  text-align: left;
+  cursor: default;
+}
+
+/* Overrides the 20px square the title-bar buttons are, which these are not. */
+.win-menu button {
+  width: 100%;
+  height: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  place-items: unset;
+  text-align: left;
+}
+
+.win-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.win-menu button:disabled:hover {
+  background: none;
+  color: var(--muted);
+}
+
+.win-menu-icon {
+  flex: none;
+  width: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.win-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.win-menu-label {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.win-menu-hint {
+  font-size: 10px;
+  color: var(--muted);
+}
+
 .win-body {
   position: relative;
   /* A column so the prompt band can sit above the terminal and take only the
@@ -1950,6 +2032,81 @@ kbd {
   margin: 0;
   font-size: 10.5px;
   color: var(--muted);
+}
+
+/*
+ * The stand-in for a terminal that has been handed to a real terminal.
+ *
+ * Same placeholder, more to say: the point of this state is the command, so it
+ * left-aligns and scrolls rather than centring text that will not fit. Commands
+ * stay selectable — the clipboard button is a convenience, and on plain HTTP it
+ * is the fallback path in clipboard.ts doing the work, which can fail.
+ */
+.handoff {
+  align-items: stretch;
+  text-align: left;
+  gap: 12px;
+  justify-content: safe center;
+  overflow-y: auto;
+}
+
+.handoff .popped-line,
+.handoff .popped-hint {
+  text-align: center;
+}
+
+.handoff-lead {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.handoff-cmd {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.handoff-hint {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.handoff-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.handoff-code {
+  flex: 1;
+  min-width: 0;
+  /* One line that scrolls, not a wrapped block: a command you are about to
+     paste is easier to recognise when it keeps its shape. */
+  overflow-x: auto;
+  white-space: pre;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  background: rgb(0 0 0 / 32%);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+  user-select: all;
+}
+
+.handoff-copy {
+  flex: none;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.handoff-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--err);
+  text-align: center;
 }
 
 /* The pop-out page itself: one terminal, a thin identity strip, nothing else.

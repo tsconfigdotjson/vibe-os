@@ -106,6 +106,7 @@ function Desktop() {
     spawn,
     openProfile,
     markPromptDone,
+    handoff,
     close,
     restart,
     move,
@@ -407,7 +408,10 @@ function Desktop() {
                   server={server}
                   hue={hues[win.id]}
                   profile={win.profileId ? (profileById.get(win.profileId) ?? null) : null}
-                  poppedOut={popouts.popped.has(win.id)}
+                  // A browser pop-out is known from the channel the two
+                  // documents gossip on; a terminal cannot join that, so its
+                  // handoff is on the row. Either way the window lets go.
+                  poppedTo={popouts.popped.has(win.id) ? 'browser' : win.handoff === 'ssh' ? 'ssh' : null}
                   onPopOut={(id) =>
                     popouts.open(
                       id,
@@ -415,6 +419,7 @@ function Desktop() {
                       win.profileId ? (profileById.get(win.profileId)?.color ?? 'cyan') : 'cyan',
                     )
                   }
+                  onHandoff={handoff}
                   onReclaim={popouts.reclaim}
                   focused={win.id === focused}
                   view={view}
