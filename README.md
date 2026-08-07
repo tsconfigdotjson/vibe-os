@@ -205,16 +205,35 @@ it finds one:
                  bind to the tailnet only:  --host 100.x.y.z
 ```
 
+### Do not run it as root
+
+A fresh VPS logs you in as root, and vibe-os hands out shells as whoever it runs
+as. Make an account first — everything above assumes you have:
+
+```bash
+adduser --gecos "" vibe
+usermod -aG sudo vibe
+su - vibe          # and do the rest from here
+```
+
+`install-service` refuses to write a unit that runs as root rather than letting
+you find out later, and the CA line only means anything in the home directory of
+the user who actually logs in.
+
 ### Keeping it running
 
 ```bash
-sudo vibe-os install-service --port 7681 --token
+sudo vibe-os install-service --port 7681 --token hunter2
 journalctl -u vibe-os -f
 ```
 
-The unit runs as the invoking user, not root, and forwards whatever flags you
-passed. It grants `CAP_NET_BIND_SERVICE`, which you no longer need if you took
-the Tailscale path above — harmless, but that is why it is there.
+Run it with `sudo` **from your own account**, not as root — it takes the user
+from `SUDO_USER`, resolves that account's real home from its passwd entry, and
+writes a unit that runs as them. It forwards whatever flags you passed, so the
+service behaves exactly like the command you just tested by hand.
+
+It also grants `CAP_NET_BIND_SERVICE`, which you no longer need if you took the
+Tailscale path above — harmless, but that is why it is there.
 
 ---
 

@@ -1,4 +1,3 @@
-import os from 'node:os';
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +6,8 @@ import { promisify } from 'node:util';
 
 import { parseCliArgs, resolveConfig, savePersisted, type Config } from './config.ts';
 import { startServer } from './index.ts';
-import { runDoctor, type Check } from './doctor.ts';
+import { runDoctor, homeFor, type Check } from './doctor.ts';
+import { IS_COMPILED } from './runtime.ts';
 import { log, color } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
 
@@ -91,8 +91,35 @@ async function installService(config: Config, argv: string[]): Promise<number> {
 
   // Forward the flags used here to the unit so the service behaves identically.
   const forwarded = argv.filter((a) => a !== 'install-service');
+
   const user = process.env.SUDO_USER ?? config.user;
-  const home = process.env.SUDO_USER ? `/home/${process.env.SUDO_USER}` : os.homedir();
+  if (!user || user === 'unknown' || user === 'root') {
+    log.error(
+      `refusing to install a unit that runs as ${user || 'an unknown user'} — ` +
+        'windows would get a root shell, and the CA line would land in root\'s home.',
+    );
+    log.error('run this with sudo from your own account, or pass --user <name>.');
+    return 1;
+  }
+
+  // Asked for, not built from a template: a home directory is whatever the
+  // passwd entry says, and /home/<user> is only usually right.
+  const home = await homeFor(user);
+  if (!home) {
+    log.error(`could not resolve a home directory for ${user}`);
+    return 1;
+  }
+
+  /**
+   * A compiled binary is its own entry point.
+   *
+   * `process.execPath` plus the source path is right from a checkout and wrong
+   * everywhere else: inside a standalone executable the source lives at a
+   * virtual `/$bunfs/` path that exists only while the process is running. The
+   * generated unit would pass that path as the subcommand and fail on every
+   * boot — on precisely the install the VPS instructions recommend.
+   */
+  const command = IS_COMPILED ? process.execPath : `${BUN} ${ENTRY}`;
 
   const unit = `[Unit]
 Description=vibe-os — terminal multiplexer in the browser
@@ -105,7 +132,7 @@ User=${user}
 Environment=HOME=${home}
 Environment=NODE_ENV=production
 WorkingDirectory=${home}
-ExecStart=${BUN} ${ENTRY} start${forwarded.length ? ` ${forwarded.join(' ')}` : ''}
+ExecStart=${command} start${forwarded.length ? ` ${forwarded.join(' ')}` : ''}
 Restart=on-failure
 RestartSec=2
 # Lets an unprivileged user bind port 80 without setcap on the node binary.
