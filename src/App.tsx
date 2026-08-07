@@ -304,7 +304,18 @@ export default function App() {
             {server.hostKeyFingerprint ?? 'host key: prompt'}
           </span>
           <span className="sep">·</span>
-          <span data-warn={!server.authRequired || undefined}>{server.authRequired ? 'token' : 'open'}</span>
+          {/* This is a security state, so it says what it means rather than
+              making you remember what a one-word status implied. */}
+          <span
+            data-warn={!server.authRequired || undefined}
+            title={
+              server.authRequired
+                ? 'A token is required to reach this desktop.'
+                : `No gate: anyone who can reach this address gets a shell as ${server.user}. Restart with --token to require one.`
+            }
+          >
+            {server.authRequired ? 'token auth' : 'no auth'}
+          </span>
         </span>
         <span className="menu-right">v{server.version}</span>
       </header>
@@ -348,6 +359,7 @@ export default function App() {
 
           {measured && windows.length === 0 ? (
             <div className="empty">
+              <div className="empty-card glass">
               {!currentProject ? (
                 <>
                   <p className="empty-line">No project selected.</p>
@@ -374,6 +386,7 @@ export default function App() {
                   </p>
                 </>
               )}
+              </div>
             </div>
           ) : null}
         </main>
