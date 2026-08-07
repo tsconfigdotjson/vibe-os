@@ -31,7 +31,7 @@ export function WallpaperPanel({
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <aside className="panel glass" role="dialog" aria-label="Wallpaper">
+      <aside className="panel glass-solid" role="dialog" aria-label="Wallpaper">
         <header className="panel-head">
           <h2>Wallpaper</h2>
           <button type="button" onClick={onClose} title="Close">
