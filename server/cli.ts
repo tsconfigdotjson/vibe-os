@@ -42,6 +42,8 @@ const HELP = `
     --ssh-port <n>      SSH target port (default 22)
     --user <name>       unix user to log in as (default: current user)
     --no-tmux           plain login shells instead of persistent tmux sessions
+    --tmux-status       show tmux's own status bar inside each window
+    --no-tmux-theme     leave tmux's colours alone
     --cert-ttl <secs>   certificate lifetime (default 43200)
 
     --workspace <dir>   root for projects and worktrees (default ~/workspace)

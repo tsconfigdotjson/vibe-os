@@ -182,7 +182,7 @@ export const TermWindow = memo(function TermWindow({
           <button type="button" title="Restart this connection" onClick={() => onRestart(win.id)}>
             ⟳
           </button>
-          <button type="button" title="Minimise to the dock" onClick={() => onMinimize(win.id)}>
+          <button type="button" title="Minimise to the dock — keeps running" onClick={() => onMinimize(win.id)}>
             –
           </button>
           <button type="button" title="Fill the desktop" onClick={() => onMaximize(win.id)}>
@@ -191,7 +191,7 @@ export const TermWindow = memo(function TermWindow({
           <button
             type="button"
             className="win-close"
-            title="Close the window (the tmux session keeps running)"
+            title="Close the window and end its session"
             onClick={() => onClose(win.id)}
           >
             ✕

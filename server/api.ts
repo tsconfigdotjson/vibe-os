@@ -4,6 +4,15 @@ import type { SshCa } from './ssh-ca.ts';
 import { fingerprint } from './ssh-ca.ts';
 import { WallpaperStore, MAX_WALLPAPER_BYTES, type DesktopPrefs } from './wallpapers.ts';
 import { log } from './log.ts';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const run = promisify(execFile);
+
+/** argv array, never a shell — the id is validated but this costs nothing. */
+function killSession(name: string): Promise<unknown> {
+  return run('tmux', ['kill-session', '-t', name], { timeout: 10_000 });
+}
 import pkg from '../package.json' with { type: 'json' };
 
 const PANE_ID = /^[A-Za-z0-9_-]{1,32}$/;
@@ -41,24 +50,35 @@ function json(body: unknown, status = 200): Response {
 export function paneCommand(paneId: string, config: Config): string | undefined {
   if (!config.tmux) return undefined;
   const attach = `tmux -u new-session -A -s vibe-${paneId}`;
-  if (!config.tmuxTheme) return attach;
 
-  // Match tmux's status bar to the desktop chrome. tmux's default is a solid
-  // green bar that fights every other colour on screen.
-  //
-  // These are session options, not global (`set -g`) ones: a vibe-os window
-  // should not restyle tmux sessions the user started themselves, and they
+  // All of these are session options, never global (`set -g`) ones: a vibe-os
+  // window must not restyle tmux sessions the user started themselves, and they
   // share one tmux server. The `\;` reaches tmux as a literal separator after
   // the login shell has parsed the command.
-  const style = [
-    'set status-style "bg=#10141c fg=#9aa3b6"',
-    'set status-left-style "fg=#56cfe1 bold"',
-    'set window-status-current-style "fg=#dfe5f0 bold"',
-    'set pane-border-style "fg=#1b2230"',
-    'set pane-active-border-style "fg=#56cfe1"',
-    'set status-right "#[fg=#667085]#H"',
-  ].join(' \\; ');
-  return `${attach} \\; ${style}`;
+  const cmds: string[] = [];
+
+  if (!config.tmuxStatus) {
+    // The window's own title bar already shows the session name and state, and
+    // the menu bar shows the host — tmux's status line just repeats them inside
+    // a window that holds exactly one session. `--tmux-status` brings it back,
+    // which is worth doing if you split panes inside a window with ctrl-b.
+    cmds.push('set status off');
+  }
+
+  if (config.tmuxTheme) {
+    if (config.tmuxStatus) {
+      // tmux's default is a solid green bar that fights every other colour.
+      cmds.push(
+        'set status-style "bg=#10141c fg=#9aa3b6"',
+        'set status-left-style "fg=#56cfe1 bold"',
+        'set window-status-current-style "fg=#dfe5f0 bold"',
+        'set status-right "#[fg=#667085]#H"',
+      );
+    }
+    cmds.push('set pane-border-style "fg=#1b2230"', 'set pane-active-border-style "fg=#56cfe1"');
+  }
+
+  return cmds.length > 0 ? `${attach} \\; ${cmds.join(' \\; ')}` : attach;
 }
 
 export interface ApiDeps {
@@ -138,6 +158,30 @@ export function createApi(deps: ApiDeps) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`certificate request rejected: ${message}`);
         return json({ error: message }, 400);
+      }
+    }
+
+    // ── sessions ─────────────────────────────────────────────────────────────
+    if (p.startsWith('/api/sessions/') && req.method === 'DELETE') {
+      const id = p.slice('/api/sessions/'.length);
+      if (!PANE_ID.test(id)) return json({ error: 'invalid session id' }, 400);
+      if (!config.tmux) return json({ ok: true, killed: false });
+
+      // Closing a window is an explicit "I am done with this", so the session
+      // behind it has to go. Leaving it alive was actively confusing: window ids
+      // are reused (lowest unused integer, so they stay short in `tmux ls`) and
+      // `new-session -A` attaches to an existing session, so the next window
+      // opened would silently resurrect the one just closed.
+      //
+      // This finds the session because vibe-os runs as the same user it logs in
+      // as, and a tmux server is per-user. With --user pointing at someone else
+      // there is no local session to kill, hence the soft failure.
+      try {
+        await killSession(`vibe-${id}`);
+        log.info(`ended tmux session vibe-${id}`);
+        return json({ ok: true, killed: true });
+      } catch {
+        return json({ ok: true, killed: false });
       }
     }
 

@@ -188,11 +188,25 @@ export function useWindows() {
     setFocused(id);
   }, [windows]);
 
+  /**
+   * Closes a window and ends the session behind it.
+   *
+   * Ending the session is the point. Window ids are reused (lowest unused
+   * integer), and each window attaches with `tmux new-session -A`, so a
+   * lingering session means the next window opened silently inherits the closed
+   * one's shell — same scrollback, same half-typed command. Persistence across a
+   * reload or a closed tab is still intact; this only fires when someone
+   * explicitly dismisses a window. Use minimise to put one away and keep it.
+   */
   const close = useCallback(
     (id: string) => {
       const remaining = windows.filter((w) => w.id !== id);
       setWindows((current) => current.filter((w) => w.id !== id));
       setFocused((f) => (f === id ? (remaining.at(-1)?.id ?? null) : f));
+      void fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {
+        // The window is gone either way; a surviving session is recoverable by
+        // opening a window with the same id.
+      });
     },
     [windows],
   );

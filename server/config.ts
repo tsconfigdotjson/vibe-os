@@ -37,6 +37,8 @@ export interface Config {
   tmux: boolean;
   /** Restyle the tmux status bar to match the desktop. Session-scoped. */
   tmuxTheme: boolean;
+  /** Show tmux's own status bar inside each window. */
+  tmuxStatus: boolean;
 
   open: boolean;
 }
@@ -64,6 +66,7 @@ export const OPTION_SPEC = {
   tmux: { type: 'boolean' as const },
   'no-tmux': { type: 'boolean' as const },
   'no-tmux-theme': { type: 'boolean' as const },
+  'tmux-status': { type: 'boolean' as const },
   open: { type: 'boolean' as const },
   help: { type: 'boolean' as const, short: 'h' },
   version: { type: 'boolean' as const, short: 'v' },
@@ -155,6 +158,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
     certTtlSeconds: num(values['cert-ttl'], 12 * 60 * 60, 'cert-ttl'),
     tmux,
     tmuxTheme: !values['no-tmux-theme'],
+    tmuxStatus: Boolean(values['tmux-status']),
     open: Boolean(values.open),
   };
 }

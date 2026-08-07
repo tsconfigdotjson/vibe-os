@@ -142,7 +142,8 @@ certificate instead.
 --ssh-port <n>      SSH target port (default 22)
 --user <name>       unix user to log in as (default: current user)
 --no-tmux           plain login shells instead of persistent tmux sessions
---no-tmux-theme     leave tmux's own status bar styling alone
+--tmux-status       show tmux's own status bar inside each window
+--no-tmux-theme     leave tmux's colours alone
 --cert-ttl <secs>   certificate lifetime (default 43200)
 
 --workspace <dir>   root for projects and worktrees (default ~/workspace)
@@ -165,7 +166,15 @@ time and `ctrl-b` belongs to the tmux session running inside it.
 | `alt` `1`…`9` | raise window n |
 | `alt` `z` | maximise / restore |
 | `alt` `m` | minimise to the dock |
-| `alt` `w` | close (the tmux session keeps running) |
+| `alt` `w` | close the window and end its session |
+
+Closing a window ends the session behind it; **minimise** puts one away and
+keeps it running. Reloading or closing the tab keeps everything — persistence
+only gives way to an explicit dismissal.
+
+tmux's own status bar is hidden, because the window's title bar already shows
+the session name and state and the menu bar shows the host. `--tmux-status`
+brings it back, which is worth it if you split panes inside a window.
 
 ### Wallpaper
 
