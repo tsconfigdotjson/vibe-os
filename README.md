@@ -74,6 +74,16 @@ sudo apt update && sudo apt install -y openssh-server openssh-client tmux git
 curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
 ```
 
+Verified on **Debian 12 and 13** and **Ubuntu 24.04 LTS**, x86\_64, from the
+compiled binary. The binary is dynamically linked against glibc and was built
+against an old baseline, so anything from bookworm onward is fine.
+
+If you intend to run a real browser on this box for Claude's Chrome
+integration, install **Google Chrome's own .deb** rather than the distribution's
+`chromium` package. On Ubuntu that package is a snap, and snap confinement is a
+known breaker of native messaging hosts — which is exactly the mechanism the
+Claude extension uses to reach a local Claude Code.
+
 `tmux` is the one people skip. It is not a nicety here: the harness command
 lives in the tmux invocation, so without it a profile opens a shell and does
 nothing else.
