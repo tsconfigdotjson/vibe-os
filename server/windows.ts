@@ -53,12 +53,12 @@ export function listWindows(db: Db, workspaceId: string) {
     .where(eq(windows.workspaceId, workspaceId))
     .orderBy(windows.z)
     .all()
-    .map((w) => ({ ...w, minimized: Boolean(w.minimized) }));
+    .map((w) => ({ ...w, minimized: Boolean(w.minimized), promptDone: Boolean(w.promptDone) }));
 }
 
 export function getWindow(db: Db, id: string) {
   const row = db.select().from(windows).where(eq(windows.id, id)).get();
-  return row ? { ...row, minimized: Boolean(row.minimized) } : undefined;
+  return row ? { ...row, minimized: Boolean(row.minimized), promptDone: Boolean(row.promptDone) } : undefined;
 }
 
 /**
@@ -82,7 +82,7 @@ function placement(index: number): Geometry {
   });
 }
 
-export function createWindow(db: Db, workspaceId: string) {
+export function createWindow(db: Db, workspaceId: string, profileId?: string | null) {
   const existing = listWindows(db, workspaceId);
 
   // Lowest unused index: it becomes part of the tmux session name, which people
@@ -106,6 +106,8 @@ export function createWindow(db: Db, workspaceId: string) {
       rowSpan: geometry.rowSpan,
       z: topZ + 1,
       minimized: 0,
+      profileId: profileId ?? null,
+      promptDone: 0,
       createdAt: Date.now(),
     })
     .run();
@@ -113,7 +115,11 @@ export function createWindow(db: Db, workspaceId: string) {
   return getWindow(db, id)!;
 }
 
-export function updateWindow(db: Db, id: string, patch: Partial<Geometry> & { raise?: boolean }) {
+export function updateWindow(
+  db: Db,
+  id: string,
+  patch: Partial<Geometry> & { raise?: boolean; promptDone?: boolean },
+) {
   const current = getWindow(db, id);
   if (!current) return undefined;
 
@@ -136,6 +142,8 @@ export function updateWindow(db: Db, id: string, patch: Partial<Geometry> & { ra
       rowSpan: geometry.rowSpan,
       z: geometry.z!,
       minimized: geometry.minimized ? 1 : 0,
+      // One-way: the prompt band, once handed off, stays closed.
+      promptDone: patch.promptDone || current.promptDone ? 1 : 0,
     })
     .where(eq(windows.id, id))
     .run();
@@ -150,18 +158,23 @@ export function deleteWindow(db: Db, id: string) {
 }
 
 /**
- * The tmux session name for a window.
+ * The tmux session name for a window, with everything else needed to launch it.
  *
  * Built from the workspace name and the window index so `tmux ls` reads as
- * something a person recognises: `vibe-quiet-amber-otter-1`.
+ * something a person recognises: `vibe-quiet-amber-otter-1`. The profile is
+ * deliberately *not* folded into the name — renaming a role would then orphan
+ * the session running it, for no gain a person would notice.
  */
-export function sessionNameFor(db: Db, windowId: string): { session: string; cwd: string } | undefined {
+export function sessionNameFor(
+  db: Db,
+  windowId: string,
+): { session: string; cwd: string; profileId: string | null } | undefined {
   const row = db
-    .select({ idx: windows.idx, name: workspaces.name, path: workspaces.path })
+    .select({ idx: windows.idx, profileId: windows.profileId, name: workspaces.name, path: workspaces.path })
     .from(windows)
     .innerJoin(workspaces, eq(windows.workspaceId, workspaces.id))
     .where(and(eq(windows.id, windowId)))
     .get();
   if (!row) return undefined;
-  return { session: `vibe-${row.name}-${row.idx}`, cwd: row.path };
+  return { session: `vibe-${row.name}-${row.idx}`, cwd: row.path, profileId: row.profileId };
 }

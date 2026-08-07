@@ -12,6 +12,15 @@ export interface SshTerminalProps {
   onTitleChange?: (title: string) => void;
   onBell?: () => void;
   onFocus?: () => void;
+  /**
+   * Hands out the Terminal once it exists, and null on teardown.
+   *
+   * The one thing outside this component can usefully do with it is
+   * `term.paste(text)`, which writes into the session without touching the
+   * clipboard — the only way to put text in front of a program on a page that
+   * is not a secure origin.
+   */
+  onTerminal?: (term: Terminal | null) => void;
   className?: string;
 }
 
@@ -100,13 +109,14 @@ export function SshTerminal({
   onTitleChange,
   onBell,
   onFocus,
+  onTerminal,
   className,
 }: SshTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Held in a ref so changing callback identity never restarts the session.
-  const handlers = useRef({ onStatusChange, onTitleChange, onBell, onFocus });
-  handlers.current = { onStatusChange, onTitleChange, onBell, onFocus };
+  const handlers = useRef({ onStatusChange, onTitleChange, onBell, onFocus, onTerminal });
+  handlers.current = { onStatusChange, onTitleChange, onBell, onFocus, onTerminal };
 
   const configRef = useRef(config);
   configRef.current = config;
@@ -192,6 +202,7 @@ export function SshTerminal({
     term.element?.addEventListener('mousedown', onMouseDown);
     term.textarea?.addEventListener('focus', () => handlers.current.onFocus?.());
 
+    handlers.current.onTerminal?.(term);
     handlers.current.onStatusChange?.('loading');
 
     // Started synchronously so teardown can always await the same promise,
@@ -228,6 +239,8 @@ export function SshTerminal({
     return () => {
       disposed = true;
       resizeObserver.disconnect();
+      // Retracted before disposal, so nothing outside can write to a dead term.
+      handlers.current.onTerminal?.(null);
       term.element?.removeEventListener('contextmenu', onContextMenu);
       term.element?.removeEventListener('mousedown', onMouseDown);
       for (const d of disposables) d.dispose();

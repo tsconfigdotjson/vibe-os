@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { eq, desc } from 'drizzle-orm';
 import { type Db, projects, workspaces, windows, newId } from './db.ts';
+import { deleteProjectProfiles } from './profiles.ts';
 import type { Config } from './config.ts';
 import { log } from './log.ts';
 
@@ -176,6 +177,7 @@ export async function scanProjects(db: Db, config: Config, opts: { force?: boole
         db.delete(windows).where(eq(windows.workspaceId, ws.id)).run();
       }
       db.delete(workspaces).where(eq(workspaces.projectId, project.id)).run();
+      deleteProjectProfiles(db, project.id);
       db.delete(projects).where(eq(projects.id, project.id)).run();
       log.info(`project ${project.name} disappeared — removed`);
     }

@@ -31,6 +31,24 @@ export interface Workspace {
   lastOpenedAt: number;
 }
 
+export type Harness = 'claude' | 'shell' | 'custom';
+
+/** A role a terminal can be opened as. Defined per project. */
+export interface Profile {
+  id: string;
+  projectId: string;
+  name: string;
+  /** Palette token; `--profile-<color>` in the stylesheet resolves it. */
+  color: string;
+  harness: Harness;
+  command: string | null;
+  /** argv tokens, already split and validated by the server. */
+  args: string[];
+  prompt: string;
+  position: number;
+  createdAt: number;
+}
+
 export interface WindowRow {
   id: string;
   workspaceId: string;
@@ -41,6 +59,8 @@ export interface WindowRow {
   rowSpan: number;
   z: number;
   minimized: boolean;
+  profileId: string | null;
+  promptDone: boolean;
   createdAt: number;
 }
 
@@ -106,6 +126,50 @@ export function useWorkspaces(projectId: string | null) {
 }
 
 /**
+ * Profiles for a project.
+ *
+ * Project-scoped rather than workspace-scoped: a role's prompt and flags
+ * describe the codebase, while workspaces are worktrees you throw away. So the
+ * same rail follows you across every workspace of a project.
+ */
+export function useProfiles(projectId: string | null) {
+  const key = projectId ? `/api/projects/${projectId}/profiles` : null;
+  const { data, error, isLoading, mutate } = useSWR<Profile[]>(key, fetcher, {
+    refreshInterval: POLL_MS,
+  });
+
+  const create = async (input: ProfileInput) => {
+    if (!projectId) throw new Error('no project selected');
+    const created = await send<Profile>(`/api/projects/${projectId}/profiles`, 'POST', input);
+    await mutate();
+    return created;
+  };
+
+  const update = async (id: string, input: ProfileInput) => {
+    const updated = await send<Profile>(`/api/profiles/${id}`, 'PATCH', input);
+    await mutate();
+    return updated;
+  };
+
+  const remove = async (id: string) => {
+    await send(`/api/profiles/${id}`, 'DELETE');
+    await mutate();
+  };
+
+  return { profiles: data ?? [], error, isLoading, create, update, remove, mutate };
+}
+
+/** What the editor sends. `args` is free text; the server tokenises it. */
+export interface ProfileInput {
+  name?: string;
+  color?: string;
+  harness?: Harness;
+  command?: string | null;
+  args?: string;
+  prompt?: string;
+}
+
+/**
  * Windows for a workspace.
  *
  * Not polled. These change only because of something happening in this tab, and
@@ -122,7 +186,8 @@ export function useWindowRows(workspaceId: string | null) {
 }
 
 export const windowApi = {
-  create: (workspaceId: string) => send<WindowRow>(`/api/workspaces/${workspaceId}/windows`, 'POST'),
+  create: (workspaceId: string, profileId?: string | null) =>
+    send<WindowRow>(`/api/workspaces/${workspaceId}/windows`, 'POST', { profileId: profileId ?? null }),
   patch: (id: string, patch: Partial<WindowRow> & { raise?: boolean }) =>
     send<WindowRow>(`/api/windows/${id}`, 'PATCH', patch),
   remove: (id: string) => send<{ ok: true }>(`/api/windows/${id}`, 'DELETE'),

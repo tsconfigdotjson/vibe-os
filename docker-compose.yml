@@ -9,7 +9,13 @@
 
 services:
   vibe-os:
-    build: .
+    build:
+      context: .
+      args:
+        # Puts `claude` on the box so a profile with the Claude harness has
+        # something to launch. Adds ~280MB and a few minutes to the first build;
+        # set to 0 for a lean image with shell and custom harnesses only.
+        WITH_CLAUDE: 1
     container_name: vibe-os
     ports:
       # Host 8080 -> container 80. Use "80:80" if you want the real thing and

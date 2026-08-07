@@ -16,6 +16,15 @@ import {
   touchWorkspace,
   reconcileWorkspaces,
 } from './projects.ts';
+import {
+  listProfiles,
+  getProfile,
+  createProfile,
+  updateProfile,
+  deleteProfile,
+  PALETTE,
+  type Profile,
+} from './profiles.ts';
 import { listWindows, createWindow, updateWindow, deleteWindow, sessionNameFor } from './windows.ts';
 import { log } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
@@ -39,6 +48,8 @@ export interface ClientConfig {
   hostKeyFingerprint: string | null;
   certificateEndpoint: string;
   maxWallpaperBytes: number;
+  /** Colour tokens a profile may use; the stylesheet decides what they look like. */
+  palette: readonly string[];
 }
 
 function json(body: unknown, status = 200): Response {
@@ -56,19 +67,55 @@ function shellQuote(value: string): string {
 }
 
 /**
+ * The command a profile window starts its pane with.
+ *
+ * Two decisions are baked in here.
+ *
+ * The trailing `exec "$SHELL"` is not decoration. tmux ends a session when its
+ * last pane exits, so without it, quitting Claude would take the window with
+ * it — you would lose the desktop window because you finished a conversation.
+ * Falling back to a shell in the worktree is what you actually want next.
+ *
+ * Quoting happens at two levels and both are handled. Every token is quoted
+ * individually so a flag can contain spaces and cannot contain a second
+ * command; the whole string is quoted again by the caller, which is what keeps
+ * `$SHELL` from being expanded by the outer login shell instead of by the shell
+ * tmux runs this with.
+ */
+export function harnessCommand(profile: Profile): string | undefined {
+  const executable = profile.harness === 'claude' ? 'claude' : profile.harness === 'custom' ? profile.command : null;
+  if (!executable) return undefined;
+  const argv = [executable, ...profile.args].map(shellQuote).join(' ');
+  return `${argv}; exec "\${SHELL:-/bin/sh}"`;
+}
+
+/**
  * Builds the command a window runs on login.
  *
  * `-c` is the point of the projects feature: the session starts in the worktree
  * of the workspace the window belongs to. That path is looked up server-side
  * from the window id — the browser never sends a directory, so there is nothing
- * to smuggle a path through.
+ * to smuggle a path through. The same is true of the profile: the window row
+ * says which one it was opened as, so the browser never sends a command either.
  *
  * `new-session -A` attaches if the session exists and creates it otherwise, so
- * a window reattaches to exactly what it was running before a reload.
+ * a window reattaches to exactly what it was running before a reload. That also
+ * makes the harness safe to pass here: tmux ignores a shell-command when it
+ * attaches, so a reload rejoins the running Claude rather than starting a
+ * second one on top of it.
  */
-export function windowCommand(session: string, cwd: string, config: Config): string | undefined {
+export function windowCommand(
+  session: string,
+  cwd: string,
+  config: Config,
+  profile?: Profile | null,
+): string | undefined {
   if (!config.tmux) return undefined;
-  const parts = [`tmux -u new-session -A -s ${shellQuote(session)} -c ${shellQuote(cwd)}`];
+  const harness = profile ? harnessCommand(profile) : undefined;
+  const parts = [
+    `tmux -u new-session -A -s ${shellQuote(session)} -c ${shellQuote(cwd)}` +
+      (harness ? ` ${shellQuote(harness)}` : ''),
+  ];
 
   // Session options, never global (`set -g`): a vibe-os window must not restyle
   // tmux sessions the user started themselves on the same server.
@@ -121,6 +168,7 @@ export function createApi(deps: ApiDeps) {
         hostKeyFingerprint: deps.hostKey ? fingerprint(deps.hostKey) : null,
         certificateEndpoint: '/api/ssh/certificate',
         maxWallpaperBytes: MAX_WALLPAPER_BYTES,
+        palette: PALETTE,
       };
       return json(body);
     }
@@ -160,6 +208,48 @@ export function createApi(deps: ApiDeps) {
       return json({ error: 'method not allowed' }, 405);
     }
 
+    // ── profiles ─────────────────────────────────────────────────────────────
+    const profilesMatch = /^\/api\/projects\/([^/]+)\/profiles$/.exec(p);
+    if (profilesMatch) {
+      const projectId = decodeURIComponent(profilesMatch[1]);
+      if (!ID.test(projectId)) return json({ error: 'invalid project id' }, 400);
+
+      if (req.method === 'GET') return json(listProfiles(db, projectId));
+
+      if (req.method === 'POST') {
+        try {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+          return json(createProfile(db, projectId, body), 201);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+        }
+      }
+      return json({ error: 'method not allowed' }, 405);
+    }
+
+    const profileMatch = /^\/api\/profiles\/([^/]+)$/.exec(p);
+    if (profileMatch) {
+      const id = decodeURIComponent(profileMatch[1]);
+      if (!ID.test(id)) return json({ error: 'invalid profile id' }, 400);
+
+      if (req.method === 'PATCH') {
+        try {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+          const updated = updateProfile(db, id, body);
+          return updated ? json(updated) : json({ error: 'unknown profile' }, 404);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+        }
+      }
+
+      if (req.method === 'DELETE') {
+        // Windows opened as this profile keep running and become plain
+        // terminals; ending live sessions is what the close button is for.
+        return deleteProfile(db, id) ? json({ ok: true }) : json({ error: 'unknown profile' }, 404);
+      }
+      return json({ error: 'method not allowed' }, 405);
+    }
+
     const workspaceMatch = /^\/api\/workspaces\/([^/]+)$/.exec(p);
     if (workspaceMatch) {
       const id = decodeURIComponent(workspaceMatch[1]);
@@ -192,10 +282,25 @@ export function createApi(deps: ApiDeps) {
     if (windowsMatch) {
       const workspaceId = decodeURIComponent(windowsMatch[1]);
       if (!ID.test(workspaceId)) return json({ error: 'invalid workspace id' }, 400);
-      if (!getWorkspace(db, workspaceId)) return json({ error: 'unknown workspace' }, 404);
+      const workspace = getWorkspace(db, workspaceId);
+      if (!workspace) return json({ error: 'unknown workspace' }, 404);
 
       if (req.method === 'GET') return json(listWindows(db, workspaceId));
-      if (req.method === 'POST') return json(createWindow(db, workspaceId), 201);
+      if (req.method === 'POST') {
+        const body = (await req.json().catch(() => ({}))) as { profileId?: unknown };
+        let profileId: string | null = null;
+        if (typeof body.profileId === 'string' && body.profileId !== '') {
+          const profile = getProfile(db, body.profileId);
+          // A profile belongs to a project, so it may only open windows in that
+          // project's workspaces — otherwise one project's flags and prompt
+          // could be launched inside another project's worktree.
+          if (!profile || profile.projectId !== workspace.projectId) {
+            return json({ error: 'unknown profile for this workspace' }, 400);
+          }
+          profileId = profile.id;
+        }
+        return json(createWindow(db, workspaceId, profileId), 201);
+      }
       return json({ error: 'method not allowed' }, 405);
     }
 
@@ -243,7 +348,10 @@ export function createApi(deps: ApiDeps) {
         const publicKey = await req.text();
         if (publicKey.length > MAX_PUBKEY_BYTES) throw new Error('public key too large');
 
-        const forceCommand = windowCommand(target.session, target.cwd, config);
+        // Read from the window row, never from the request: the browser asks
+        // for a window, and the server decides what that window runs.
+        const profile = target.profileId ? getProfile(db, target.profileId) : undefined;
+        const forceCommand = windowCommand(target.session, target.cwd, config, profile);
         const cert = await ca.signUserCert({
           publicKey,
           principal: config.user,
@@ -252,7 +360,9 @@ export function createApi(deps: ApiDeps) {
           ttlSeconds: config.certTtlSeconds,
         });
 
-        log.info(`issued certificate for ${target.session} in ${target.cwd}`);
+        log.info(
+          `issued certificate for ${target.session} in ${target.cwd}${profile ? ` as ${profile.name}` : ''}`,
+        );
 
         // sshterm compares this header for exact equality against "text/plain";
         // a "; charset=utf-8" suffix makes it reject the certificate.
