@@ -74,9 +74,27 @@ export const OPTION_SPEC = {
 
 export type RawOptions = Partial<Record<keyof typeof OPTION_SPEC, string | boolean>>;
 
+/**
+ * Makes a bare `--token` mean "generate one".
+ *
+ * That is what the help text has always promised — `--token [value]` — and what
+ * the VPS instructions tell people to type, but `parseArgs` has no notion of an
+ * optional value: a string option with nothing after it is an error, and the
+ * error talks about ambiguity rather than saying what to do. Rewriting it to
+ * `--token=` here is the whole fix, and it is done before parsing so everything
+ * downstream still sees one shape.
+ */
+function allowBareToken(argv: string[]): string[] {
+  return argv.map((arg, i) => {
+    if (arg !== '--token') return arg;
+    const next = argv[i + 1];
+    return next === undefined || next.startsWith('-') ? '--token=' : arg;
+  });
+}
+
 export function parseCliArgs(argv: string[]): { values: RawOptions; positionals: string[] } {
   const { values, positionals } = parseArgs({
-    args: argv,
+    args: allowBareToken(argv),
     options: OPTION_SPEC,
     allowPositionals: true,
     strict: true,

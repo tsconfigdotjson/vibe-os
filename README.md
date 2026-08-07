@@ -4,12 +4,13 @@ A coding desktop in the browser, on a box you own. Switch between the git repos
 on a machine, spin up a worktree per piece of work, and open terminals into it —
 all over HTTP from anything with a browser.
 
-> **Status:** works end to end, and has only ever run in containers. The
-> compiled x86\_64 binary is verified from blank Debian 12/13 and Ubuntu
-> 24.04/26.04 — certificate issued, SSH login, tmux, harness running in the
-> worktree — but never on a real VPS. `systemctl`, `tailscale serve` and
-> `--domain` (Let's Encrypt) are what only real hardware exercises. No release
-> binaries are published yet, so build one (below) or run the container.
+> **Status:** running on a real VPS as of 2026-08-07 — an OVHcloud box on
+> Ubuntu 26.04, behind Tailscale, serving over HTTPS with a Let's Encrypt
+> certificate, with Claude launching into worktrees from the profile rail.
+> `systemctl` and `tailscale serve` are proven; `--domain` (Let's Encrypt via
+> ACME) remains untested, because taking the Tailscale path means never
+> reaching for it. No release binaries are published yet, so build one (below)
+> or run the container.
 
 Open the desktop and you get a project picker, a sidebar of workspaces, and
 windows you can drag around a snap grid over a wallpaper. Every window is a tmux
@@ -62,9 +63,10 @@ the host key as changed after a rebuild.
 
 ## On a VPS
 
-> **Not yet run on a real VPS.** Everything below is exercised by the Docker
-> rehearsal, which is faithful for sshd, tmux and certificates. `install-service`
-> and the firewall steps are the parts only a real box exercises.
+> These steps were walked end to end on a fresh OVHcloud VPS, and the two
+> things that broke there were both PATH: a forced command does not get a login
+> shell, and a systemd service does not get one either. Both are fixed. The
+> firewall section is the part still taken on trust.
 
 ### What the box needs
 
@@ -156,12 +158,18 @@ port 80, and you stop needing Let's Encrypt.
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 
-# high port — no root, no setcap, no capability in the systemd unit
-vibe-os start --port 7681 --token
+# Loopback, not the tailnet address: `tailscale serve` proxies to 127.0.0.1,
+# and it is the only thing that should be able to reach the plain HTTP port.
+# Binding the tailnet address instead gives a 502 — serve cannot reach it.
+vibe-os start --port 7681 --host 127.0.0.1 --token
 
 # HTTPS on your tailnet name, certificate provisioned automatically
 sudo tailscale serve --bg 7681
 ```
+
+Enabling HTTPS for the tailnet is a one-time toggle in the admin console, and
+`tailscale serve` says so if it is off. `--token` with no value generates one
+and remembers it; the startup log prints the URL with it filled in.
 
 That serves it at `https://<machine>.<tailnet>.ts.net`, and gives you three
 things beyond privacy:
@@ -171,9 +179,6 @@ things beyond privacy:
   `navigator.clipboard`. Copy-on-select and paste-on-right-click start working
   in the terminals — over plain HTTP on a bare IP they silently do not.
 - **No privileged port**, so no `setcap` and no `CAP_NET_BIND_SERVICE`.
-
-Enabling HTTPS for your tailnet is a one-time toggle in the admin console;
-`tailscale serve` will tell you if it is off.
 
 ### Firewall: tailnet only
 
@@ -823,10 +828,11 @@ subcommand.
 
 ## What is not here yet
 
-- **Never run on a VPS.** `install-service` and the firewall steps are what
-  Docker cannot rehearse. Taking the [Tailscale path](#behind-tailscale) leaves
-  `--domain` and ACME unused, which is convenient, because that code has never
-  run outside a test either.
+- **ACME is still untested.** `--domain` and the Let's Encrypt path have never
+  run outside a test, and taking the [Tailscale path](#behind-tailscale) means
+  never reaching for them — which is why they stay that way.
+- **The firewall rules are taken on trust.** Everything else in the VPS section
+  has been walked end to end on real hardware; those have not.
 - **No authentication by default.** The token gate exists and works; it is off
   until you pass `--token`. There is no multi-user story at all.
 - **No keyboard shortcuts for profiles.** The rail is click-only; `alt` plus a
