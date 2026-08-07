@@ -416,11 +416,27 @@ export async function setHandoff(db: Db, config: Config, windowId: string, mode:
   const target = resolveTarget(db, windowId);
   if (!target) return false;
 
-  if (mode === null && config.tmux) {
-    // Detach before clearing the flag: if this throws, the row still says the
-    // terminal is out there, which is the honest state to leave behind.
+  if (config.tmux) {
+    /*
+     * Both directions detach every client, and the reason differs.
+     *
+     * Taking it back is the obvious one: the terminal has to let go, and this
+     * is the server-side equivalent of closing a browser pop-out. It happens
+     * before the flag is cleared, so a failure leaves the row saying the
+     * terminal is still out there, which is the honest state.
+     *
+     * Handing it out is the subtle one. The desktop that asked has already
+     * unmounted its terminal — but any *other* desktop showing this workspace
+     * has not heard yet, and until it polls it is still a tmux client. The
+     * terminal would then arrive as a second one and the session would shrink
+     * to whichever is smaller. Broadcasting to sibling tabs closes that for one
+     * browser; only the server can close it for another machine, and it closes
+     * it here to zero rather than to a poll interval. Nothing is lost: a client
+     * detaching is not a session ending, and the browsers reconnect or show the
+     * handoff as soon as they catch up.
+     */
     await detachClients(target.session);
-    log.info(`reclaimed ${target.session} from its terminal`);
+    log.info(mode === 'ssh' ? `handed ${target.session} to a terminal` : `reclaimed ${target.session} from its terminal`);
   }
 
   db.update(windows)

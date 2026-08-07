@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import useSWR, { mutate as globalMutate } from 'swr';
 
 /**
@@ -262,18 +263,57 @@ export interface ProfileInput {
 export function useWindowRows(workspaceId: string | null) {
   const key = workspaceId ? `/api/workspaces/${workspaceId}/windows` : null;
   const { data, error, isLoading, mutate } = useSWR<WindowRow[]>(key, fetcher, {
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
     /*
-     * Still not polled in the normal case — but a window handed to a terminal
-     * is the one thing here that changes without this tab doing anything. The
-     * server hands it back when the ssh session goes away, and without a poll
-     * the desktop would sit on a placeholder for a terminal that closed hours
-     * ago. Only ever runs while something is actually out.
+     * Fast while something is handed to a terminal, slow otherwise.
+     *
+     * Not conditional on *this* tab already knowing about a handoff, which is
+     * the trap: gate the poll on `handoff === 'ssh'` alone and a desktop only
+     * ever polls once it has already found out, so a second tab or another
+     * machine never learns at all. It keeps its terminal mounted, and then
+     * there are two clients on one tmux session — the size fight the whole
+     * handoff exists to prevent. The baseline poll is what closes that, and
+     * focus revalidation is what makes it immediate in the case that actually
+     * happens: coming back to a tab you left.
      */
-    refreshInterval: (latest) => (latest?.some((r) => r.handoff === 'ssh') ? 5_000 : 0),
+    refreshInterval: (latest) => (latest?.some((r) => r.handoff === 'ssh') ? 5_000 : POLL_MS),
   });
 
+  /*
+   * Tabs in one browser tell each other at once rather than waiting a minute.
+   *
+   * Same trick the pop-out uses, and for the same reason: two documents on one
+   * origin with no shared state. This only nudges — the message carries no
+   * data, so there is no second source of truth to disagree with the server,
+   * and a tab that misses it still catches up on its own poll.
+   */
+  useEffect(() => {
+    if (!workspaceId || typeof BroadcastChannel === 'undefined') return;
+    const bc = new BroadcastChannel(WINDOWS_CHANNEL);
+    bc.onmessage = (event: MessageEvent<{ workspaceId: string }>) => {
+      if (event.data?.workspaceId === workspaceId) void mutate();
+    };
+    return () => bc.close();
+  }, [workspaceId, mutate]);
+
   return { rows: data, error, isLoading, mutate, key };
+}
+
+const WINDOWS_CHANNEL = 'vibe-os:windows:v1';
+
+/**
+ * Tells other tabs a window's handoff changed, so they let go of its terminal.
+ *
+ * Sent on a channel of its own rather than a long-lived one, for the reason
+ * usePopouts documents: a ref to a listening channel is null between an
+ * effect's cleanup and its next run, and a send landing in that gap posts
+ * nothing at all, silently.
+ */
+export function nudgeWindows(workspaceId: string): void {
+  if (typeof BroadcastChannel === 'undefined') return;
+  const bc = new BroadcastChannel(WINDOWS_CHANNEL);
+  bc.postMessage({ workspaceId });
+  bc.close();
 }
 
 export const windowApi = {

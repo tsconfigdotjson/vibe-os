@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SshStatus } from '../sshterm';
 import { onRuntimeDead } from '../sshterm';
-import { useWindowRows, windowApi, type WindowRow } from '../data';
+import { useWindowRows, windowApi, nudgeWindows, type WindowRow } from '../data';
 
 /**
  * Window geometry lives in grid units, not pixels.
@@ -263,8 +263,12 @@ export function useWindows(workspaceId: string | null) {
    */
   const handoff = useCallback(
     async (id: string, mode: 'ssh' | null) => {
+      // Other tabs are showing this same window and have to let go of it too,
+      // or they stay attached and the terminal ends up sharing the session.
+      const tell = () => workspaceId && nudgeWindows(workspaceId);
+
       if (mode === 'ssh') {
-        applyRow(id, { handoff: 'ssh' }, () => windowApi.handoff(id, 'ssh'));
+        applyRow(id, { handoff: 'ssh' }, () => windowApi.handoff(id, 'ssh').then((row) => (tell(), row)));
         return;
       }
       try {
@@ -272,11 +276,12 @@ export function useWindows(workspaceId: string | null) {
         await mutate((current) => (current ?? []).map((r) => (r.id === id ? { ...r, ...row } : r)), {
           revalidate: false,
         });
+        tell();
       } catch {
         void mutate();
       }
     },
-    [applyRow, mutate],
+    [applyRow, mutate, workspaceId],
   );
 
   const setStatus = useCallback(
