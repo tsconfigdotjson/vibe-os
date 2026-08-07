@@ -342,6 +342,13 @@ as **changed**, which reads like an attack rather than a misconfiguration.
 **tmux is detected on the machine vibe-os runs on**, which is the SSH target by
 default. If you point `--ssh-host` somewhere else, pass `--tmux` explicitly.
 
+**Upstream prints a banner into every session** from `internal/start.go`, with
+no option to disable it. It is filtered in `SshTerminal.tsx` by wrapping the
+terminal object handed to Go, rather than by forking the Go source — building
+ssh.wasm ourselves would cost the "prebuilt from upstream releases, no Go
+toolchain on the VPS" property. The filter switches itself off at the first line
+that is not part of the banner, so it cannot swallow real output.
+
 **xterm's `allowTransparency` is not enough to see through a terminal.** It
 covers the cell layer; xterm 6 also paints an opaque background on the element
 it mounts into and on its scrollable wrapper. Miss those and the terminal

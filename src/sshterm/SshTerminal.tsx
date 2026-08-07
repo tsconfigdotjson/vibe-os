@@ -45,6 +45,50 @@ const THEME = {
 };
 
 /**
+ * Swallows the banner upstream prints into every session.
+ *
+ * `internal/start.go` writes a three-line box and a blank line straight to the
+ * terminal object before the app boots, with no config option to turn it off.
+ * Patching that would mean forking the Go source and building ssh.wasm
+ * ourselves, which costs the "prebuilt from upstream releases, no Go toolchain
+ * on the VPS" property — a bad trade for four lines of output.
+ *
+ * We own the object Go writes to, so the banner is filtered at the boundary
+ * instead. The filter disables itself the moment it sees a line that is not
+ * part of the banner, so it can never eat real output; if upstream changes the
+ * art, the banner simply comes back rather than anything breaking.
+ */
+function suppressBanner(term: Terminal): void {
+  const original = term.writeln.bind(term);
+  const BANNER = /[╔╚╗╝║═]|SSH TERM|^Welcome!/;
+  let filtering = true;
+  let sawBox = false;
+
+  (term as unknown as { writeln: Terminal['writeln'] }).writeln = ((
+    data: string | Uint8Array,
+    callback?: () => void,
+  ) => {
+    if (filtering && typeof data === 'string') {
+      const plain = data.replace(/\x1b\[[0-9;]*m/g, '');
+      if (BANNER.test(plain)) {
+        sawBox = true;
+        callback?.();
+        return;
+      }
+      // The banner ends with one blank line; anything else means real output
+      // has started and the filter has done its job.
+      if (sawBox && plain.trim() === '') {
+        filtering = false;
+        callback?.();
+        return;
+      }
+      filtering = false;
+    }
+    return original(data as string, callback);
+  }) as Terminal['writeln'];
+}
+
+/**
  * Renders one SSH session: owns an xterm.js Terminal and hands it to the
  * sshterm WASM runtime.
  *
@@ -93,6 +137,8 @@ export function SshTerminal({
       allowTransparency: true,
       theme: THEME,
     });
+    suppressBanner(term);
+
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
