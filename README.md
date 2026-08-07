@@ -48,15 +48,43 @@ Both volumes are worth keeping: `vibe-home` preserves the CA and your work,
 `vibe-sshd` preserves the container's host keys so the browser does not report
 the host key as changed after a rebuild.
 
-### On a real machine
+---
 
-Two ways, neither yet run on a VPS:
+## On a VPS
+
+> **Not yet run on a real VPS.** Everything below is exercised by the Docker
+> rehearsal, which is faithful for sshd, tmux and certificates. `install-service`
+> and the firewall steps are the parts only a real box exercises.
+
+### What the box needs
+
+vibe-os is one binary with no runtime dependencies, but it shells out to a few
+things and logs in through the machine's own sshd. These are the prerequisites:
+
+| Package | What uses it | Without it |
+| --- | --- | --- |
+| `openssh-server` | every window logs in through it | nothing connects |
+| `openssh-client` | `ssh-keygen` signs certificates, `ssh-keyscan` finds the host key to pin | **the server refuses to start** |
+| `tmux` | wraps every window | windows become plain shells that die on reload, and **profiles launch no harness at all** |
+| `git` | projects and worktrees | no projects |
+| `claude` | the Claude harness | those profiles fall back to a shell |
+
+```bash
+sudo apt update && sudo apt install -y openssh-server openssh-client tmux git
+curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
+```
+
+`tmux` is the one people skip. It is not a nicety here: the harness command
+lives in the tmux invocation, so without it a profile opens a shell and does
+nothing else.
+
+### Install
 
 ```bash
 # a self-contained binary — no Bun, Node or npm on the target
 bun run compile              # writes dist/bin/vibe-os-linux-{x64,arm64}
 scp dist/bin/vibe-os-linux-x64 you@host:/usr/local/bin/vibe-os
-ssh you@host 'chmod +x /usr/local/bin/vibe-os && vibe-os'
+ssh you@host 'chmod +x /usr/local/bin/vibe-os'
 ```
 
 ```bash
@@ -66,6 +94,127 @@ bun install && bun run build && bun bin/vibe-os.mjs start
 
 The binary carries the whole app, including the 20MB SSH WASM runtime. Once
 releases are published the first path collapses into a single `curl`.
+
+Then, before starting anything:
+
+```bash
+vibe-os doctor          # and again with sudo — see below
+```
+
+### Check it, twice
+
+`vibe-os doctor` answers the one question that matters: will a certificate this
+host signs actually be accepted for this user? It reads sshd's *effective*
+configuration to do it, which catches the failures that otherwise show up in a
+browser as `handshake failed` and nowhere else — a non-default
+`AuthorizedKeysFile`, an `AllowUsers` list that omits your user,
+`PubkeyAuthentication no`, or a home directory that is group-writable and so
+silently ignored under `StrictModes`.
+
+Reading sshd's effective config needs root, so run it **both ways**:
+
+```bash
+vibe-os doctor          # everything that does not need privileges
+sudo vibe-os doctor     # adds the sshd checks — this is the one that matters
+```
+
+Without root it says so rather than guessing:
+
+```
+! sshd config    could not read sshd's effective config — the checks below are the defaults, not the truth
+```
+
+### Behind Tailscale
+
+This is the recommended way to run it, and not only for the network. Tailscale
+removes the two riskiest parts of a public deployment: you stop needing to bind
+port 80, and you stop needing Let's Encrypt.
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# high port — no root, no setcap, no capability in the systemd unit
+vibe-os start --port 7681 --token
+
+# HTTPS on your tailnet name, certificate provisioned automatically
+sudo tailscale serve --bg 7681
+```
+
+That serves it at `https://<machine>.<tailnet>.ts.net`, and gives you three
+things beyond privacy:
+
+- **A real certificate**, so `--domain` and the whole ACME path stay unused.
+- **A secure origin**, which is what the browser requires before it will expose
+  `navigator.clipboard`. Copy-on-select and paste-on-right-click start working
+  in the terminals — over plain HTTP on a bare IP they silently do not.
+- **No privileged port**, so no `setcap` and no `CAP_NET_BIND_SERVICE`.
+
+Enabling HTTPS for your tailnet is a one-time toggle in the admin console;
+`tailscale serve` will tell you if it is off.
+
+### Firewall: tailnet only
+
+Tailscale does not close ports for you. Until you do, the machine is still
+answering on its public address, and vibe-os hands out shells.
+
+**Do not lock yourself out.** Confirm you can reach the box over the tailnet in
+a second terminal *before* denying anything, and know where your provider's
+serial or rescue console is.
+
+```bash
+sudo ufw allow in on tailscale0        # anything arriving over the tailnet
+sudo ufw allow 41641/udp               # lets Tailscale make direct connections
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw enable
+```
+
+`41641/udp` is worth understanding rather than pasting: without it Tailscale
+still works, but falls back to relaying through DERP, which is slower. It is
+not a hole in the tailnet — it is how peers find each other directly.
+
+Note there is no `allow 22` here. Once the rules are in place, SSH arrives over
+the tailnet like everything else. If you would rather keep a public SSH door
+open while you gain confidence, add `sudo ufw allow 22/tcp` and remove it later.
+
+The nftables equivalent, if you are not using ufw:
+
+```bash
+sudo nft add rule inet filter input iifname "tailscale0" accept
+sudo nft add rule inet filter input udp dport 41641 accept
+```
+
+**Your provider's firewall is a separate thing.** AWS security groups, Hetzner
+firewalls, DigitalOcean cloud firewalls and the rest sit in front of the machine
+and know nothing about ufw. Close 80 and 443 there too, and leave only what you
+actually serve publicly, which with Tailscale is nothing.
+
+Finally, belt and braces — bind vibe-os to the tailnet address so it is not
+listening on the public interface at all:
+
+```bash
+vibe-os start --port 7681 --token --host 100.x.y.z
+```
+
+`vibe-os doctor` reports on this directly, and prints your tailnet address when
+it finds one:
+
+```
+! exposure       no token and bound to every interface — Tailscale is up (100.x.y.z), but so is any public address
+                 bind to the tailnet only:  --host 100.x.y.z
+```
+
+### Keeping it running
+
+```bash
+sudo vibe-os install-service --port 7681 --token
+journalctl -u vibe-os -f
+```
+
+The unit runs as the invoking user, not root, and forwards whatever flags you
+passed. It grants `CAP_NET_BIND_SERVICE`, which you no longer need if you took
+the Tailscale path above — harmless, but that is why it is there.
 
 ---
 
@@ -342,6 +491,13 @@ Nothing about the gate protects against someone who already has the token, and
 there is no per-user isolation — every window is the same unix user. Treat access
 to vibe-os as equivalent to SSH access to the box, because it is.
 
+Which is the argument for not relying on the gate alone. A token is one secret
+in front of a shell; a closed port is not reachable at all. On a VPS, put it
+behind Tailscale, [close everything else at the firewall](#firewall-tailnet-only),
+and bind to the tailnet address — then keep the token as well. `vibe-os doctor`
+reports on exactly this and will tell you when you have a shell on a public
+interface with no gate in front of it.
+
 ### TLS
 
 Plain HTTP on port 80 works out of the box on a bare IP. Pass `--domain` and it
@@ -349,10 +505,15 @@ provisions a Let's Encrypt certificate over HTTP-01 (it already owns port 80),
 serves HTTPS, and redirects. Certificates are renewed 30 days before expiry.
 
 On plain HTTP the browser clipboard API is unavailable — the origin is not a
-secure context — so copy-on-select and paste-on-right-click stop working. Use a
-domain if you want them. A profile's prompt is unaffected either way: its
-**Send** button writes into the session directly and never touches the
-clipboard.
+secure context — so copy-on-select and paste-on-right-click stop working. A
+profile's prompt is unaffected either way: its **Send** button writes into the
+session directly and never touches the clipboard.
+
+There are two ways to get a secure origin, and the second is easier than the
+first: `--domain` and Let's Encrypt, or [`tailscale serve`](#behind-tailscale),
+which provisions a certificate for your `.ts.net` name with no domain to own, no
+ACME, and no port 80. The ACME path is also the one part of this codebase that
+has never run outside a test.
 
 ---
 
@@ -375,6 +536,10 @@ or let systemd handle it, which grants the capability without setcap at all:
 sudo vibe-os install-service --user "$USER"
 journalctl -u vibe-os -f
 ```
+
+Or sidestep it: run on a high port with
+[`tailscale serve`](#behind-tailscale) in front. Nothing privileged is involved,
+and you get HTTPS as well.
 
 ---
 
@@ -458,8 +623,10 @@ subcommand.
 
 ## What is not here yet
 
-- **Never run on a VPS.** `--domain` and `install-service` are the two paths
-  Docker cannot rehearse, and both only run on a first start.
+- **Never run on a VPS.** `install-service` and the firewall steps are what
+  Docker cannot rehearse. Taking the [Tailscale path](#behind-tailscale) leaves
+  `--domain` and ACME unused, which is convenient, because that code has never
+  run outside a test either.
 - **No authentication by default.** The token gate exists and works; it is off
   until you pass `--token`. There is no multi-user story at all.
 - **No keyboard shortcuts for profiles.** The rail is click-only; `alt` plus a
