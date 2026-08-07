@@ -183,6 +183,37 @@ export function useHarness() {
   return data ?? null;
 }
 
+/** An MCP server configured on the box, as the profile editor sees it. */
+export interface McpServer {
+  name: string;
+  /** `user` is machine-wide, `project` is the repo's `.mcp.json`, `local` is one directory. */
+  scope: 'user' | 'project' | 'local';
+  /** The file or directory it was defined in. */
+  source: string;
+  transport: string;
+  /** URL, or the command it runs. */
+  detail: string;
+  /** The path a profile passes to `--mcp-config` for this one server. */
+  configPath: string;
+}
+
+/**
+ * MCP servers this project's profiles can be given.
+ *
+ * Project-scoped because a repo's `.mcp.json` is, and because a server added
+ * inside one workspace is only visible from that directory. Not polled: it
+ * changes when someone runs `claude mcp add` on the box, and reopening the
+ * editor is already the moment you would look.
+ */
+export function useMcpServers(projectId: string | null) {
+  const key = projectId ? `/api/projects/${projectId}/mcp` : null;
+  const { data, isLoading } = useSWR<McpServer[]>(key, fetcher, {
+    revalidateOnFocus: false,
+    refreshInterval: 0,
+  });
+  return { servers: data ?? [], loading: isLoading };
+}
+
 /** What the editor sends. `args` is free text; the server tokenises it. */
 export interface ProfileInput {
   name?: string;

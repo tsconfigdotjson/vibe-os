@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import type { Harness, HarnessInfo, Profile, ProfileInput } from '../data';
+import type { Harness, HarnessInfo, McpServer, Profile, ProfileInput } from '../data';
 import { countBlanks } from '../desktop/blanks';
 import {
   TOGGLES,
@@ -8,6 +8,7 @@ import {
   modeLabel,
   parseSettings,
   type ClaudeSettings,
+  type McpMode,
 } from './claudeFlags';
 
 export interface ProfilePanelProps {
@@ -16,6 +17,8 @@ export interface ProfilePanelProps {
   palette: readonly string[];
   /** What the installed CLI accepts, or null while it is still being read. */
   harnessInfo: HarnessInfo | null;
+  /** MCP servers configured on the box, for this project. */
+  mcpServers: McpServer[];
   onSave: (input: ProfileInput) => Promise<unknown>;
   onDelete: (() => Promise<unknown>) | null;
   onClose: () => void;
@@ -27,7 +30,28 @@ const HARNESSES: { value: Harness; label: string; hint: string }[] = [
   { value: 'custom', label: 'Custom', hint: 'any command on the box' },
 ];
 
-export function ProfilePanel({ profile, palette, harnessInfo, onSave, onDelete, onClose }: ProfilePanelProps) {
+const MCP_MODES: { value: McpMode; label: string }[] = [
+  { value: 'all', label: 'Everything configured on this box' },
+  { value: 'pick', label: 'Only the ones I pick' },
+  { value: 'none', label: 'None — no MCP servers at all' },
+];
+
+/** Where a server is defined, said in a couple of words under its name. */
+const SCOPE_NOTE: Record<McpServer['scope'], string> = {
+  user: 'this box',
+  project: 'the repo',
+  local: 'one directory',
+};
+
+export function ProfilePanel({
+  profile,
+  palette,
+  harnessInfo,
+  mcpServers,
+  onSave,
+  onDelete,
+  onClose,
+}: ProfilePanelProps) {
   const [name, setName] = useState(profile?.name ?? '');
   const [color, setColor] = useState(profile?.color ?? palette[0] ?? 'cyan');
   const [harness, setHarness] = useState<Harness>(profile?.harness ?? 'claude');
@@ -70,6 +94,29 @@ export function ProfilePanel({ profile, palette, harnessInfo, onSave, onDelete, 
     });
   };
   const patch = (next: Partial<ClaudeSettings>) => setSettings((s) => ({ ...s, ...next }));
+
+  /**
+   * Selections whose server is not on the box.
+   *
+   * A profile can outlive the server it named — someone runs `claude mcp
+   * remove`, or the workspace a local-scope server lived in is deleted. Showing
+   * the leftover path as its own row keeps it visible and keeps it selected;
+   * dropping it silently would change what the profile does without saying so.
+   */
+  const strays = useMemo(
+    () => settings.mcpConfigs.filter((p) => !mcpServers.some((s) => s.configPath === p)),
+    [settings.mcpConfigs, mcpServers],
+  );
+
+  const toggleMcp = (configPath: string, on: boolean) =>
+    patch({
+      // Rebuilt from the discovered order rather than appended to, so the
+      // command line does not depend on the order boxes were clicked in.
+      mcpConfigs: [
+        ...mcpServers.map((s) => s.configPath).filter((p) => (p === configPath ? on : settings.mcpConfigs.includes(p))),
+        ...strays.filter((p) => p !== configPath || on),
+      ],
+    });
 
   // For the custom harness there are no known flags to offer, so the whole
   // argument list is free text and the structured controls stay out of it.
@@ -252,6 +299,73 @@ export function ProfilePanel({ profile, palette, harnessInfo, onSave, onDelete, 
                 <p className="field-hint field-warn">
                   This session will not ask before editing, running or deleting anything. Reasonable on a box
                   that is already a sandbox; think twice anywhere else.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="field">
+              <label htmlFor="profile-mcp">MCP servers</label>
+              <select
+                id="profile-mcp"
+                className="text-input select"
+                value={settings.mcp}
+                onChange={(event) => patch({ mcp: event.target.value as McpMode })}
+              >
+                {MCP_MODES.map((mode) => (
+                  <option key={mode.value} value={mode.value}>
+                    {mode.label}
+                  </option>
+                ))}
+              </select>
+
+              {settings.mcp === 'pick' ? (
+                mcpServers.length > 0 || strays.length > 0 ? (
+                  <div className="mcp-list">
+                    {mcpServers.map((server) => (
+                      <label
+                        key={server.configPath}
+                        className="check mcp-item"
+                        // The row shows what a name cannot: two servers called
+                        // the same thing are told apart by where they point and
+                        // which file says so.
+                        title={[server.detail, `defined in ${server.source}`].filter(Boolean).join('\n')}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={settings.mcpConfigs.includes(server.configPath)}
+                          onChange={(event) => toggleMcp(server.configPath, event.target.checked)}
+                        />
+                        <span className="mcp-name">{server.name}</span>
+                        <span className="mcp-meta">
+                          {server.transport} · {SCOPE_NOTE[server.scope]}
+                        </span>
+                      </label>
+                    ))}
+                    {strays.map((configPath) => (
+                      <label key={configPath} className="check mcp-item" title={configPath}>
+                        <input type="checkbox" checked onChange={() => toggleMcp(configPath, false)} />
+                        <span className="mcp-name mcp-stray">{configPath.split('/').pop()}</span>
+                        <span className="mcp-meta field-warn">not on this box</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="field-hint">
+                    Nothing configured yet. Add one on the box with{' '}
+                    <code>claude mcp add --scope user …</code> and it appears here. The scope matters:
+                    without it Claude files the server under whichever directory you ran the command in,
+                    and in a workspace that goes when the worktree does.
+                  </p>
+                )
+              ) : null}
+
+              {settings.mcp === 'pick' && settings.mcpConfigs.length === 0 && mcpServers.length > 0 ? (
+                <p className="field-hint">Nothing picked, so this profile gets no MCP servers at all.</p>
+              ) : null}
+              {settings.mcp === 'none' ? (
+                <p className="field-hint">
+                  Fewer tools to choose between, and a shorter prompt. Worth it for a role that only reads
+                  and writes code.
                 </p>
               ) : null}
             </div>

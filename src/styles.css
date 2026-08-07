@@ -2147,6 +2147,41 @@ kbd {
   color: var(--warn);
 }
 
+/* One server per line rather than the two-column `.switches` grid: a name and
+   its transport read as a sentence, and wrapping them into columns turns the
+   list into something you have to scan twice. Capped so a box with a dozen
+   servers does not push Save off the panel. */
+.mcp-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.field .check.mcp-item {
+  gap: 8px;
+  white-space: normal;
+}
+
+.mcp-name {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* Pushed to the right and quiet: it is what tells two servers apart, not what
+   you are looking for when you already know the name. */
+.mcp-meta {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.mcp-stray {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
 /* A quiet control: the flags are still there for anyone who wants them, just
    not in the way of someone who does not. */
 .disclosure {

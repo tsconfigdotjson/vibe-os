@@ -26,6 +26,7 @@ import {
   type Profile,
 } from './profiles.ts';
 import { discoverClaude } from './harness.ts';
+import { discoverMcp, syncMcpMirrors, type McpScan, type McpServer } from './mcp.ts';
 import { listWindows, createWindow, updateWindow, deleteWindow, sessionNameFor } from './windows.ts';
 import { log } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
@@ -169,6 +170,38 @@ export function windowCommand(
   return [...parts, ...cmds].join(' \\; ');
 }
 
+/**
+ * Where to look for MCP servers, for one project or for all of them.
+ *
+ * A worktree is a copy of the repo, so its `.mcp.json` is the project's and is
+ * read once from the root. Local-scope servers are the opposite — they are
+ * keyed by the exact directory `claude mcp add` ran in, so every worktree is
+ * its own place to look.
+ */
+function mcpScan(db: Db, projectId?: string): McpScan {
+  const roots: string[] = [];
+  const dirs: string[] = [];
+  for (const project of listProjects(db)) {
+    if (projectId !== undefined && project.id !== projectId) continue;
+    roots.push(project.path);
+    dirs.push(project.path, ...listWorkspaces(db, project.id).map((w) => w.path));
+  }
+  return { roots, dirs };
+}
+
+/**
+ * Brings the generated per-server files back in step with the box.
+ *
+ * Always over every project, never just the one being asked about: the sync
+ * deletes files that no longer have a server behind them, and a partial view
+ * would read another project's servers as gone.
+ */
+async function refreshMcpMirrors(db: Db, stateDir: string): Promise<McpServer[]> {
+  const servers = await discoverMcp(stateDir, mcpScan(db));
+  await syncMcpMirrors(stateDir, servers);
+  return servers;
+}
+
 export interface ApiDeps {
   config: Config;
   ca: SshCa;
@@ -222,6 +255,19 @@ export function createApi(deps: ApiDeps) {
       await scanProjects(db, config, { force: true });
       await reconcileWorkspaces(db);
       return json(listProjects(db));
+    }
+
+    // The MCP servers a profile in this project could be given. Read from the
+    // box's own config rather than a list of our own, so `claude mcp add` is
+    // all it takes for one to appear here.
+    const mcpMatch = /^\/api\/projects\/([^/]+)\/mcp$/.exec(p);
+    if (mcpMatch && req.method === 'GET') {
+      const projectId = decodeURIComponent(mcpMatch[1]);
+      if (!ID.test(projectId)) return json({ error: 'invalid project id' }, 400);
+      // Writes the files as a side effect of listing them, so that anything
+      // offered in the editor is something a launch can actually point at.
+      await refreshMcpMirrors(db, config.stateDir);
+      return json(await discoverMcp(config.stateDir, mcpScan(db, projectId)));
     }
 
     const workspacesMatch = /^\/api\/projects\/([^/]+)\/workspaces$/.exec(p);
@@ -388,6 +434,17 @@ export function createApi(deps: ApiDeps) {
         // Read from the window row, never from the request: the browser asks
         // for a window, and the server decides what that window runs.
         const profile = target.profileId ? getProfile(db, target.profileId) : undefined;
+
+        // A profile's `--mcp-config` paths are only as good as the files behind
+        // them, and those are regenerated from the box's config. Doing it here
+        // means a server edited with `claude mcp add` takes effect on the next
+        // window rather than whenever the editor was last opened.
+        if (profile?.harness === 'claude') {
+          await refreshMcpMirrors(db, config.stateDir).catch((err: unknown) => {
+            log.warn(`could not refresh mcp configs: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+
         const forceCommand = windowCommand(target.session, target.cwd, config, profile);
         const cert = await ca.signUserCert({
           publicKey,

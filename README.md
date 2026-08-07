@@ -461,7 +461,8 @@ certificate instead.
 
 --workspace <dir>   where worktrees are created (default ~/workspace);
                     projects are discovered across the host, not just here
---state-dir <dir>   CA and TLS material (default ~/.vibe-os)
+--state-dir <dir>   CA, TLS material and generated MCP configs
+                    (default ~/.vibe-os)
 ```
 
 ### Projects and workspaces
@@ -585,6 +586,59 @@ ends a session when its last pane exits, so without it, quitting Claude would
 take the desktop window with it. And because windows attach with
 `new-session -A`, which ignores a shell-command when it attaches, reloading the
 page rejoins the running harness instead of starting a second one on top.
+
+#### MCP servers
+
+A **MCP servers** dropdown sits with the others, and it has three settings
+rather than a list of switches, because that is what Claude can actually be
+told. There is no flag that enables a server by name. What exists is
+`--mcp-config`, which takes definitions, and `--strict-mcp-config`, which
+ignores everything else — so the three states are: pass neither and get
+whatever the box has, pass `--strict-mcp-config` alone and get none of it, or
+pass both and get exactly what you picked.
+
+The list is read off the box, the same way the model list is read off the
+binary. Add one and it appears:
+
+```sh
+claude mcp add --scope user linear --transport sse https://mcp.linear.app/sse
+```
+
+**Use `--scope user`.** Without it Claude files the server under whichever
+directory you happened to run the command in, and if that was a workspace, the
+server goes when the worktree does. All three scopes are listed anyway —
+machine-wide, the repo's `.mcp.json`, and one-directory — each labelled with
+which it is, because the alternative answer to "I added it, where is it?" is
+silence.
+
+Picking servers writes a file per server under `~/.vibe-os/mcp/`, holding just
+that one, and the profile stores the path. Not the definition itself, for two
+reasons: a definition can contain an API key or a bearer token, and arguments
+show up in `ps`, while these files are 0600 in a 0700 directory. And a copy
+frozen into a profile stops matching the box the moment the URL changes. The
+files are rewritten from `~/.claude.json` and each project's `.mcp.json`
+whenever the editor reads the list and again whenever a window starts, so
+`claude mcp add` is the only place a server is ever really configured, and
+every profile using it follows.
+
+Three things worth knowing, all measured rather than assumed:
+
+- Credentials follow the **server name**, not the file that declared it. A
+  server you have already logged into keeps working through a generated file,
+  with no second OAuth round.
+- Because the file is passed explicitly, a **one-directory server works in a
+  workspace** — which it would not otherwise, since the session's directory is
+  the worktree and not the one it was registered against.
+- `--strict-mcp-config` also drops **plugin-provided** MCP servers. It does not
+  drop **claude.ai connectors** — Gmail, Calendar, Drive and the rest are
+  attached to the account rather than to this machine, and nothing on the
+  command line turns them off.
+
+Picking nothing is the same command line as picking none, so the editor writes
+it as none rather than leaving it half-said. A selection whose server has since
+gone from the box is shown struck through and stays selected: it is what the
+profile says, and dropping it quietly would change what the profile does
+without telling you.
 
 #### Blanks
 
@@ -862,6 +916,10 @@ subcommand.
   until you pass `--token`. There is no multi-user story at all.
 - **No keyboard shortcuts for profiles.** The rail is click-only; `alt` plus a
   digit already raises windows, and a second chord deserves its own thought.
+- **MCP servers can be picked but not added.** The editor lists what the box
+  has and hands a profile the ones you choose; adding, editing and removing
+  them is still `claude mcp` on the box, which is also the only place they are
+  configured.
 - **No branch operations.** Workspaces create a worktree and a branch; pushing,
   PRs and merging happen in the terminal.
 - **Deleting a workspace keeps its branch**, deliberately, so work is
