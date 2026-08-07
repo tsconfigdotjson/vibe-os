@@ -11,6 +11,8 @@ import { ProjectPicker } from './chrome/ProjectPicker';
 import { WorkspaceSidebar } from './chrome/WorkspaceSidebar';
 import { ProfileRail } from './chrome/ProfileRail';
 import { ProfilePanel } from './chrome/ProfilePanel';
+import { PopoutView } from './desktop/PopoutView';
+import { usePopoutHost, readPopoutTarget } from './desktop/usePopouts';
 import type { Viewport } from './desktop/geometry';
 
 /**
@@ -60,7 +62,18 @@ function useViewport(): [(node: HTMLElement | null) => void, Viewport] {
   return [attach, view];
 }
 
+/**
+ * Read once, outside the component: a pop-out is a different kind of page, not
+ * a different state of this one, and nothing in it can change while it is open.
+ */
+const POPOUT = readPopoutTarget();
+
 export default function App() {
+  if (POPOUT) return <PopoutView target={POPOUT} />;
+  return <Desktop />;
+}
+
+function Desktop() {
   const [server, setServer] = useState<ServerConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<Rect | null>(null);
@@ -82,6 +95,7 @@ export default function App() {
   const { workspaces, create, remove, touch } = useWorkspaces(projectId);
   const { profiles, create: createProfile, update: updateProfile, remove: removeProfile } = useProfiles(projectId);
   const wallpaper = useWallpaper();
+  const popouts = usePopoutHost();
 
   const {
     windows,
@@ -391,6 +405,15 @@ export default function App() {
                   server={server}
                   hue={hues[win.id]}
                   profile={win.profileId ? (profileById.get(win.profileId) ?? null) : null}
+                  poppedOut={popouts.popped.has(win.id)}
+                  onPopOut={(id) =>
+                    popouts.open(
+                      id,
+                      labels[id],
+                      win.profileId ? (profileById.get(win.profileId)?.color ?? 'cyan') : 'cyan',
+                    )
+                  }
+                  onReclaim={popouts.reclaim}
                   focused={win.id === focused}
                   view={view}
                   onRaise={raise}

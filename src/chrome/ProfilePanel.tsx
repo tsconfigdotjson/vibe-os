@@ -23,10 +23,27 @@ const HARNESSES: { value: Harness; label: string; hint: string }[] = [
  * list that quietly goes stale, and the free-text field already accepts
  * anything the harness understands.
  */
-const CLAUDE_CHIPS = [
-  { flag: '--dangerously-skip-permissions', label: 'skip permissions', warn: true },
-  { flag: '--continue', label: 'continue last' },
-  { flag: '--verbose', label: 'verbose' },
+const CLAUDE_CHIPS: { flag: string; label: string; hint: string; warn?: boolean }[] = [
+  {
+    flag: '--dangerously-skip-permissions',
+    label: 'skip permissions',
+    hint: 'Bypass every permission check. Fine for a box that is already a sandbox.',
+    warn: true,
+  },
+  {
+    flag: '--remote-control',
+    label: 'remote control',
+    hint: 'Drive this session from claude.ai. Needs nothing on the box beyond outbound network.',
+  },
+  {
+    flag: '--chrome',
+    label: 'chrome',
+    hint:
+      'Browser automation. Needs Chrome with the Claude extension running on the same machine as ' +
+      'Claude — so it works when vibe-os runs on your own machine, not when Claude is on a remote box.',
+  },
+  { flag: '--continue', label: 'continue last', hint: 'Resume the most recent conversation in this directory.' },
+  { flag: '--verbose', label: 'verbose', hint: 'Show full tool output rather than the collapsed form.' },
 ];
 
 /** Mirrors the server's `detokenize` so the field round-trips what was saved. */
@@ -167,7 +184,7 @@ export function ProfilePanel({ profile, palette, onSave, onDelete, onClose }: Pr
                     data-active={tokens.includes(chip.flag) || undefined}
                     data-warn={chip.warn || undefined}
                     onClick={() => toggleFlag(chip.flag)}
-                    title={chip.flag}
+                    title={`${chip.flag}\n\n${chip.hint}`}
                   >
                     {chip.label}
                   </button>

@@ -219,6 +219,20 @@ argument containing a semicolon, not two commands. The browser never sends a
 command at all: the window row says which profile it was opened as, and the
 server resolves the rest, exactly as it already does for the worktree path.
 
+The editor offers a few Claude flags as one-click chips; everything else goes in
+the arguments field, which takes whatever the harness understands. Two of the
+chips are worth knowing the shape of:
+
+- **`--remote-control`** works anywhere. It needs nothing on the box beyond
+  outbound network, which makes it a natural fit here — the session is on the
+  VPS either way, and this just gives you a second way to reach it.
+- **`--chrome`** needs Chrome, with the Claude extension, running on the *same
+  machine as Claude Code*: the two talk over a native messaging host, which is a
+  local process the browser spawns. So it works when you run vibe-os on your own
+  machine, and does not when Claude is on a VPS and Chrome is on your laptop.
+  Passing it on a box with no Chrome is harmless — the session starts normally,
+  just without browser tools.
+
 The harness runs as `<command> <args>; exec "$SHELL"`. The tail matters — tmux
 ends a session when its last pane exits, so without it, quitting Claude would
 take the desktop window with it. And because windows attach with
@@ -243,6 +257,28 @@ sticks across reloads, per window.
 
 Deleting a profile leaves any window already running it alone — those are live
 sessions with real work in them. The window just becomes an ordinary terminal.
+
+### Popping a terminal out
+
+The ⇗ button in a window's title bar opens that terminal in its own browser
+window, which is worth having when a role needs a whole screen rather than a
+tile on someone else's.
+
+There is nothing clever underneath. Both views address the same window id, the
+server turns that into the same tmux session, and tmux is what actually holds
+the terminal — so popping out is just detaching one client and attaching
+another, and everything running carries on.
+
+The desktop shows a placeholder while a terminal is popped out, rather than
+mirroring it. tmux is perfectly happy with two clients on one session and would
+show the same thing in both, but it sizes a session to its *smallest* client, so
+a mirrored pair drags itself down to whichever window is narrower. One client at
+a time means the pop-out gets the size it actually has.
+
+Closing the pop-out, or pressing **Bring it back**, returns the terminal to the
+desktop with its scrollback intact. Reloading the desktop while a pop-out is
+open does not disturb it: the desktop asks who is out there and every live
+pop-out answers, so it knows to keep showing the placeholder.
 
 ### The desktop
 
