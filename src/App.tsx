@@ -1,35 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchServerConfig, type ServerConfig } from './api';
+import { useProjects, useWorkspaces } from './data';
 import { useWindows, type Rect } from './desktop/useWindows';
 import { TermWindow } from './desktop/TermWindow';
 import { Dock } from './desktop/Dock';
 import { GridOverlay } from './desktop/GridOverlay';
 import { WallpaperPanel } from './desktop/WallpaperPanel';
 import { useWallpaper } from './desktop/useWallpaper';
+import { ProjectPicker } from './chrome/ProjectPicker';
+import { WorkspaceSidebar } from './chrome/WorkspaceSidebar';
 import type { Viewport } from './desktop/geometry';
 
 /**
- * Window identity colours, drawn from the ANSI palette the terminals themselves
- * use. Assignment is by position, and the same colour marks a window in its
- * title bar, its focus ring and its dock entry — which is what makes several
- * windows distinguishable at a glance without reading anything.
+ * Window identity colours, drawn from the ANSI palette the terminals use.
+ * Assignment is by position, and the same colour marks a window in its title
+ * bar, its focus ring and its dock entry — which is what makes several windows
+ * distinguishable at a glance without reading anything.
  */
 const HUES = ['#56cfe1', '#a78bfa', '#7ee081', '#f2c14e', '#ef6b73', '#63d4c0'];
+
+const SELECTION_KEY = 'vibe-os:selection:v1';
 
 /**
  * Measures the window surface.
  *
- * This has to be a callback ref, not an effect over a ref object. The desktop
- * renders a boot screen until the server config arrives, so on mount there is
- * no `.surface` to observe — and an effect keyed on the ref object never runs
- * again when one finally appears, leaving the viewport pinned to whatever the
- * initial value was. Windows would then be clamped into a phantom rectangle the
- * size of that default, which looks like the desktop only occupying a corner of
- * the screen.
- *
- * A callback ref fires exactly when the node attaches and detaches, and taking
- * a synchronous measurement there means the first painted frame already has
- * real numbers.
+ * A callback ref, not an effect over a ref object: the desktop renders a boot
+ * screen until the config arrives, so on mount there is no `.surface` to
+ * observe — and an effect keyed on the ref object never runs again when one
+ * appears, leaving the viewport pinned to its initial value and every window
+ * clamped into a phantom rectangle.
  */
 function useViewport(): [(node: HTMLElement | null) => void, Viewport] {
   const [view, setView] = useState<Viewport>({ width: 0, height: 0 });
@@ -45,7 +44,6 @@ function useViewport(): [(node: HTMLElement | null) => void, Viewport] {
         setView((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
       }
     };
-
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       measure(width, height);
@@ -65,8 +63,20 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<Rect | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [wsBusy, setWsBusy] = useState(false);
+  const [wsError, setWsError] = useState<string | null>(null);
+
+  // Which project and workspace you were last looking at is a per-device view
+  // preference, not shared state, so it stays local. Everything it points *at*
+  // lives on the server.
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
 
   const [attachSurface, view] = useViewport();
+  const { projects, rescan } = useProjects();
+  const { workspaces, create, remove, touch } = useWorkspaces(projectId);
+  const wallpaper = useWallpaper();
 
   const {
     windows,
@@ -81,9 +91,7 @@ export default function App() {
     maximize,
     setStatus,
     setTitle,
-  } = useWindows();
-
-  const wallpaper = useWallpaper();
+  } = useWindows(workspaceId);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,10 +99,59 @@ export default function App() {
       (config) => !cancelled && setServer(config),
       (err: unknown) => !cancelled && setError(err instanceof Error ? err.message : String(err)),
     );
+    try {
+      const saved = JSON.parse(localStorage.getItem(SELECTION_KEY) ?? '{}') as {
+        projectId?: string;
+        workspaceId?: string;
+      };
+      if (saved.projectId) setProjectId(saved.projectId);
+      if (saved.workspaceId) setWorkspaceId(saved.workspaceId);
+    } catch {
+      // no saved selection — the effects below pick sensible defaults
+    }
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SELECTION_KEY, JSON.stringify({ projectId, workspaceId }));
+    } catch {
+      // private mode — selection just resets next visit
+    }
+  }, [projectId, workspaceId]);
+
+  // Fall back to the first project, and drop a selection that no longer exists.
+  useEffect(() => {
+    if (projects.length === 0) return;
+    if (!projectId || !projects.some((p) => p.id === projectId)) setProjectId(projects[0].id);
+  }, [projects, projectId]);
+
+  // Same for workspaces — the list is ordered most-recently-opened first.
+  useEffect(() => {
+    if (!projectId) return;
+    if (workspaces.length === 0) {
+      setWorkspaceId(null);
+      return;
+    }
+    if (!workspaceId || !workspaces.some((w) => w.id === workspaceId)) setWorkspaceId(workspaces[0].id);
+  }, [workspaces, workspaceId, projectId]);
+
+  const touchRef = useRef(touch);
+  touchRef.current = touch;
+  useEffect(() => {
+    if (workspaceId) touchRef.current(workspaceId);
+  }, [workspaceId]);
+
+  const currentProject = useMemo(
+    () => projects.find((p) => p.id === projectId) ?? null,
+    [projects, projectId],
+  );
+  const currentWorkspace = useMemo(
+    () => workspaces.find((w) => w.id === workspaceId) ?? null,
+    [workspaces, workspaceId],
+  );
 
   const hues = useMemo(() => {
     const map: Record<string, string> = {};
@@ -103,6 +160,41 @@ export default function App() {
     });
     return map;
   }, [windows]);
+
+  const onRescan = useCallback(async () => {
+    setScanning(true);
+    try {
+      await rescan();
+    } finally {
+      setScanning(false);
+    }
+  }, [rescan]);
+
+  const onCreateWorkspace = useCallback(async () => {
+    setWsBusy(true);
+    setWsError(null);
+    try {
+      const created = await create();
+      setWorkspaceId(created.id);
+    } catch (err) {
+      setWsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWsBusy(false);
+    }
+  }, [create]);
+
+  const onRemoveWorkspace = useCallback(
+    async (id: string) => {
+      setWsError(null);
+      try {
+        await remove(id);
+        if (id === workspaceId) setWorkspaceId(null);
+      } catch (err) {
+        setWsError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [remove, workspaceId],
+  );
 
   // Alt chords rather than tmux's ctrl-b: the terminal has focus almost all the
   // time and ctrl-b belongs to the tmux session running inside it. Capture
@@ -121,10 +213,11 @@ export default function App() {
         return;
       }
       const actions: Record<string, () => void> = {
-        t: spawn,
+        t: () => void spawn(),
         w: () => focused && close(focused),
         z: () => focused && maximize(focused),
         m: () => focused && minimize(focused),
+        n: () => void onCreateWorkspace(),
       };
       const action = actions[event.key.toLowerCase()];
       if (action) {
@@ -133,7 +226,7 @@ export default function App() {
         event.stopPropagation();
       }
     },
-    [windows, focused, spawn, close, maximize, minimize, raise],
+    [windows, focused, spawn, close, maximize, minimize, raise, onCreateWorkspace],
   );
 
   useEffect(() => {
@@ -165,8 +258,6 @@ export default function App() {
   }
 
   const wallpaperUrl = wallpaper.prefs.wallpaper ? `/api/wallpapers/${wallpaper.prefs.wallpaper}` : null;
-  // Cell size divides by this; rendering a window before the first measurement
-  // would place it with NaN geometry.
   const measured = view.width > 0 && view.height > 0;
 
   return (
@@ -189,7 +280,22 @@ export default function App() {
         <span className="wordmark">
           vibe-os<span className="caret" aria-hidden="true" />
         </span>
+
+        <ProjectPicker
+          projects={projects}
+          current={currentProject}
+          scanning={scanning}
+          onSelect={setProjectId}
+          onRescan={onRescan}
+        />
+
         <span className="menu-facts">
+          {currentWorkspace ? (
+            <>
+              <span className="menu-strong">{currentWorkspace.name}</span>
+              <span className="sep">·</span>
+            </>
+          ) : null}
           <span>
             {server.user}@{server.hostname}
           </span>
@@ -198,55 +304,87 @@ export default function App() {
             {server.hostKeyFingerprint ?? 'host key: prompt'}
           </span>
           <span className="sep">·</span>
-          <span>{server.tmux ? 'tmux' : 'no tmux'}</span>
-          <span className="sep">·</span>
           <span data-warn={!server.authRequired || undefined}>{server.authRequired ? 'token' : 'open'}</span>
         </span>
         <span className="menu-right">v{server.version}</span>
       </header>
 
-      <main className="surface" ref={attachSurface}>
-        {measured ? <GridOverlay preview={preview} view={view} /> : null}
+      <div className="workbench">
+        <WorkspaceSidebar
+          workspaces={workspaces}
+          current={workspaceId}
+          projectName={currentProject?.name ?? null}
+          busy={wsBusy}
+          error={wsError}
+          onSelect={setWorkspaceId}
+          onCreate={onCreateWorkspace}
+          onRemove={onRemoveWorkspace}
+        />
 
-        {measured ? ordered.map((win) => (
-          <TermWindow
-            key={win.id}
-            win={win}
-            server={server}
-            hue={hues[win.id]}
-            focused={win.id === focused}
-            view={view}
-            onRaise={raise}
-            onCommit={move}
-            onPreview={setPreview}
-            onClose={close}
-            onRestart={restart}
-            onMinimize={minimize}
-            onMaximize={maximize}
-            onStatus={setStatus}
-            onTitle={setTitle}
-          />
-        )) : null}
+        <main className="surface" ref={attachSurface}>
+          {measured ? <GridOverlay preview={preview} view={view} /> : null}
 
-        {measured && windows.length === 0 ? (
-          <div className="empty">
-            <p className="empty-line">No windows open.</p>
-            <button type="button" className="ghost" onClick={spawn}>
-              Open a terminal
-            </button>
-            <p className="empty-hint">
-              or press <kbd>alt</kbd> <kbd>t</kbd>
-            </p>
-          </div>
-        ) : null}
-      </main>
+          {measured
+            ? ordered.map((win) => (
+                <TermWindow
+                  key={win.id}
+                  win={{ ...win, label: currentWorkspace ? `${currentWorkspace.name}-${win.idx}` : `window ${win.idx}` }}
+                  server={server}
+                  hue={hues[win.id]}
+                  focused={win.id === focused}
+                  view={view}
+                  onRaise={raise}
+                  onCommit={move}
+                  onPreview={setPreview}
+                  onClose={close}
+                  onRestart={restart}
+                  onMinimize={minimize}
+                  onMaximize={maximize}
+                  onStatus={setStatus}
+                  onTitle={setTitle}
+                />
+              ))
+            : null}
+
+          {measured && windows.length === 0 ? (
+            <div className="empty">
+              {!currentProject ? (
+                <>
+                  <p className="empty-line">No project selected.</p>
+                  <p className="empty-hint">Pick one from the menu bar, or press refresh to scan for repos.</p>
+                </>
+              ) : !currentWorkspace ? (
+                <>
+                  <p className="empty-line">No workspace in {currentProject.name}.</p>
+                  <button type="button" className="ghost" onClick={onCreateWorkspace} disabled={wsBusy}>
+                    Create a workspace
+                  </button>
+                  <p className="empty-hint">
+                    or press <kbd>alt</kbd> <kbd>n</kbd>
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="empty-line">No windows in {currentWorkspace.name}.</p>
+                  <button type="button" className="ghost" onClick={() => void spawn()}>
+                    Open a terminal
+                  </button>
+                  <p className="empty-hint">
+                    or press <kbd>alt</kbd> <kbd>t</kbd>
+                  </p>
+                </>
+              )}
+            </div>
+          ) : null}
+        </main>
+      </div>
 
       <Dock
         windows={windows}
         hues={hues}
         focused={focused}
-        tmux={server.tmux}
-        onSpawn={spawn}
+        workspaceName={currentWorkspace?.name ?? null}
+        onSpawn={() => void spawn()}
         onSelect={raise}
         onWallpaper={() => setPanelOpen(true)}
       />

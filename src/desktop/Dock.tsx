@@ -4,7 +4,7 @@ export interface DockProps {
   windows: WindowState[];
   hues: Record<string, string>;
   focused: string | null;
-  tmux: boolean;
+  workspaceName: string | null;
   onSpawn: () => void;
   onSelect: (id: string) => void;
   onWallpaper: () => void;
@@ -15,7 +15,7 @@ export interface DockProps {
  * session is listed — including minimised ones, which have no other
  * representation on screen.
  */
-export function Dock({ windows, hues, focused, tmux, onSpawn, onSelect, onWallpaper }: DockProps) {
+export function Dock({ windows, hues, focused, workspaceName, onSpawn, onSelect, onWallpaper }: DockProps) {
   return (
     <div className="dock-wrap">
       <nav className="dock glass" aria-label="Windows">
@@ -42,9 +42,9 @@ export function Dock({ windows, hues, focused, tmux, onSpawn, onSelect, onWallpa
                 title={win.minimized ? 'Restore this window' : 'Bring this window to the front'}
               >
                 <span className="dock-chip" aria-hidden="true">
-                  {win.id}
+                  {win.idx}
                 </span>
-                <span className="dock-label">{tmux ? `vibe-${win.id}` : `shell ${win.id}`}</span>
+                <span className="dock-label">{workspaceName ? `${workspaceName}-${win.idx}` : `window ${win.idx}`}</span>
               </button>
             </li>
           ))}

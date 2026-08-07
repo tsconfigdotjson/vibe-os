@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { SshTerminal } from '../sshterm';
 import type { ServerConfig } from '../api';
-import { paneSshConfig } from '../api';
+import { windowSshConfig } from '../api';
 import { clampRect, type DragMode, type Rect, type WindowState } from './useWindows';
 import { rectToPixels, pixelsToRect, clampBox, type Viewport } from './geometry';
 
@@ -17,7 +17,7 @@ const HANDLES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 type Handle = (typeof HANDLES)[number];
 
 export interface TermWindowProps {
-  win: WindowState;
+  win: WindowState & { label?: string };
   server: ServerConfig;
   hue: string;
   focused: boolean;
@@ -57,10 +57,7 @@ export const TermWindow = memo(function TermWindow({
   onTitle,
 }: TermWindowProps) {
   // Rebuilt only when the window identity changes; SshTerminal reads it once.
-  const config = useMemo(
-    () => paneSshConfig(server, win.id, server.tmux ? 'tmux' : 'shell'),
-    [server, win.id],
-  );
+  const config = useMemo(() => windowSshConfig(server, win.id), [server, win.id]);
 
   const anchored = rectToPixels(win, view);
   const [live, setLive] = useState<typeof anchored | null>(null);
@@ -175,7 +172,7 @@ export const TermWindow = memo(function TermWindow({
         onDoubleClick={() => onMaximize(win.id)}
       >
         <span className="win-dot" aria-hidden="true" />
-        <span className="win-name">{server.tmux ? `vibe-${win.id}` : `shell ${win.id}`}</span>
+        <span className="win-name">{win.label}</span>
         <span className="win-title">{win.title ?? ''}</span>
         <span className="win-state">{STATUS_LABEL[win.status]}</span>
         <span className="win-buttons">

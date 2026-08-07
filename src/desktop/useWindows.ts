@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SshStatus } from '../sshterm';
 import { onRuntimeDead } from '../sshterm';
+import { useWindowRows, windowApi, type WindowRow } from '../data';
 
 /**
  * Window geometry lives in grid units, not pixels.
  *
  * That is what makes "free drag, snap to grid" cheap: dragging is a transient
- * pixel offset laid over a grid-anchored box, and letting go just rounds to the
- * nearest cell. It also means a window keeps its proportions when the browser
- * is resized or the desktop is opened on a different screen, which pixel
- * coordinates would not.
+ * pixel offset laid over a grid-anchored box, and letting go rounds to the
+ * nearest cell. It also means a window keeps its proportions across screens of
+ * different sizes, which pixel coordinates would not.
  */
 export const MIN_WINDOW_COLS = 5;
 export const MIN_WINDOW_ROWS = 4;
@@ -19,16 +19,12 @@ export const GRID_ROWS = 14;
 
 const MIN_COLS = MIN_WINDOW_COLS;
 const MIN_ROWS = MIN_WINDOW_ROWS;
-const STORAGE_KEY = 'vibe-os:desktop:v1';
 
 export interface WindowState {
-  /**
-   * Stable across reloads and used verbatim as the tmux session suffix
-   * (`vibe-<id>`), which is what lets a window reattach to whatever it was
-   * running before the tab was closed.
-   */
   id: string;
-  /** Bumped to force a fresh SSH session without changing the tmux session. */
+  /** Per-workspace index; forms the tmux session name with the workspace. */
+  idx: number;
+  /** Bumped to force a fresh SSH session without touching the tmux session. */
   generation: number;
   col: number;
   row: number;
@@ -56,11 +52,10 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, M
 /**
  * Constrains a rect to the grid.
  *
- * The mode matters, and getting it wrong is very visible. Moving must preserve
- * the window's size and only push its position back in bounds. Resizing must
- * preserve its *position* — clamping the span first and then deriving the
- * position from it (which is what this used to do) means growing a window's
- * right edge silently drags its left edge inwards.
+ * The mode matters. Moving must preserve the window's size and only push its
+ * position back in bounds. Resizing must preserve its *position* — clamping the
+ * span first and deriving position from it means growing a window's right edge
+ * silently drags its left edge inwards.
  */
 export function clampRect(r: Rect, mode: DragMode = 'move'): Rect {
   if (mode === 'move') {
@@ -73,8 +68,6 @@ export function clampRect(r: Rect, mode: DragMode = 'move'): Rect {
       row: clamp(r.row, 0, GRID_ROWS - rowSpan),
     };
   }
-
-  // Resize: the anchored edge stays put, and only the span gives way.
   const col = clamp(r.col, 0, GRID_COLS - MIN_COLS);
   const row = clamp(r.row, 0, GRID_ROWS - MIN_ROWS);
   return {
@@ -85,199 +78,174 @@ export function clampRect(r: Rect, mode: DragMode = 'move'): Rect {
   };
 }
 
-interface Persisted {
-  windows: Omit<WindowState, 'status' | 'detail' | 'readyAt' | 'generation' | 'title'>[];
-  nextZ: number;
-}
-
-function load(): Persisted {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { windows: [], nextZ: 1 };
-    const parsed = JSON.parse(raw) as Persisted;
-    const windows = (parsed.windows ?? []).filter((w) => /^[A-Za-z0-9_-]{1,32}$/.test(w.id));
-    return { windows, nextZ: Number(parsed.nextZ) || windows.length + 1 };
-  } catch {
-    return { windows: [], nextZ: 1 };
-  }
-}
-
 /**
- * Places a new window without covering an existing one exactly.
+ * Windows for the current workspace, backed by the API.
  *
- * A plain cascade walks off the bottom-right after a few windows, so this wraps
- * back to the origin and nudges sideways instead.
+ * Local state mirrors the server so dragging stays immediate; every mutation
+ * applies locally first and PATCHes in the background. Switching workspaces
+ * simply swaps the rows — the SSH sessions of the workspace you left are
+ * detached, not killed, which is exactly what tmux is for.
  */
-function placement(index: number): Rect {
-  const colSpan = 11;
-  const rowSpan = 8;
-  const step = 2;
-  const slots = Math.max(1, Math.floor((GRID_COLS - colSpan) / step));
-  const lane = index % slots;
-  const wrap = Math.floor(index / slots);
-  return clampRect({
-    col: lane * step + wrap,
-    row: (lane * step + wrap) % Math.max(1, GRID_ROWS - rowSpan),
-    colSpan,
-    rowSpan,
-  });
-}
+export function useWindows(workspaceId: string | null) {
+  const { rows, mutate, isLoading } = useWindowRows(workspaceId);
+  const [runtime, setRuntime] = useState<Record<string, Partial<WindowState>>>({});
+  const [focused, setFocused] = useState<string | null>(null);
+  const zCounter = useRef(1);
 
-export function useWindows() {
-  const initial = useRef(load()).current;
-  // A ref, not state: stacking order is bookkeeping, and driving it through
-  // setState forced side effects (setWindows, setFocused) to run *inside* state
-  // updaters. React is allowed to invoke updaters more than once — StrictMode
-  // does it deliberately — so those side effects fired twice and the z counter
-  // drifted.
-  const zCounter = useRef(initial.nextZ);
-  const [windows, setWindows] = useState<WindowState[]>(() =>
-    initial.windows.map((w) => ({
-      ...w,
+  // Transient per-session state (status, title, uptime) is keyed by window id
+  // and deliberately not persisted — it describes a live connection, not layout.
+  useEffect(() => {
+    setRuntime({});
+    setFocused(null);
+  }, [workspaceId]);
+
+  const windows = useMemo<WindowState[]>(() => {
+    const list = (rows ?? []).map((r) => ({
+      id: r.id,
+      idx: r.idx,
       generation: 0,
+      col: r.col,
+      row: r.row,
+      colSpan: r.colSpan,
+      rowSpan: r.rowSpan,
+      z: r.z,
+      minimized: r.minimized,
       status: 'loading' as SshStatus,
-    })),
-  );
-  const [focused, setFocused] = useState<string | null>(initial.windows.at(-1)?.id ?? null);
+      ...runtime[r.id],
+    }));
+    zCounter.current = list.reduce((max, w) => Math.max(max, w.z), 0);
+    return list;
+  }, [rows, runtime]);
+
+  const ordered = useMemo(() => [...windows].sort((a, b) => a.z - b.z), [windows]);
 
   useEffect(() => {
-    try {
-      const payload: Persisted = {
-        windows: windows.map(({ id, col, row, colSpan, rowSpan, z, minimized }) => ({
-          id,
-          col,
-          row,
-          colSpan,
-          rowSpan,
-          z,
-          minimized,
-        })),
-        nextZ: zCounter.current,
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // private mode or quota — the desktop still works, it just forgets layout
-    }
-  }, [windows]);
+    if (focused === null && ordered.length > 0) setFocused(ordered.at(-1)!.id);
+  }, [focused, ordered]);
 
-  const patch = useCallback((id: string, next: Partial<WindowState>) => {
-    setWindows((current) => current.map((w) => (w.id === id ? { ...w, ...next } : w)));
+  const patchRuntime = useCallback((id: string, next: Partial<WindowState>) => {
+    setRuntime((current) => ({ ...current, [id]: { ...current[id], ...next } }));
   }, []);
 
-  const raise = useCallback((id: string) => {
-    const z = (zCounter.current += 1);
-    setFocused(id);
-    setWindows((current) => current.map((w) => (w.id === id ? { ...w, z, minimized: false } : w)));
-  }, []);
+  /** Applies a row change locally, then persists it. */
+  const applyRow = useCallback(
+    (id: string, changes: Partial<WindowRow>, persist: () => Promise<unknown>) => {
+      void mutate((current) => (current ?? []).map((r) => (r.id === id ? { ...r, ...changes } : r)), {
+        revalidate: false,
+      });
+      void persist().catch(() => void mutate());
+    },
+    [mutate],
+  );
 
-  const spawn = useCallback(() => {
-    // Lowest unused positive integer: ids become tmux session names and get
-    // typed by humans in `tmux ls`, so they should stay short and reusable.
-    const used = new Set(windows.map((w) => w.id));
-    let n = 1;
-    while (used.has(String(n))) n += 1;
-    const id = String(n);
-    const rect = placement(windows.length);
-    const z = (zCounter.current += 1);
+  const raise = useCallback(
+    (id: string) => {
+      setFocused(id);
+      const z = (zCounter.current += 1);
+      applyRow(id, { z, minimized: false }, () => windowApi.patch(id, { raise: true, minimized: false }));
+    },
+    [applyRow],
+  );
 
-    setWindows((current) =>
-      current.some((w) => w.id === id)
-        ? current
-        : [...current, { id, generation: 0, ...rect, z, minimized: false, status: 'loading' as SshStatus }],
-    );
-    setFocused(id);
-  }, [windows]);
+  const spawn = useCallback(async () => {
+    if (!workspaceId) return;
+    const created = await windowApi.create(workspaceId);
+    await mutate((current) => [...(current ?? []), created], { revalidate: false });
+    setFocused(created.id);
+  }, [workspaceId, mutate]);
 
   /**
    * Closes a window and ends the session behind it.
    *
-   * Ending the session is the point. Window ids are reused (lowest unused
-   * integer), and each window attaches with `tmux new-session -A`, so a
-   * lingering session means the next window opened silently inherits the closed
-   * one's shell — same scrollback, same half-typed command. Persistence across a
-   * reload or a closed tab is still intact; this only fires when someone
-   * explicitly dismisses a window. Use minimise to put one away and keep it.
+   * Window indices are reused and each window attaches with
+   * `tmux new-session -A`, so a lingering session would silently reappear in the
+   * next window opened. Persistence across a reload is untouched; only an
+   * explicit dismissal ends anything. Minimise puts one away and keeps it.
    */
   const close = useCallback(
     (id: string) => {
-      const remaining = windows.filter((w) => w.id !== id);
-      setWindows((current) => current.filter((w) => w.id !== id));
+      const remaining = (rows ?? []).filter((r) => r.id !== id);
+      void mutate(remaining, { revalidate: false });
       setFocused((f) => (f === id ? (remaining.at(-1)?.id ?? null) : f));
-      void fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {
-        // The window is gone either way; a surviving session is recoverable by
-        // opening a window with the same id.
+      void windowApi.remove(id).catch(() => void mutate());
+    },
+    [rows, mutate],
+  );
+
+  const restart = useCallback(
+    (id: string) => {
+      patchRuntime(id, {
+        generation: (runtime[id]?.generation ?? 0) + 1,
+        status: 'loading',
+        detail: undefined,
+        readyAt: undefined,
       });
     },
-    [windows],
+    [patchRuntime, runtime],
   );
 
-  const restart = useCallback((id: string) => {
-    setWindows((current) =>
-      current.map((w) =>
-        w.id === id
-          ? { ...w, generation: w.generation + 1, status: 'loading', detail: undefined, readyAt: undefined }
-          : w,
-      ),
-    );
-  }, []);
-
-  const move = useCallback((id: string, rect: Rect, mode: DragMode = 'move') => {
-    // TermWindow already clamps, so this is a safety net for programmatic
-    // callers. It must agree with what the drag preview promised.
-    const clamped = clampRect(rect, mode);
-    setWindows((current) => current.map((w) => (w.id === id ? { ...w, ...clamped } : w)));
-  }, []);
-
-  const setStatus = useCallback(
-    (id: string, status: SshStatus, detail?: string) => {
-      patch(id, { status, detail, ...(status === 'ready' ? { readyAt: Date.now() } : {}) });
+  const move = useCallback(
+    (id: string, rect: Rect, mode: DragMode = 'move') => {
+      const clamped = clampRect(rect, mode);
+      applyRow(id, clamped, () => windowApi.patch(id, clamped));
     },
-    [patch],
+    [applyRow],
   );
 
-  const minimize = useCallback((id: string) => patch(id, { minimized: true }), [patch]);
+  const minimize = useCallback(
+    (id: string) => applyRow(id, { minimized: true }, () => windowApi.patch(id, { minimized: true })),
+    [applyRow],
+  );
 
   const maximize = useCallback(
     (id: string) => {
-      setWindows((current) =>
-        current.map((w) => {
-          if (w.id !== id) return w;
-          const isFull = w.colSpan === GRID_COLS && w.rowSpan === GRID_ROWS;
-          return isFull
-            ? { ...w, ...placement(0) }
-            : { ...w, col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS };
-        }),
-      );
+      const current = (rows ?? []).find((r) => r.id === id);
+      if (!current) return;
+      const isFull = current.colSpan === GRID_COLS && current.rowSpan === GRID_ROWS;
+      const rect = isFull
+        ? { col: 2, row: 1, colSpan: 11, rowSpan: 8 }
+        : { col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS };
+      applyRow(id, rect, () => windowApi.patch(id, rect));
       raise(id);
     },
-    [raise],
+    [rows, applyRow, raise],
+  );
+
+  const setStatus = useCallback(
+    (id: string, status: SshStatus, detail?: string) => {
+      patchRuntime(id, { status, detail, ...(status === 'ready' ? { readyAt: Date.now() } : {}) });
+    },
+    [patchRuntime],
   );
 
   // One Go runtime serves every window, so when it dies they all die together.
-  // Rebuilding each session is the only recovery, and doing it automatically
-  // beats leaving the user with windows that look fine but accept no input.
+  // Rebuilding each session automatically beats leaving the user with windows
+  // that look fine but accept no input.
   useEffect(
     () =>
       onRuntimeDead(() => {
-        setWindows((current) =>
-          current.map((w) => ({
-            ...w,
-            generation: w.generation + 1,
-            status: 'loading',
-            detail: 'runtime restarted',
-            readyAt: undefined,
-          })),
-        );
+        setRuntime((current) => {
+          const next: Record<string, Partial<WindowState>> = {};
+          for (const [id, state] of Object.entries(current)) {
+            next[id] = {
+              ...state,
+              generation: (state.generation ?? 0) + 1,
+              status: 'loading',
+              detail: 'runtime restarted',
+              readyAt: undefined,
+            };
+          }
+          return next;
+        });
       }),
     [],
   );
-
-  const ordered = useMemo(() => [...windows].sort((a, b) => a.z - b.z), [windows]);
 
   return {
     windows,
     ordered,
     focused,
+    isLoading,
     spawn,
     close,
     restart,
@@ -286,6 +254,6 @@ export function useWindows() {
     minimize,
     maximize,
     setStatus,
-    setTitle: useCallback((id: string, title: string) => patch(id, { title }), [patch]),
+    setTitle: useCallback((id: string, title: string) => patchRuntime(id, { title }), [patchRuntime]),
   };
 }

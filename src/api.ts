@@ -5,7 +5,7 @@ export interface ServerConfig {
   version: string;
   hostname: string;
   user: string;
-  workspace: string;
+  workspaceRoot: string;
   tmux: boolean;
   authRequired: boolean;
   endpoint: { name: string; url: string };
@@ -25,10 +25,8 @@ export async function fetchServerConfig(): Promise<ServerConfig> {
   return (await res.json()) as ServerConfig;
 }
 
-export type PaneMode = 'tmux' | 'shell';
-
 /**
- * Builds the sshterm config for one pane.
+ * Builds the sshterm config for one window.
  *
  * Two details are load-bearing:
  *
@@ -42,9 +40,12 @@ export type PaneMode = 'tmux' | 'shell';
  * travels in the certificate's force-command instead, so sshd runs it inside
  * the PTY it already allocated for the shell request.
  */
-export function paneSshConfig(server: ServerConfig, paneId: string, mode: PaneMode = 'tmux'): SshTermConfig {
+export function windowSshConfig(server: ServerConfig, windowId: string): SshTermConfig {
+  // Only the window id goes over the wire. The server looks up which workspace
+  // it belongs to and starts tmux in that worktree, so a browser cannot ask for
+  // a session in a directory of its choosing.
   const identityProvider = new URL(
-    `${server.certificateEndpoint}?pane=${encodeURIComponent(paneId)}&mode=${mode}`,
+    `${server.certificateEndpoint}?window=${encodeURIComponent(windowId)}`,
     window.location.origin,
   ).href;
 
@@ -57,7 +58,7 @@ export function paneSshConfig(server: ServerConfig, paneId: string, mode: PaneMo
     hosts: server.hostKey ? [{ name: server.endpoint.name, key: server.hostKey }] : [],
     generateKeys: [
       {
-        name: `vibe-${paneId}`,
+        name: `vibe-${windowId}`,
         type: 'ed25519',
         identityProvider,
       },
@@ -65,7 +66,7 @@ export function paneSshConfig(server: ServerConfig, paneId: string, mode: PaneMo
     autoConnect: {
       username: server.user,
       hostname: server.endpoint.name,
-      identity: `vibe-${paneId}`,
+      identity: `vibe-${windowId}`,
     },
   };
 }

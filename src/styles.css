@@ -42,7 +42,8 @@
   --mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo,
     Consolas, monospace;
 
-  --menubar: 30px;
+  --menubar: 34px;
+  --sidebar: 210px;
   --radius: 12px;
 
   color-scheme: dark;
@@ -98,6 +99,14 @@ button {
   display: grid;
   grid-template-rows: var(--menubar) minmax(0, 1fr);
   isolation: isolate;
+}
+
+/* Sidebar beside the window surface; the dock floats over both. */
+.workbench {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
 }
 
 .wallpaper {
@@ -943,5 +952,355 @@ kbd {
 
   .caret {
     opacity: 1;
+  }
+}
+
+
+/* ── project picker ───────────────────────────────────────────────────── */
+
+.picker {
+  position: relative;
+  flex: none;
+}
+
+.picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  transition: background-color 130ms ease, border-color 130ms ease;
+  max-width: 340px;
+}
+
+.picker-trigger:hover,
+.picker-trigger[aria-expanded='true'] {
+  background: rgb(255 255 255 / 11%);
+  border-color: color-mix(in oklab, var(--accent) 34%, transparent);
+}
+
+/* A small lit square: the project is the thing everything else hangs off. */
+.picker-mark {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex: none;
+  background: var(--accent);
+  box-shadow: 0 0 9px color-mix(in oklab, var(--accent) 65%, transparent);
+}
+
+.picker-label {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-branch {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 7%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12ch;
+}
+
+.picker-caret {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.picker-menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  width: min(420px, 78vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  border-radius: 13px;
+  padding: 7px;
+  z-index: 70;
+  animation: panel-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 7px 7px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.picker-refresh {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--accent);
+  padding: 2px 7px;
+  border-radius: 6px;
+  transition: background-color 120ms ease;
+}
+
+.picker-refresh:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+}
+
+.picker-refresh:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.picker-empty,
+.sidebar-empty {
+  margin: 0;
+  padding: 10px 9px 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.picker-list button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 9px;
+  text-align: left;
+  transition: background-color 120ms ease;
+}
+
+.picker-list button:hover {
+  background: rgb(255 255 255 / 8%);
+}
+
+.picker-list button[data-active] {
+  background: color-mix(in oklab, var(--accent) 16%, rgb(255 255 255 / 6%));
+}
+
+.picker-name {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.picker-meta {
+  grid-column: 1;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-tag {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 7%);
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── workspace sidebar ────────────────────────────────────────────────── */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-width: 0 1px 0 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 10px 8px;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 9px;
+}
+
+.sidebar-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.sidebar-new {
+  width: 21px;
+  height: 21px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 15%, transparent);
+  transition: background-color 130ms ease, transform 130ms ease;
+}
+
+.sidebar-new:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 30%, transparent);
+}
+
+.sidebar-new:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.sidebar-new:disabled {
+  color: var(--muted);
+  background: rgb(255 255 255 / 5%);
+  cursor: default;
+}
+
+.sidebar-error {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--err);
+  background: color-mix(in oklab, var(--err) 14%, transparent);
+}
+
+.sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 14%) transparent;
+}
+
+.sidebar-list li {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ws {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  text-align: left;
+  transition: background-color 120ms ease;
+}
+
+.ws:hover {
+  background: rgb(255 255 255 / 7%);
+}
+
+/* The active workspace gets a lit edge — it is the thing the terminals belong
+   to, so it should read as selected rather than merely hovered. */
+.ws[data-active] {
+  background: color-mix(in oklab, var(--accent) 15%, rgb(255 255 255 / 5%));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.ws-name {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-meta {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.ws-remove {
+  position: absolute;
+  right: 5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-list li:hover .ws-remove {
+  opacity: 1;
+}
+
+.ws-remove:hover {
+  background: color-mix(in oklab, var(--err) 65%, transparent);
+  color: #fff;
+}
+
+.ws-confirm {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  gap: 3px;
+}
+
+.ws-confirm button {
+  font-size: 10px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgb(5 7 10 / 78%);
+  color: var(--text-dim);
+}
+
+.ws-confirm button:first-child {
+  color: #fff;
+  background: color-mix(in oklab, var(--err) 72%, transparent);
+}
+
+.linkish {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.menu-strong {
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+
+@media (max-width: 900px) {
+  /* The sidebar is the first thing to go: windows need the room more. */
+  .workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    display: none;
   }
 }

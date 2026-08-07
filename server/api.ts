@@ -1,28 +1,35 @@
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { Config } from './config.ts';
 import type { SshCa } from './ssh-ca.ts';
 import { fingerprint } from './ssh-ca.ts';
 import { WallpaperStore, MAX_WALLPAPER_BYTES, type DesktopPrefs } from './wallpapers.ts';
+import type { Db } from './db.ts';
+import {
+  scanProjects,
+  listProjects,
+  listWorkspaces,
+  getWorkspace,
+  createWorkspace,
+  removeWorkspace,
+  touchWorkspace,
+  reconcileWorkspaces,
+} from './projects.ts';
+import { listWindows, createWindow, updateWindow, deleteWindow, sessionNameFor } from './windows.ts';
 import { log } from './log.ts';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import pkg from '../package.json' with { type: 'json' };
 
 const run = promisify(execFile);
 
-/** argv array, never a shell — the id is validated but this costs nothing. */
-function killSession(name: string): Promise<unknown> {
-  return run('tmux', ['kill-session', '-t', name], { timeout: 10_000 });
-}
-import pkg from '../package.json' with { type: 'json' };
-
-const PANE_ID = /^[A-Za-z0-9_-]{1,32}$/;
+const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_PUBKEY_BYTES = 16 * 1024;
 
 export interface ClientConfig {
   version: string;
   hostname: string;
   user: string;
-  workspace: string;
+  workspaceRoot: string;
   tmux: boolean;
   authRequired: boolean;
   /** WebSocket endpoint, relative to the page so it follows http/https. */
@@ -38,36 +45,40 @@ function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
 }
 
+/** argv array, never a shell. */
+function killSession(name: string): Promise<unknown> {
+  return run('tmux', ['kill-session', '-t', name], { timeout: 10_000 });
+}
+
+/** Single-quote for the login shell that runs a certificate's force-command. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 /**
- * Builds the command each window runs on login.
+ * Builds the command a window runs on login.
  *
- * `tmux new-session -A` attaches if the session exists and creates it
- * otherwise, which is exactly the reattach-or-start behaviour a window needs:
- * the browser can reload, crash, or be closed for a day, and whatever was
- * running is still there. `-u` forces UTF-8 because a fresh VPS often has no
- * locale set and tmux would otherwise draw its borders in ASCII.
+ * `-c` is the point of the projects feature: the session starts in the worktree
+ * of the workspace the window belongs to. That path is looked up server-side
+ * from the window id — the browser never sends a directory, so there is nothing
+ * to smuggle a path through.
+ *
+ * `new-session -A` attaches if the session exists and creates it otherwise, so
+ * a window reattaches to exactly what it was running before a reload.
  */
-export function paneCommand(paneId: string, config: Config): string | undefined {
+export function windowCommand(session: string, cwd: string, config: Config): string | undefined {
   if (!config.tmux) return undefined;
-  const attach = `tmux -u new-session -A -s vibe-${paneId}`;
+  const parts = [`tmux -u new-session -A -s ${shellQuote(session)} -c ${shellQuote(cwd)}`];
 
-  // All of these are session options, never global (`set -g`) ones: a vibe-os
-  // window must not restyle tmux sessions the user started themselves, and they
-  // share one tmux server. The `\;` reaches tmux as a literal separator after
-  // the login shell has parsed the command.
+  // Session options, never global (`set -g`): a vibe-os window must not restyle
+  // tmux sessions the user started themselves on the same server.
   const cmds: string[] = [];
-
   if (!config.tmuxStatus) {
-    // The window's own title bar already shows the session name and state, and
-    // the menu bar shows the host — tmux's status line just repeats them inside
-    // a window that holds exactly one session. `--tmux-status` brings it back,
-    // which is worth doing if you split panes inside a window with ctrl-b.
+    // The window's own title bar already carries the session name and state.
     cmds.push('set status off');
   }
-
   if (config.tmuxTheme) {
     if (config.tmuxStatus) {
-      // tmux's default is a solid green bar that fights every other colour.
       cmds.push(
         'set status-style "bg=#10141c fg=#9aa3b6"',
         'set status-left-style "fg=#56cfe1 bold"',
@@ -77,8 +88,7 @@ export function paneCommand(paneId: string, config: Config): string | undefined 
     }
     cmds.push('set pane-border-style "fg=#1b2230"', 'set pane-active-border-style "fg=#56cfe1"');
   }
-
-  return cmds.length > 0 ? `${attach} \\; ${cmds.join(' \\; ')}` : attach;
+  return [...parts, ...cmds].join(' \\; ');
 }
 
 export interface ApiDeps {
@@ -86,10 +96,11 @@ export interface ApiDeps {
   ca: SshCa;
   hostKey: string | null;
   wallpapers: WallpaperStore;
+  db: Db;
 }
 
 export function createApi(deps: ApiDeps) {
-  const { config, ca, wallpapers } = deps;
+  const { config, ca, wallpapers, db } = deps;
 
   return async function handleApi(req: Request, url: URL): Promise<Response | null> {
     const p = url.pathname;
@@ -102,7 +113,7 @@ export function createApi(deps: ApiDeps) {
         version: pkg.version,
         hostname: os.hostname(),
         user: config.user,
-        workspace: config.workspace,
+        workspaceRoot: config.workspace,
         tmux: config.tmux,
         authRequired: config.token !== null,
         endpoint: { name: 'local', url: './websocket' },
@@ -114,18 +125,116 @@ export function createApi(deps: ApiDeps) {
       return json(body);
     }
 
+    // ── projects ─────────────────────────────────────────────────────────────
+    if (p === '/api/projects' && req.method === 'GET') {
+      // Reads the table only. Finding repos means walking the disk, which is
+      // far too expensive to do on a poll — that is what the refresh button
+      // (POST /api/projects/scan) is for, plus one scan at startup.
+      return json(listProjects(db));
+    }
+
+    if (p === '/api/projects/scan' && req.method === 'POST') {
+      await scanProjects(db, config, { force: true });
+      await reconcileWorkspaces(db);
+      return json(listProjects(db));
+    }
+
+    const workspacesMatch = /^\/api\/projects\/([^/]+)\/workspaces$/.exec(p);
+    if (workspacesMatch) {
+      const projectId = decodeURIComponent(workspacesMatch[1]);
+      if (!ID.test(projectId)) return json({ error: 'invalid project id' }, 400);
+
+      if (req.method === 'GET') return json(listWorkspaces(db, projectId));
+
+      if (req.method === 'POST') {
+        try {
+          const body = (await req.json().catch(() => ({}))) as { name?: string };
+          const created = await createWorkspace(db, config.workspace, projectId, body.name);
+          return json(created, 201);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn(`workspace creation failed: ${message}`);
+          return json({ error: message }, 400);
+        }
+      }
+      return json({ error: 'method not allowed' }, 405);
+    }
+
+    const workspaceMatch = /^\/api\/workspaces\/([^/]+)$/.exec(p);
+    if (workspaceMatch) {
+      const id = decodeURIComponent(workspaceMatch[1]);
+      if (!ID.test(id)) return json({ error: 'invalid workspace id' }, 400);
+
+      if (req.method === 'DELETE') {
+        // Every window here has a live tmux session; removing the worktree
+        // without ending them leaves shells sitting in a deleted directory.
+        for (const win of listWindows(db, id)) {
+          const target = sessionNameFor(db, win.id);
+          if (target && config.tmux) await killSession(target.session).catch(() => {});
+        }
+        try {
+          await removeWorkspace(db, id);
+          return json({ ok: true });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+        }
+      }
+
+      if (req.method === 'POST') {
+        touchWorkspace(db, id);
+        return json({ ok: true });
+      }
+      return json({ error: 'method not allowed' }, 405);
+    }
+
+    // ── windows ──────────────────────────────────────────────────────────────
+    const windowsMatch = /^\/api\/workspaces\/([^/]+)\/windows$/.exec(p);
+    if (windowsMatch) {
+      const workspaceId = decodeURIComponent(windowsMatch[1]);
+      if (!ID.test(workspaceId)) return json({ error: 'invalid workspace id' }, 400);
+      if (!getWorkspace(db, workspaceId)) return json({ error: 'unknown workspace' }, 404);
+
+      if (req.method === 'GET') return json(listWindows(db, workspaceId));
+      if (req.method === 'POST') return json(createWindow(db, workspaceId), 201);
+      return json({ error: 'method not allowed' }, 405);
+    }
+
+    const windowMatch = /^\/api\/windows\/([^/]+)$/.exec(p);
+    if (windowMatch) {
+      const id = decodeURIComponent(windowMatch[1]);
+      if (!ID.test(id)) return json({ error: 'invalid window id' }, 400);
+
+      if (req.method === 'PATCH') {
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+        const updated = updateWindow(db, id, body);
+        return updated ? json(updated) : json({ error: 'unknown window' }, 404);
+      }
+
+      if (req.method === 'DELETE') {
+        // Closing a window is an explicit "I am done with this", so the session
+        // goes too. Window indices are reused and `new-session -A` attaches, so
+        // leaving it alive would silently resurrect it in the next window.
+        const target = sessionNameFor(db, id);
+        if (target && config.tmux) {
+          await killSession(target.session)
+            .then(() => log.info(`ended tmux session ${target.session}`))
+            .catch(() => {});
+        }
+        return deleteWindow(db, id) ? json({ ok: true }) : json({ error: 'unknown window' }, 404);
+      }
+      return json({ error: 'method not allowed' }, 405);
+    }
+
     // ── certificates ─────────────────────────────────────────────────────────
     if (p === '/api/ssh/certificate') {
       if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405);
 
-      const paneId = url.searchParams.get('pane') ?? 'default';
-      if (!PANE_ID.test(paneId)) return json({ error: 'invalid pane id' }, 400);
-      const mode = url.searchParams.get('mode') ?? 'tmux';
-      if (mode !== 'tmux' && mode !== 'shell') return json({ error: 'invalid mode' }, 400);
+      const windowId = url.searchParams.get('window') ?? '';
+      if (!ID.test(windowId)) return json({ error: 'invalid window id' }, 400);
 
-      // Check the declared length before buffering: the server allows large
-      // bodies for wallpaper uploads, and there is no reason to hold 32MB in
-      // memory just to reject it as a public key.
+      const target = sessionNameFor(db, windowId);
+      if (!target) return json({ error: 'unknown window' }, 404);
+
       if (Number(req.headers.get('content-length') ?? 0) > MAX_PUBKEY_BYTES) {
         return json({ error: 'public key too large' }, 413);
       }
@@ -134,22 +243,19 @@ export function createApi(deps: ApiDeps) {
         const publicKey = await req.text();
         if (publicKey.length > MAX_PUBKEY_BYTES) throw new Error('public key too large');
 
-        const forceCommand = mode === 'tmux' ? paneCommand(paneId, config) : undefined;
+        const forceCommand = windowCommand(target.session, target.cwd, config);
         const cert = await ca.signUserCert({
           publicKey,
           principal: config.user,
-          identity: `vibe-os/${paneId}`,
+          identity: `vibe-os/${target.session}`,
           forceCommand,
           ttlSeconds: config.certTtlSeconds,
         });
 
-        log.info(
-          `issued certificate for ${paneId} (${config.user}, ${Math.round(config.certTtlSeconds / 60)}m${forceCommand ? ', tmux' : ''})`,
-        );
+        log.info(`issued certificate for ${target.session} in ${target.cwd}`);
 
-        // sshterm compares this header for exact equality against "text/plain".
-        // Appending "; charset=utf-8" — which most frameworks do by default —
-        // makes it reject the certificate with an opaque error.
+        // sshterm compares this header for exact equality against "text/plain";
+        // a "; charset=utf-8" suffix makes it reject the certificate.
         return new Response(cert, {
           status: 200,
           headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' },
@@ -158,30 +264,6 @@ export function createApi(deps: ApiDeps) {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`certificate request rejected: ${message}`);
         return json({ error: message }, 400);
-      }
-    }
-
-    // ── sessions ─────────────────────────────────────────────────────────────
-    if (p.startsWith('/api/sessions/') && req.method === 'DELETE') {
-      const id = p.slice('/api/sessions/'.length);
-      if (!PANE_ID.test(id)) return json({ error: 'invalid session id' }, 400);
-      if (!config.tmux) return json({ ok: true, killed: false });
-
-      // Closing a window is an explicit "I am done with this", so the session
-      // behind it has to go. Leaving it alive was actively confusing: window ids
-      // are reused (lowest unused integer, so they stay short in `tmux ls`) and
-      // `new-session -A` attaches to an existing session, so the next window
-      // opened would silently resurrect the one just closed.
-      //
-      // This finds the session because vibe-os runs as the same user it logs in
-      // as, and a tmux server is per-user. With --user pointing at someone else
-      // there is no local session to kill, hence the soft failure.
-      try {
-        await killSession(`vibe-${id}`);
-        log.info(`ended tmux session vibe-${id}`);
-        return json({ ok: true, killed: true });
-      } catch {
-        return json({ ok: true, killed: false });
       }
     }
 
@@ -202,10 +284,8 @@ export function createApi(deps: ApiDeps) {
     // ── wallpapers ───────────────────────────────────────────────────────────
     if (p === '/api/wallpapers') {
       if (req.method === 'GET') return json(await wallpapers.list());
-
       if (req.method === 'POST') {
-        const declared = Number(req.headers.get('content-length') ?? 0);
-        if (declared > MAX_WALLPAPER_BYTES) {
+        if (Number(req.headers.get('content-length') ?? 0) > MAX_WALLPAPER_BYTES) {
           return json({ error: 'image too large' }, 413);
         }
         try {
@@ -221,14 +301,12 @@ export function createApi(deps: ApiDeps) {
 
     if (p.startsWith('/api/wallpapers/')) {
       const id = p.slice('/api/wallpapers/'.length);
-
       if (req.method === 'GET') {
         const found = await wallpapers.read(id);
         if (!found) return json({ error: 'not found' }, 404);
         return new Response(found.file, {
           headers: {
             'content-type': found.mime,
-            // Content-addressed, so the bytes behind an id never change.
             'cache-control': 'public, max-age=31536000, immutable',
             // Defence in depth: even if a hostile file slipped past the magic
             // byte check, the browser must not be talked into running it.
@@ -237,7 +315,6 @@ export function createApi(deps: ApiDeps) {
           },
         });
       }
-
       if (req.method === 'DELETE') {
         return (await wallpapers.remove(id)) ? json({ ok: true }) : json({ error: 'not found' }, 404);
       }

@@ -150,6 +150,26 @@ certificate instead.
 --state-dir <dir>   CA and TLS material (default ~/.vibe-os)
 ```
 
+### Projects and workspaces
+
+The picker in the top-left switches between git repositories on the machine.
+**Refresh** walks the disk for them — bounded by depth, a skip list and a visit
+budget, and only ever on that button, never on a poll.
+
+Each project has **workspaces** in the sidebar. A workspace is a git worktree on
+its own branch, named with three random words, so they are cheap to make and
+safe to throw away. Terminals belong to a workspace: switching workspaces swaps
+which windows are on screen and restores their placement, while the sessions you
+left keep running — switching detaches, only ✕ ends anything.
+
+Every terminal starts in its workspace's worktree. That path is resolved
+server-side from the window id; the browser never names a directory.
+
+State lives in SQLite in the state directory, reached over the API, so a desktop
+follows you between browsers and machines. The sidebar polls once a minute and
+on window focus — a VPS is not a realtime database and a minute of staleness
+costs nothing.
+
 ### The desktop
 
 Windows float over a wallpaper and snap to a 24 × 14 grid. Drag a title bar to

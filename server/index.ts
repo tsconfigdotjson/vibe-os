@@ -6,12 +6,14 @@ import type { Config } from './config.ts';
 import { log, color } from './log.ts';
 import { SshCa, discoverHostKey, fingerprint, requireSshKeygen } from './ssh-ca.ts';
 import { createStaticServer } from './static.ts';
-import { createApi, paneCommand } from './api.ts';
+import { createApi, windowCommand } from './api.ts';
 import { createBridgeHandlers, originAllowed, bridgeConnections, type BridgeData } from './bridge.ts';
 import { createGate } from './auth.ts';
 import { ensureWasm, ensureWebRoot } from './preflight.ts';
 import { Acme } from './acme.ts';
 import { WallpaperStore } from './wallpapers.ts';
+import { openDb } from './db.ts';
+import { scanProjects } from './projects.ts';
 
 export interface RunningServer {
   port: number;
@@ -92,9 +94,14 @@ export async function startServer(config: Config): Promise<RunningServer> {
   const wallpapers = new WallpaperStore(config.stateDir);
   await wallpapers.init();
 
+  const db = openDb(config.stateDir);
+  // Warm the project list before the first request so the picker is populated
+  // on the very first page load rather than one poll later.
+  await scanProjects(db, config, { force: true });
+
   const gate = createGate(config.token);
   const serveStatic = createStaticServer(config.webRoot);
-  const handleApi = createApi({ config, ca, hostKey, wallpapers });
+  const handleApi = createApi({ config, ca, hostKey, wallpapers, db });
   const bridge = createBridgeHandlers({ host: config.sshHost, port: config.sshPort });
   const acme = config.domain
     ? new Acme({
@@ -222,7 +229,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
     ? [`https://${config.domain}${config.tlsPort === 443 ? '' : `:${config.tlsPort}`}/${query}`]
     : reachableHosts(config).map((h) => `http://${h}${port === 80 ? '' : `:${port}`}/${query}`);
 
-  const sample = paneCommand('1', config);
+  const sample = windowCommand('vibe-<workspace>-1', '<worktree>', config);
   if (sample) extras.push(`each window runs: ${sample}`);
   extras.push(`state: ${config.stateDir}`);
   extras.push(`runtime: bun ${Bun.version}`);
