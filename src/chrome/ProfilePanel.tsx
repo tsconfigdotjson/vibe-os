@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Harness, HarnessInfo, Profile, ProfileInput } from '../data';
+import { countBlanks } from '../desktop/blanks';
 import {
   TOGGLES,
   buildArgs,
@@ -43,6 +44,31 @@ export function ProfilePanel({ profile, palette, harnessInfo, onSave, onDelete, 
     parseSettings(profile?.args ?? ['--dangerously-skip-permissions']),
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  /**
+   * Drops a blank in at the caret.
+   *
+   * Typed by hand `{{like this}}` works identically — this exists so the
+   * feature is discoverable, because nobody guesses a brace syntax. Selected
+   * text becomes the label, which makes "turn this word into a blank" the
+   * obvious gesture it should be.
+   */
+  const insertBlank = () => {
+    const field = promptRef.current;
+    if (!field) return;
+    const { selectionStart: from, selectionEnd: to, value } = field;
+    const selected = value.slice(from, to).trim();
+    const label = selected || 'what to fill in';
+    const next = `${value.slice(0, from)}{{${label}}}${value.slice(to)}`;
+    setPrompt(next);
+    // Select the label so it can be typed straight over.
+    const caret = from + 2;
+    requestAnimationFrame(() => {
+      field.focus();
+      field.setSelectionRange(caret, caret + label.length);
+    });
+  };
   const patch = (next: Partial<ClaudeSettings>) => setSettings((s) => ({ ...s, ...next }));
 
   // For the custom harness there are no known flags to offer, so the whole
@@ -50,6 +76,7 @@ export function ProfilePanel({ profile, palette, harnessInfo, onSave, onDelete, 
   const [customArgs, setCustomArgs] = useState(detokenize(profile?.args ?? []));
 
   const composed = useMemo(() => buildArgs(settings), [settings]);
+  const blanks = useMemo(() => countBlanks(prompt), [prompt]);
 
   const submit = async () => {
     setBusy(true);
@@ -296,16 +323,32 @@ export function ProfilePanel({ profile, palette, harnessInfo, onSave, onDelete, 
         ) : null}
 
         <div className="field">
-          <label htmlFor="profile-prompt">Prompt</label>
+          <label htmlFor="profile-prompt">
+            Prompt
+            <button type="button" className="inline-action" onClick={insertBlank}>
+              + blank
+            </button>
+          </label>
           <textarea
             id="profile-prompt"
+            ref={promptRef}
             className="text-input prompt-input"
             value={prompt}
             rows={8}
             placeholder="You are the backend manager for this repo…"
             onChange={(event) => setPrompt(event.target.value)}
           />
-          <p className="field-hint">Offered above the terminal each time you open this profile.</p>
+          <p className="field-hint">
+            Offered above the terminal each time you open this profile.
+            {blanks > 0 ? (
+              <>
+                {' '}
+                It has <strong>{blanks}</strong> blank{blanks === 1 ? '' : 's'} to fill in each time.
+              </>
+            ) : (
+              <> Select a word and press <strong>+ blank</strong> to make it a field you fill in each time.</>
+            )}
+          </p>
         </div>
 
         <div className="panel-actions">

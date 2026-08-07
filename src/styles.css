@@ -1339,6 +1339,23 @@ kbd {
   background: rgb(255 255 255 / 7%);
 }
 
+/*
+ * Rows wake up as a whole.
+ *
+ * A row that only changes its fill on hover leaves its own label sitting at
+ * reading-dim, which makes the fill look like a stray highlight rather than
+ * "this is the thing you are about to pick". Primary text goes to full
+ * strength and secondary text comes up one step behind it, so the row gains a
+ * hierarchy on hover instead of just a background.
+ */
+.ws:hover .ws-name {
+  color: var(--text);
+}
+
+.ws:hover .ws-meta {
+  color: var(--text-dim);
+}
+
 .ws[data-active] {
   /* The same plate the terminals sit on, so row and surface are one material. */
   background: var(--plate);
@@ -1579,6 +1596,20 @@ kbd {
   background: rgb(255 255 255 / 6%);
 }
 
+.rail-item:hover:not(:disabled) .rail-name {
+  color: var(--text);
+}
+
+.rail-item:hover:not(:disabled) .rail-meta {
+  color: var(--text-dim);
+}
+
+/* A role that is not running is dimmed; hovering it should still light the
+   chip, or the row looks half-disabled under the cursor. */
+.rail-item:hover:not(:disabled) .rail-chip {
+  opacity: 1;
+}
+
 .rail-item:disabled {
   cursor: default;
   opacity: 0.45;
@@ -1615,6 +1646,7 @@ kbd {
 .rail-name {
   font-size: 12px;
   color: var(--text-dim);
+  transition: color 120ms ease;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1629,6 +1661,7 @@ kbd {
   font-size: 10px;
   font-family: var(--mono);
   color: var(--muted);
+  transition: color 120ms ease;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1804,6 +1837,51 @@ kbd {
    into looking like it has been cut off. */
 .band-text[data-more] {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+
+/*
+ * A blank, sitting in the sentence it belongs to.
+ *
+ * Deliberately not a boxed input on its own line: the point is that you read
+ * the prompt and fill the gaps in it, so the field is drawn as an underline in
+ * the flow of the text, in the profile's own colour. `size` is set from the
+ * content in the markup, so the sentence closes up around a short answer rather
+ * than leaving a hole the width of the label.
+ */
+.blank {
+  font: inherit;
+  font-family: var(--mono);
+  color: var(--text);
+  background: color-mix(in oklab, var(--win-color) 14%, transparent);
+  border: none;
+  border-bottom: 1px solid color-mix(in oklab, var(--win-color) 55%, transparent);
+  border-radius: 3px 3px 0 0;
+  padding: 0 4px;
+  margin: 0 1px;
+  min-width: 3ch;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.blank::placeholder {
+  color: color-mix(in oklab, var(--win-color) 60%, var(--muted));
+  font-style: italic;
+}
+
+.blank:hover {
+  background: color-mix(in oklab, var(--win-color) 20%, transparent);
+}
+
+.blank:focus {
+  outline: none;
+  background: color-mix(in oklab, var(--win-color) 26%, transparent);
+  border-bottom-color: var(--win-color);
+}
+
+/* Empty ones carry the colour so the eye finds them without reading; filled
+   ones settle down and stop competing with the words around them. */
+.blank:not([data-empty]) {
+  background: rgb(255 255 255 / 6%);
+  border-bottom-color: rgb(255 255 255 / 18%);
 }
 
 .band-actions {
@@ -2137,6 +2215,21 @@ kbd {
   color: var(--warn);
   background: color-mix(in oklab, var(--warn) 20%, transparent);
   border-color: color-mix(in oklab, var(--warn) 42%, transparent);
+}
+
+/* A verb that lives in a field's caption. `.field label` is already flex with
+   space-between, so this lands on the right without any extra wrapper. */
+.inline-action {
+  font-size: 10.5px;
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  transition: background-color 120ms ease;
+}
+
+.inline-action:hover {
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
 }
 
 .field-hint {
