@@ -185,10 +185,17 @@ sudo nft add rule inet filter input iifname "tailscale0" accept
 sudo nft add rule inet filter input udp dport 41641 accept
 ```
 
-**Your provider's firewall is a separate thing.** AWS security groups, Hetzner
-firewalls, DigitalOcean cloud firewalls and the rest sit in front of the machine
-and know nothing about ufw. Close 80 and 443 there too, and leave only what you
-actually serve publicly, which with Tailscale is nothing.
+**Your provider's firewall is a separate thing.** AWS security groups, OVH's
+Network Firewall, Hetzner firewalls, DigitalOcean cloud firewalls and the rest
+sit in front of the machine and know nothing about ufw. Close 80 and 443 there
+too, and leave only what you actually serve publicly, which with Tailscale is
+nothing.
+
+OVH's is worth singling out because it is *stateless*: it filters each packet on
+its own with no idea which connection it belongs to, so a naive "allow
+established" rule does not exist and blocking inbound UDP will quietly break
+Tailscale's direct connections. If you use it, leave `41641/udp` open there as
+well as in ufw, or accept that every packet relays through DERP.
 
 Finally, belt and braces — bind vibe-os to the tailnet address so it is not
 listening on the public interface at all:
