@@ -1,27 +1,25 @@
 # vibe-os
 
-A terminal multiplexer in the browser. Point a blank VPS at it and you get
-persistent shells on port 80, reachable from anything with a browser.
+A coding desktop in the browser, on a box you own. Switch between the git repos
+on a machine, spin up a worktree per piece of work, and open terminals into it —
+all over HTTP from anything with a browser.
 
-```bash
-curl -fsSL -o /usr/local/bin/vibe-os \
-  https://github.com/GratefulWorkspace/vibe-os/releases/latest/download/vibe-os-linux-x64
-chmod +x /usr/local/bin/vibe-os
-vibe-os
-```
+> **Status:** works end to end, and has only ever run in Docker. `--domain`
+> (Let's Encrypt) and `install-service` have not been exercised on real
+> hardware. No release binaries are published yet, so build one (below) or run
+> the container.
 
-One file. No Bun, no Node, no npm on the target — the whole app, including the
-20MB SSH WASM runtime, is compiled into the binary.
-
-Open `http://<your-vps>/` and you get a desktop: click **+ terminal** in the
-dock to open a window, drag windows around a snap grid, and set a wallpaper.
-Every window is its own tmux session, so closing the tab and coming back
-tomorrow finds whatever was running still running.
+Open the desktop and you get a project picker, a sidebar of workspaces, and
+windows you can drag around a snap grid over a wallpaper. Every window is a tmux
+session in its workspace's worktree, so closing the tab and coming back tomorrow
+finds whatever was running still running.
 
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
 edit, no `sshd_config` change, and no root.
 
-## Try it without a VPS
+## Run it
+
+The fastest way to see it, and the one that is actually tested:
 
 ```bash
 docker compose up --build
@@ -49,6 +47,25 @@ Two differences from a VPS worth knowing:
 Both volumes are worth keeping: `vibe-home` preserves the CA and your work,
 `vibe-sshd` preserves the container's host keys so the browser does not report
 the host key as changed after a rebuild.
+
+### On a real machine
+
+Two ways, neither yet run on a VPS:
+
+```bash
+# a self-contained binary — no Bun, Node or npm on the target
+bun run compile              # writes dist/bin/vibe-os-linux-{x64,arm64}
+scp dist/bin/vibe-os-linux-x64 you@host:/usr/local/bin/vibe-os
+ssh you@host 'chmod +x /usr/local/bin/vibe-os && vibe-os'
+```
+
+```bash
+# or from a checkout, which needs Bun on the target
+bun install && bun run build && bun bin/vibe-os.mjs start
+```
+
+The binary carries the whole app, including the 20MB SSH WASM runtime. Once
+releases are published the first path collapses into a single `curl`.
 
 ---
 
@@ -100,8 +117,13 @@ revoking every browser that ever connected is deleting one line.
 Each certificate carries a per-window `force-command` critical option:
 
 ```
-force-command tmux -u new-session -A -s vibe-1
+force-command tmux -u new-session -A -s 'vibe-quiet-amber-otter-1' \
+                  -c '/home/you/workspace/.vibe-worktrees/my-repo/quiet-amber-otter'
 ```
+
+The session name comes from the workspace, and `-c` is what puts the shell in
+that workspace's worktree. Both are resolved server-side from the window id —
+the browser sends an id and never names a directory.
 
 `new-session -A` attaches if the session exists and creates it otherwise, so a
 window reattaches to exactly what it was running before. Because the client
@@ -146,7 +168,8 @@ certificate instead.
 --no-tmux-theme     leave tmux's colours alone
 --cert-ttl <secs>   certificate lifetime (default 43200)
 
---workspace <dir>   root for projects and worktrees (default ~/workspace)
+--workspace <dir>   where worktrees are created (default ~/workspace);
+                    projects are discovered across the host, not just here
 --state-dir <dir>   CA and TLS material (default ~/.vibe-os)
 ```
 
@@ -187,6 +210,7 @@ time and `ctrl-b` belongs to the tmux session running inside it.
 | `alt` `z` | maximise / restore |
 | `alt` `m` | minimise to the dock |
 | `alt` `w` | close the window and end its session |
+| `alt` `n` | create a workspace |
 
 Closing a window ends the session behind it; **minimise** puts one away and
 keeps it running. Reloading or closing the tab keeps everything — persistence
@@ -228,7 +252,7 @@ everything: the app, the API, the certificate signer, and the WebSocket bridge.
 Cross-origin WebSocket upgrades are always rejected.
 
 Nothing about the gate protects against someone who already has the token, and
-there is no per-user isolation — every pane is the same unix user. Treat access
+there is no per-user isolation — every window is the same unix user. Treat access
 to vibe-os as equivalent to SSH access to the box, because it is.
 
 ### TLS
@@ -250,11 +274,13 @@ root and it just works. Otherwise vibe-os falls back to port 8080 and tells you
 how to fix it:
 
 ```bash
-sudo setcap 'cap_net_bind_service=+ep' $(readlink -f "$(which bun)")
+# the compiled binary
+sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
+# or, if running from a checkout, the Bun that executes it
+sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(which bun)")"
 ```
 
-or let systemd handle it, which grants the capability without touching the node
-binary:
+or let systemd handle it, which grants the capability without setcap at all:
 
 ```bash
 sudo vibe-os install-service --user "$USER"
@@ -285,20 +311,32 @@ download.
 
 Pin a version with `SSHTERM_VERSION=v0.8.3 bun run fetch-wasm`.
 
+### Stack
+
+| | |
+| --- | --- |
+| server | Bun, TypeScript run directly, `Bun.serve` — no framework |
+| storage | SQLite (`bun:sqlite`) via drizzle-orm, idempotent DDL at startup |
+| browser | React 19, Vite, xterm.js v6, SWR for polling |
+| ssh | `ssh.wasm` in the tab; `ssh-keygen` and `ssh-keyscan` on the host |
+
+Two runtime dependencies: `drizzle-orm` and `acme-client`. Everything else is a
+devDependency and ends up bundled.
+
 ### Things that will bite you
 
-**One Go runtime serves the whole page.** Every pane calls `start()` on the same
-WASM instance, and an unhandled Go panic in *any* pane kills the runtime for
-*all* of them. Two consequences: teardown order in `SshTerminal.tsx` is
+**One Go runtime serves the whole page.** Every window calls `start()` on the
+same WASM instance, and an unhandled Go panic in *any* window kills the runtime
+for *all* of them. Two consequences: teardown order in `SshTerminal.tsx` is
 load-bearing (close the session and await `done` *before* disposing the
 Terminal — React StrictMode's double-mount hits this immediately), and
-`onRuntimeDead` exists so the app can rebuild every pane instead of leaving you
-with terminals that look fine but accept no input.
+`onRuntimeDead` exists so the app can rebuild every window instead of leaving
+you with terminals that look fine but accept no input.
 
 **Host key algorithm order is not the obvious one.** golang.org/x/crypto/ssh's
 `supportedHostKeyAlgos` puts ECDSA *ahead* of Ed25519 — the opposite of OpenSSH.
 vibe-os discovers the host key with `ssh-keyscan` in that order, because pinning
-a key the server holds but does not present makes every pane report the host key
+a key the server holds but does not present makes every window report the host key
 as **changed**, which reads like an attack rather than a misconfiguration.
 
 **tmux is detected on the machine vibe-os runs on**, which is the SSH target by
@@ -322,12 +360,18 @@ subcommand.
 
 ---
 
-## What this is not, yet
+## What is not here yet
 
-This is the foundation: package, server, certificate bootstrap, and a two-pane
-multiplexer. The pane model is built to extend, but project switching, git
-worktrees, and one-click Claude sessions are not here yet. `--workspace` is
-plumbed through and shown in the header, waiting for them.
+- **Never run on a VPS.** `--domain` and `install-service` are the two paths
+  Docker cannot rehearse, and both only run on a first start.
+- **No authentication by default.** The token gate exists and works; it is off
+  until you pass `--token`. There is no multi-user story at all.
+- **No Claude session launcher.** Windows open a shell; running `claude` in one
+  is still something you type.
+- **No branch operations.** Workspaces create a worktree and a branch; pushing,
+  PRs and merging happen in the terminal.
+- **Deleting a workspace keeps its branch**, deliberately, so work is
+  recoverable — nothing prunes those branches for you.
 
 ## License
 
