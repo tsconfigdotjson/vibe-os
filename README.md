@@ -239,6 +239,31 @@ it finds one:
                  bind to the tailnet only:  --host 100.x.y.z
 ```
 
+### Pushing a change to a box that is already running
+
+```bash
+bun run build && bun scripts/compile.ts linux-x64
+scp dist/bin/vibe-os-linux-x64 you@host:/tmp/vibe-os
+ssh you@host 'sudo systemctl stop vibe-os \
+  && sudo mv /tmp/vibe-os /usr/local/bin/vibe-os \
+  && sudo chmod +x /usr/local/bin/vibe-os \
+  && sudo systemctl start vibe-os'
+```
+
+Nothing is lost by that restart: workspaces, profiles and window layout are in
+SQLite, and the terminals are tmux sessions the server does not own. Reload the
+browser and every window reattaches to whatever was running.
+
+Two things that restart does *not* pick up, both worth knowing before you
+conclude a change did not work:
+
+- **A changed harness command.** Windows attach with `tmux new-session -A`, and
+  tmux ignores a shell-command when it attaches, so an existing session keeps
+  running whatever it was started with. Close the window and open it again —
+  reloading is not enough.
+- **Changed service flags.** The port, bind address and token live in the unit,
+  so re-run `sudo vibe-os install-service …` with the new ones.
+
 ### Do not run it as root
 
 A fresh VPS logs you in as root, and vibe-os hands out shells as whoever it runs
