@@ -25,6 +25,11 @@ export interface TermWindowProps {
   hue: string;
   /** The role this window runs as, when it has one. */
   profile: Profile | null;
+  /** Its terminal is open in a separate browser window. */
+  poppedOut: boolean;
+  /** Returns false when the browser refused to open the window. */
+  onPopOut: (id: string) => boolean;
+  onReclaim: (id: string) => void;
   focused: boolean;
   view: Viewport;
   onRaise: (id: string) => void;
@@ -51,6 +56,9 @@ export const TermWindow = memo(function TermWindow({
   server,
   hue,
   profile,
+  poppedOut,
+  onPopOut,
+  onReclaim,
   focused,
   view,
   onRaise,
@@ -74,6 +82,9 @@ export const TermWindow = memo(function TermWindow({
   // State rather than a ref: the Send button has to re-render from disabled to
   // enabled when the terminal appears, which a ref would not trigger.
   const [term, setTerm] = useState<Terminal | null>(null);
+  // A blocked pop-up is silent — the browser tells the user in the omnibox, but
+  // the click looks like it did nothing at all here. Say so in the window.
+  const [popBlocked, setPopBlocked] = useState(false);
   // The exact rect the overlay is promising. Committing this value rather than
   // recomputing one on pointerup is what guarantees the window lands where the
   // highlight said it would — no rounding done twice, no stale state read.
@@ -165,7 +176,10 @@ export const TermWindow = memo(function TermWindow({
     <section
       className="win"
       data-focused={focused || undefined}
-      data-status={win.status}
+      // A popped-out window has no connection of its own, so its last status is
+      // meaningless here — reporting it would leave the dot pulsing at
+      // "connecting" forever for something that is not connecting.
+      data-status={poppedOut ? 'popped' : win.status}
       data-dragging={dragging || undefined}
       data-profile={profile ? '' : undefined}
       style={{
@@ -196,9 +210,22 @@ export const TermWindow = memo(function TermWindow({
         ) : (
           <span className="win-name">{win.label}</span>
         )}
-        <span className="win-title">{win.title ?? ''}</span>
-        <span className="win-state">{STATUS_LABEL[win.status]}</span>
+        <span className="win-title">{poppedOut ? '' : (win.title ?? '')}</span>
+        <span className="win-state">{poppedOut ? 'popped out' : STATUS_LABEL[win.status]}</span>
         <span className="win-buttons">
+          <button
+            type="button"
+            title={poppedOut ? 'Bring this terminal back into the desktop' : 'Open this terminal in its own window'}
+            onClick={() => {
+              if (poppedOut) {
+                onReclaim(win.id);
+                return;
+              }
+              setPopBlocked(!onPopOut(win.id));
+            }}
+          >
+            {poppedOut ? '⇱' : '⇗'}
+          </button>
           <button type="button" title="Restart this connection" onClick={() => onRestart(win.id)}>
             ⟳
           </button>
@@ -220,25 +247,56 @@ export const TermWindow = memo(function TermWindow({
       </header>
 
       <div className="win-body">
-        {showBand && profile ? (
-          <PromptBand
-            profileName={profile.name}
-            prompt={profile.prompt}
-            // xterm's paste() wraps the text in bracketed-paste markers, so a
-            // multi-line prompt reaches the composer as one unsent block.
-            onSend={term ? (text) => term.paste(text) : null}
-            onDismiss={() => onPromptDone(win.id)}
-          />
-        ) : null}
-        <SshTerminal
-          key={`${win.id}:${win.generation}`}
-          config={config}
-          className="win-term"
-          onFocus={() => onRaise(win.id)}
-          onStatusChange={(status, detail) => onStatus(win.id, status, detail)}
-          onTitleChange={(title) => onTitle(win.id, title)}
-          onTerminal={setTerm}
-        />
+        {/*
+          Unmounted while popped out, not merely hidden. The terminal owns an
+          SSH connection, and leaving it mounted would put a second client on
+          the tmux session — which tmux would then size to whichever of the two
+          windows is smaller. The session itself is untouched: it lives on the
+          server, and both views only ever attach to it.
+        */}
+        {poppedOut ? (
+          <div className="popped">
+            <p className="popped-line">Open in its own window.</p>
+            <button type="button" className="ghost" onClick={() => onReclaim(win.id)}>
+              Bring it back
+            </button>
+            <p className="popped-hint">The session keeps running either way.</p>
+          </div>
+        ) : (
+          <>
+            {popBlocked ? (
+              <div className="band band-warn">
+                <div className="band-text">
+                  Your browser blocked the pop-up window. Allow pop-ups for this site, then try again.
+                </div>
+                <div className="band-actions">
+                  <button type="button" className="btn btn-quiet" onClick={() => setPopBlocked(false)}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {showBand && profile ? (
+              <PromptBand
+                profileName={profile.name}
+                prompt={profile.prompt}
+                // xterm's paste() wraps the text in bracketed-paste markers, so
+                // a multi-line prompt reaches the composer as one unsent block.
+                onSend={term ? (text) => term.paste(text) : null}
+                onDismiss={() => onPromptDone(win.id)}
+              />
+            ) : null}
+            <SshTerminal
+              key={`${win.id}:${win.generation}`}
+              config={config}
+              className="win-term"
+              onFocus={() => onRaise(win.id)}
+              onStatusChange={(status, detail) => onStatus(win.id, status, detail)}
+              onTitleChange={(title) => onTitle(win.id, title)}
+              onTerminal={setTerm}
+            />
+          </>
+        )}
       </div>
 
       {HANDLES.map((handle) => (
