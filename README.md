@@ -525,6 +525,29 @@ take the desktop window with it. And because windows attach with
 `new-session -A`, which ignores a shell-command when it attaches, reloading the
 page rejoins the running harness instead of starting a second one on top.
 
+#### Blanks
+
+A standing prompt is worth most when it is nearly the same every time. "Review
+the ticket" only helps if you can say which ticket, so a prompt can leave gaps:
+
+```
+Read {{which files}} on branch {{branch}} and report back.
+```
+
+Each `{{…}}` becomes a field in the band, drawn inline in the sentence it
+belongs to rather than as a form above it — you read the prompt and fill the
+holes in it. The words inside the braces are the placeholder, so they should say
+what goes there. Select a word in the editor and press **+ blank** to turn it
+into one; typing the braces by hand does the same thing.
+
+Blanks are keyed by position, not by name. Two `{{file}}` in one prompt stay two
+separate fields, because they are far more likely to be two files than the same
+one written twice.
+
+Pressing Copy or Send with blanks still empty refuses once and puts the cursor
+in the first one. Pressing again goes anyway, and an unfilled blank falls back
+to its own label so the sentence still reads.
+
 #### The prompt band
 
 The band above the terminal offers the prompt two ways, and the second is the
