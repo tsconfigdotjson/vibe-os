@@ -12,6 +12,16 @@
 /** Flags that take a value, as `--flag value`. */
 const VALUED = new Set(['--model', '--permission-mode', '--agent', '--effort', '--fallback-model', '--name']);
 
+/**
+ * How much of the box's MCP configuration a session gets.
+ *
+ * There is no flag that enables servers by name, so the three states are what
+ * the two flags can actually say: nothing at all means Claude loads whatever
+ * the box has, `--strict-mcp-config` on its own means none of it, and adding
+ * `--mcp-config` gives back exactly the files listed.
+ */
+export type McpMode = 'all' | 'pick' | 'none';
+
 export interface ClaudeSettings {
   /** Model alias or id, without any context-window suffix. Empty for default. */
   model: string;
@@ -19,6 +29,9 @@ export interface ClaudeSettings {
   longContext: boolean;
   /** '' for ask-every-time, 'skip' for the dangerous flag, or a mode name. */
   permission: string;
+  mcp: McpMode;
+  /** Paths passed to `--mcp-config`, in the order they will be given. */
+  mcpConfigs: string[];
   toggles: Record<string, boolean>;
   /** Everything the controls above do not own, as the user typed it. */
   extra: string;
@@ -41,6 +54,8 @@ export const TOGGLES: { flag: string; label: string; hint: string; warn?: boolea
 ];
 
 export const SKIP_PERMISSIONS = '--dangerously-skip-permissions';
+export const STRICT_MCP = '--strict-mcp-config';
+export const MCP_CONFIG = '--mcp-config';
 
 /** Plain-English names for the modes the CLI reports. Unknown ones show raw. */
 const MODE_LABELS: Record<string, string> = {
@@ -102,15 +117,34 @@ export function parseSettings(args: string[]): ClaudeSettings {
   const toggles: Record<string, boolean> = {};
   const known = new Set(TOGGLES.map((t) => t.flag));
   const leftovers: string[] = [];
+  const mcpConfigs: string[] = [];
   let model = '';
   let longContext = false;
   let permission = '';
+  let strictMcp = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
 
     if (token === SKIP_PERMISSIONS) {
       permission = 'skip';
+      continue;
+    }
+    if (token === STRICT_MCP) {
+      strictMcp = true;
+      continue;
+    }
+    // Variadic, unlike every other flag here: it takes as many paths as follow
+    // it, so it swallows tokens until the next thing that looks like a flag.
+    if (token === MCP_CONFIG) {
+      const before = mcpConfigs.length;
+      while (args[i + 1] !== undefined && !args[i + 1].startsWith('-')) {
+        mcpConfigs.push(args[i + 1]);
+        i += 1;
+      }
+      // Nothing after it is malformed, and goes to `extra` to be seen and
+      // fixed rather than disappearing into a control that cannot show it.
+      if (mcpConfigs.length === before) leftovers.push(token);
       continue;
     }
     if (known.has(token)) {
@@ -142,7 +176,21 @@ export function parseSettings(args: string[]): ClaudeSettings {
     }
   }
 
-  return { model, longContext, permission, toggles, extra: detokenize(leftovers) };
+  // `--mcp-config` without `--strict-mcp-config` means "the box's servers and
+  // also these", which the three-way control cannot say. Rather than quietly
+  // add the strict flag and change what the profile does, that combination is
+  // handed back to the advanced field exactly as it was written.
+  if (!strictMcp && mcpConfigs.length > 0) leftovers.push(MCP_CONFIG, ...mcpConfigs.splice(0));
+
+  return {
+    model,
+    longContext,
+    permission,
+    mcp: strictMcp ? (mcpConfigs.length > 0 ? 'pick' : 'none') : 'all',
+    mcpConfigs,
+    toggles,
+    extra: detokenize(leftovers),
+  };
 }
 
 /** Composes the controls back into a command line for the server to tokenise. */
@@ -156,6 +204,13 @@ export function buildArgs(settings: ClaudeSettings): string {
     tokens.push(SKIP_PERMISSIONS);
   } else if (settings.permission) {
     tokens.push('--permission-mode', settings.permission);
+  }
+  // Selecting nothing is the same command line as selecting none, so it is
+  // written as `none` rather than left half-stated.
+  if (settings.mcp === 'none' || (settings.mcp === 'pick' && settings.mcpConfigs.length === 0)) {
+    tokens.push(STRICT_MCP);
+  } else if (settings.mcp === 'pick') {
+    tokens.push(STRICT_MCP, MCP_CONFIG, ...settings.mcpConfigs);
   }
   for (const { flag } of TOGGLES) {
     if (settings.toggles[flag]) tokens.push(flag);
