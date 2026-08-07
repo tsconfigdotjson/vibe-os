@@ -80,7 +80,7 @@ things and logs in through the machine's own sshd. These are the prerequisites:
 | `tmux` | wraps every window | windows become plain shells that die on reload, and **profiles launch no harness at all** |
 | `git` | projects and worktrees | no projects |
 | `gh` | pull requests, issues and reviews — *optional* | git still works; the GitHub API does not |
-| `claude` | the Claude harness | those profiles fall back to a shell |
+| `claude` | the Claude harness | those profiles open a window that closes again immediately |
 
 ```bash
 sudo apt update && sudo apt install -y openssh-server openssh-client tmux git gh
@@ -561,6 +561,18 @@ the point of the thing: it tints the window, its title bar and its dock entry,
 so three roles running at once are distinguishable without reading anything. A
 role window also gets a taller header with the role's name at the top of the
 hierarchy and the tmux session name demoted beneath it.
+
+**Quitting the harness closes the window.** A window opened as a role exists to
+run that role, so leaving Claude ends the session rather than dropping you into
+a shell in the worktree — which would leave a window behind to be tidied up by
+hand after every finished conversation. It closes everywhere at once, the
+browser tile and any terminal attached to the same session, because there is
+only one session underneath. ⟳ opens it again with the harness relaunched.
+
+The cost is that a harness which cannot start at all — the wrong command, or a
+PATH that does not reach it — closes the window before the error can be read.
+`vibe-os doctor` and `journalctl -u vibe-os` are where that shows up. If you
+want a shell in the worktree, that is what a plain-shell profile is for.
 
 Clicking a role that is already open **raises that window** rather than starting
 a second one — a workspace usually wants one of each. Alt-click when it does

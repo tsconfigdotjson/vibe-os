@@ -22,18 +22,22 @@ export function shellQuote(value: string): string {
 /**
  * The command a profile window starts its pane with.
  *
- * Two decisions are baked in here.
+ * **Quitting the harness ends the window.** tmux ends a session when its last
+ * pane exits, and nothing is appended here to keep the pane alive, so leaving
+ * Claude closes the window everywhere at once — the browser tile and any
+ * terminal attached to the same session. That is deliberate: a window opened as
+ * a role exists to run that role, and being dropped into a shell in the
+ * worktree instead means every finished conversation leaves a window behind to
+ * be tidied up by hand.
  *
- * The trailing `exec "$SHELL"` is not decoration. tmux ends a session when its
- * last pane exits, so without it, quitting Claude would take the window with
- * it — you would lose the desktop window because you finished a conversation.
- * Falling back to a shell in the worktree is what you actually want next.
+ * It cuts both ways and the other edge is worth knowing. A harness that fails
+ * to launch at all — the wrong command, or a PATH that does not reach it — also
+ * exits immediately, so the window closes before anyone can read the error.
+ * `vibe-os doctor` and the server log are where that shows up.
  *
- * Quoting happens at two levels and both are handled. Every token is quoted
+ * Quoting happens at two levels and both are handled: every token is quoted
  * individually so a flag can contain spaces and cannot contain a second
- * command; the whole string is quoted again by the caller, which is what keeps
- * `$SHELL` from being expanded by the outer login shell instead of by the shell
- * tmux runs this with.
+ * command, and the whole string is quoted again by the caller.
  */
 export function harnessCommand(profile: Profile): string | undefined {
   const executable = profile.harness === 'claude' ? 'claude' : profile.harness === 'custom' ? profile.command : null;
@@ -55,7 +59,7 @@ export function harnessCommand(profile: Profile): string | undefined {
    * a `.profile` is entitled to do surprising things like change directory,
    * which would undo the `-c` this window was started with.
    */
-  return `export PATH="$HOME/.local/bin:$PATH"; ${argv}; exec "\${SHELL:-/bin/sh}"`;
+  return `export PATH="$HOME/.local/bin:$PATH"; exec ${argv}`;
 }
 
 /**
