@@ -1157,7 +1157,12 @@ kbd {
   background: linear-gradient(180deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  border-right: 1px solid rgb(255 255 255 / 8%);
+  /* The divider is an inset shadow rather than a border because children paint
+     over it: that is what lets the active row reach the edge and cover it,
+     without the 1px negative margin that used to hang past the list and give
+     the sidebar a horizontal scrollbar (overflow-y:auto makes overflow-x
+     compute to auto, so a single pixel is enough). */
+  box-shadow: inset -1px 0 0 rgb(255 255 255 / 8%);
 }
 
 .sidebar-head {
@@ -1215,6 +1220,8 @@ kbd {
   margin: 0;
   padding: 0;
   overflow-y: auto;
+  /* Nothing here should ever scroll sideways; names ellipsize instead. */
+  overflow-x: clip;
   min-height: 0;
   scrollbar-width: thin;
   scrollbar-color: rgb(255 255 255 / 14%) transparent;
@@ -1224,28 +1231,28 @@ kbd {
   position: relative;
   display: flex;
   align-items: center;
-  margin-right: 8px;
 }
 
 /*
- * The active workspace reads as a tab joined to the surface it owns: the row
- * loses its right radius, runs to the sidebar's edge, and covers the divider,
- * so it literally connects to the terminals on the right. That says "these
- * windows belong to this row" in a way a coloured left edge never does — and it
- * carries no accent colour at all, so it does not compete with the per-window
- * hues that already mean something.
+ * Every row is the same shape — full-bleed to the sidebar's edge with a square
+ * right side — and only the fill changes. Hover is therefore a preview of what
+ * selecting looks like rather than a different silhouette, and nothing resizes
+ * under the cursor.
+ *
+ * The active row reads as a tab joined to the surface it owns: its fill is
+ * opaque, so it covers the divider and connects to the terminals on the right.
+ * A hover fill is translucent and lets the divider show through, so only the
+ * selected row fully joins. No accent colour is involved, which keeps this from
+ * competing with the per-window hues that already carry meaning.
  */
-.sidebar-list li[data-active] {
-  margin-right: 0;
-}
 
 .ws {
   flex: 1;
   min-width: 0;
   display: grid;
   gap: 1px;
-  padding: 8px 10px;
-  border-radius: 9px;
+  padding: 8px 12px 8px 10px;
+  border-radius: 9px 0 0 9px;
   text-align: left;
   transition: background-color 120ms ease;
 }
@@ -1255,12 +1262,8 @@ kbd {
 }
 
 .ws[data-active] {
-  /* Same plate the terminals sit on, so the row and the surface read as one
-     material. Square right edge and a 1px overhang cover the divider. */
+  /* The same plate the terminals sit on, so row and surface are one material. */
   background: var(--plate);
-  border-radius: 9px 0 0 9px;
-  margin-right: -1px;
-  padding-right: 12px;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%);
 }
 
@@ -1280,8 +1283,15 @@ kbd {
 }
 
 .ws-meta {
-  font-size: 10px;
-  color: var(--muted);
+  font-size: 10.5px;
+  /* --muted is for things you are meant to skim past; this is the one piece of
+     information that tells you which workspace you were last in, so it has to
+     be legible over the translucent sidebar. */
+  color: var(--text-dim);
+}
+
+.ws[data-active] .ws-meta {
+  color: var(--text-dim);
 }
 
 .ws-remove {
@@ -1307,46 +1317,41 @@ kbd {
   color: #fff;
 }
 
-.ws-confirm {
-  flex: 1;
-  min-width: 0;
-  padding: 9px 10px 10px;
+/*
+ * Confirming reuses the row's own box, so the workspace name stays exactly
+ * where it was and the block inherits the list's padding, radius and type. The
+ * only additions are the explanatory line and the buttons; the danger colour
+ * lives on the Delete button alone rather than ringing the whole container,
+ * which is a shape nothing else in the UI has.
+ */
+.ws-confirming {
+  cursor: default;
+  background: rgb(255 255 255 / 7%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 7%);
+  /* Breathing room so the block does not butt against the next workspace. */
+  margin: 3px 0 9px;
   border-radius: 9px;
-  background: rgb(255 255 255 / 5%);
-  border: 1px solid color-mix(in oklab, var(--err) 34%, transparent);
+  padding-right: 10px;
 }
 
-.ws-confirm p {
-  margin: 0;
-  font-size: 11.5px;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-.ws-confirm strong {
-  font-family: var(--mono);
-  font-weight: 600;
-}
-
-.ws-confirm-note {
-  display: block;
-  margin-top: 3px;
-  font-size: 10px;
+.ws-confirming .ws-meta {
   color: var(--text-dim);
+  white-space: normal;
+  line-height: 1.45;
 }
 
-.ws-confirm-actions {
+.ws-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 5px;
+  gap: 6px;
   margin-top: 9px;
 }
 
-/* Shared button shapes — the sidebar had one-off pills that matched nothing. */
+/* One button shape, matching the compact controls elsewhere in the chrome. */
 .btn {
-  padding: 5px 0;
-  border-radius: 7px;
-  font-size: 11px;
+  padding: 6px 0;
+  border-radius: 8px;
+  font-size: 11.5px;
   font-weight: 500;
   text-align: center;
   transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;

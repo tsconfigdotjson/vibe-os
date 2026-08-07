@@ -73,14 +73,14 @@ export function WorkspaceSidebar({
           {workspaces.map((ws) => (
             <li key={ws.id} data-active={ws.id === current || undefined}>
               {confirming === ws.id ? (
-                // The confirm replaces the row rather than floating over it:
-                // full-size targets, and no guessing which item it belongs to.
-                <div className="ws-confirm">
-                  <p>
-                    Delete <strong>{ws.name}</strong>?
-                  </p>
-                  <span className="ws-confirm-note">The branch is kept.</span>
-                  <div className="ws-confirm-actions">
+                // Deliberately built on the same `.ws` shape as a normal row, so
+                // the name does not move and the block keeps the list's padding,
+                // radius and type. Only the action bar is new — asking a
+                // question about a row should not redraw it as a foreign object.
+                <div className="ws ws-confirming">
+                  <span className="ws-name">{ws.name}</span>
+                  <span className="ws-meta">Delete this workspace? The branch is kept.</span>
+                  <div className="ws-actions">
                     <button type="button" className="btn btn-quiet" onClick={() => setConfirming(null)}>
                       Cancel
                     </button>
