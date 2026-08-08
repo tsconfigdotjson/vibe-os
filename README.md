@@ -575,8 +575,8 @@ PATH that does not reach it — closes the window before the error can be read.
 want a shell in the worktree, that is what a plain-shell profile is for.
 
 Clicking a role that is already open **raises that window** rather than starting
-a second one — a workspace usually wants one of each. Alt-click when it does
-not.
+a second one — a workspace usually wants one of each. When it does not, a live
+row grows a **+** on hover, which opens another.
 
 Flags are stored as a list of arguments, not a command line, and each is quoted
 on its own when the launch command is built. `--model 'opus; rm -rf /'` is one
@@ -821,17 +821,23 @@ move, drag any edge or corner to resize; the grid only appears while you are
 dragging, with the destination cell lit up. Double-click a title bar to fill the
 desktop.
 
-Chords use `alt`, not tmux's `ctrl-b` — the terminal has focus nearly all the
-time and `ctrl-b` belongs to the tmux session running inside it.
+There are no keyboard chords. The terminal has focus nearly all the time, and
+every key the desktop took for itself was a key the session underneath could not
+have — `ctrl-b` belongs to tmux, and `alt` is how a terminal sends the characters
+a Mac keyboard has no other way to type. Everything is a control you can see.
 
-| key | action |
-| --- | --- |
-| `alt` `t` | open a window |
-| `alt` `1`…`9` | raise window n |
-| `alt` `z` | maximise / restore |
-| `alt` `m` | minimise to the dock |
-| `alt` `w` | close the window and end its session |
-| `alt` `n` | create a workspace |
+**⊞ on the dock tiles the windows.** One fills the desktop, two go across, three
+are two across with a full-width one beneath, and four take the corners. Five is
+where it stops: past four every tile is narrower than a terminal wants to be, so
+the button greys out and nothing moves rather than arranging something nobody
+would work in. Minimised windows are left where they are — they were put away on
+purpose, so they are neither counted nor dragged back out.
+
+**The dock and the profile rail hide themselves.** Both are things you reach for
+rather than read, and between reaches they were two strips of screen a terminal
+could have had — the window surface now runs to the right edge. Push the pointer
+into the bottom edge and the dock comes back; into the right edge and the rail
+does. A hairline in each edge marks where.
 
 Closing a window ends the session behind it; **minimise** puts one away and
 keeps it running. Reloading or closing the tab keeps everything — persistence
@@ -1024,8 +1030,9 @@ subcommand.
   has been walked end to end on real hardware; those have not.
 - **No authentication by default.** The token gate exists and works; it is off
   until you pass `--token`. There is no multi-user story at all.
-- **No keyboard shortcuts for profiles.** The rail is click-only; `alt` plus a
-  digit already raises windows, and a second chord deserves its own thought.
+- **No keyboard shortcuts at all.** The desktop is click-only, deliberately —
+  see [The desktop](#the-desktop). Something that does not steal keys from the
+  terminal is worth having; it has not been designed yet.
 - **MCP servers can be picked but not added.** The editor lists what the box
   has and hands a profile the ones you choose; adding, editing and removing
   them is still `claude mcp` on the box, which is also the only place they are
