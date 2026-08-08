@@ -367,7 +367,7 @@ export function SshTerminal({
         fit();
 
         /*
-         * Ask whatever is running to paint itself.
+         * Ask whatever is running to paint itself, if it has not already.
          *
          * Reattaching to a session means arriving at a blank terminal: dtach
          * holds the pty and nothing else, so unlike tmux there is no stored
@@ -381,15 +381,36 @@ export function SshTerminal({
          * changed. So change it: one column narrower and back, which is a real
          * resize to the program and invisible here because the second one
          * restores the fitted size before anything is drawn at the odd width.
+         *
+         * Conditioned on the screen actually being empty, and retried, because
+         * the useful moment cannot be timed from here. `ready` means the WASM
+         * has a session, not that dtach has attached and the program has its
+         * SIGWINCH handler back — nudge before that and the resize lands on
+         * nobody, which is exactly what a first attempt at a fixed 120ms did.
+         * A delay long enough to be safe is also long enough to be seen.
+         *
+         * Emptiness rather than "has anything been written", because plenty is
+         * written that is not a repaint — connection notices, a stray newline —
+         * and any of it would call the problem solved while the window is still
+         * blank. Asking what is on screen tests the symptom itself, so a session
+         * that paints on its own is never nudged and one that stays dark is
+         * asked again.
          */
-        const nudge = window.setTimeout(() => {
-          if (disposed || term.cols < 2) return;
+        const blank = (): boolean => {
+          const buf = term.buffer.active;
+          for (let y = 0; y < term.rows; y++) {
+            if ((buf.getLine(buf.viewportY + y)?.translateToString(true) ?? '').trim() !== '') return false;
+          }
+          return true;
+        };
+        const repaint = (): void => {
+          if (disposed || term.cols < 2 || !blank()) return;
           term.resize(term.cols - 1, term.rows);
-          window.setTimeout(() => {
-            if (!disposed) fit();
-          }, 80);
-        }, 120);
-        nudges.push(nudge);
+          nudges.push(window.setTimeout(() => !disposed && fit(), 60));
+        };
+        for (const delay of [350, 1200, 2600]) {
+          nudges.push(window.setTimeout(repaint, delay));
+        }
 
         session.done
           .then((result) => {
