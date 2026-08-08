@@ -562,10 +562,23 @@ button {
  * did, which reads as the window breaking.
  *
  * Hidden rather than disabled, because the wheel still has to reach the
- * terminal: `overflow-y: scroll` is what makes that work, and removing it would
- * take real scrolling with it. This removes the visible control and the target
- * for a click; nothing about scrolling itself changes.
+ * terminal: the scrollable element is what makes that work, and taking it away
+ * would take real scrolling with it. This removes the visible control and the
+ * target for a click; nothing about scrolling itself changes.
+ *
+ * The bar is a `div`, not a native scrollbar. xterm 6 ships VS Code's scrollable
+ * element, which draws its own — so `scrollbar-width` and `::-webkit-scrollbar`
+ * have nothing to act on and silently do nothing, which is exactly how the first
+ * attempt at this failed. It is normally transparent and fades in on scroll or
+ * resize, so it turns up looking like a bug that comes and goes.
+ *
+ * The native rules stay underneath it: `xterm.css` still declares the viewport
+ * `overflow-y: scroll`, so a real scrollbar is one fallback away.
  */
+.win-term .xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
 .win-term .xterm .xterm-viewport {
   scrollbar-width: none;
 }
