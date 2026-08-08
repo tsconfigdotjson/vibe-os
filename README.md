@@ -72,7 +72,8 @@ the host key as changed after a rebuild.
 > These steps were walked end to end on a fresh OVHcloud VPS, and the two
 > things that broke there were both PATH: a forced command does not get a login
 > shell, and a systemd service does not get one either. Both are fixed. The
-> firewall section is the part still taken on trust.
+> firewall rules below have since been verified from outside the tailnet —
+> see [Firewall](#firewall-tailnet-only).
 
 ### What the box needs
 
@@ -210,6 +211,26 @@ sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw enable
 ```
+
+These rules were checked from a machine outside the tailnet, against the public
+address of a box running exactly this recipe: 22, 80, 443, 7681 and 8080 all
+time out rather than refusing, which is `default deny` dropping the packets. The
+same ports answer on the tailnet address at the same moment, so the box was up
+and it is specifically the public path that is shut.
+
+`vibe-os doctor` checks the local rules for you, and needs root to read them:
+
+```
+✓ firewall       ufw: incoming denied by default, tailnet and 41641/udp allowed
+                 (local rules only: your provider's firewall is separate, and
+                 proving a port is shut needs a packet from outside)
+```
+
+It reads ufw, and falls back to nftables and iptables. Two things it cannot do,
+which is why that caveat travels with the ✓ rather than being left to
+inference: it reads *configuration* rather than reachability, and it cannot see
+your provider's firewall at all. For reachability, probe the public address
+from somewhere else — that is the only test that answers the question.
 
 `41641/udp` is worth understanding rather than pasting: without it Tailscale
 still works, but falls back to relaying through DERP, which is slower. It is
@@ -1059,8 +1080,10 @@ subcommand.
 - **ACME is still untested.** `--domain` and the Let's Encrypt path have never
   run outside a test, and taking the [Tailscale path](#behind-tailscale) means
   never reaching for them — which is why they stay that way.
-- **The firewall rules are taken on trust.** Everything else in the VPS section
-  has been walked end to end on real hardware; those have not.
+- **IPv6 reachability is unverified.** The v4 rules were tested from outside
+  the tailnet and hold; the v6 rules mirror them exactly and the default input
+  policy is `DROP`, but that was read from the box rather than probed from a
+  network with IPv6.
 - **No authentication by default.** The token gate exists and works; it is off
   until you pass `--token`. There is no multi-user story at all.
 - **No keyboard shortcuts at all.** The desktop is click-only, deliberately —
