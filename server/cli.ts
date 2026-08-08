@@ -10,7 +10,7 @@ import { startServer } from './index.ts';
 import { runDoctor, homeFor, type Check } from './doctor.ts';
 import { IS_COMPILED } from './runtime.ts';
 import { openDb } from './db.ts';
-import { resolveTarget, listTargets, commandFor, liveSessions, type AttachTarget } from './attach.ts';
+import { resolveTarget, listTargets, commandFor, liveSessions, pendingHandoff, type AttachTarget } from './attach.ts';
 import { log, color } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
 
@@ -228,7 +228,9 @@ async function attach(config: Config, ref: string | undefined): Promise<number> 
     return 1;
   }
 
-  const target = ref ? resolveTarget(db, ref) : await pickTarget(config, targets);
+  // With no argument, prefer the window the desktop just handed over: the
+  // ssh:// link cannot name one, so this is what closes that gap.
+  const target = ref ? resolveTarget(db, ref) : (pendingHandoff(db) ?? (await pickTarget(config, targets)));
   if (ref && !target) {
     log.error(`no window called ${ref}`);
     console.log('');

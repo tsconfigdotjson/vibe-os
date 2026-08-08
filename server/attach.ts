@@ -142,6 +142,27 @@ export function resolveTarget(db: Db, refOrId: string): AttachTarget | undefined
 }
 
 /** Every window that could be attached to, newest workspace first. */
+/**
+ * The window waiting for a terminal, when exactly one is.
+ *
+ * Pressing "SSH session" in the desktop records the handoff before anyone has
+ * connected, so by the time a terminal arrives the server already knows where
+ * it was going. That is what lets `vibe-os attach` work with no argument and
+ * still land in the right place — which matters because the ssh:// link that
+ * opens the terminal cannot carry one. The scheme has nowhere to put a command,
+ * so the far side has to already know.
+ *
+ * Exactly one, never a guess. Two windows waiting is genuinely ambiguous and
+ * gets the picker, which is the honest answer rather than a coin toss.
+ */
+export function pendingHandoff(db: Db): AttachTarget | undefined {
+  const waiting = listTargets(db).filter((t) => {
+    const row = db.select({ handoff: windows.handoff }).from(windows).where(eq(windows.id, t.windowId)).all()[0];
+    return row?.handoff === 'ssh';
+  });
+  return waiting.length === 1 ? waiting[0] : undefined;
+}
+
 export function listTargets(db: Db): AttachTarget[] {
   return db
     .select({
@@ -337,12 +358,28 @@ export interface AttachInfo {
   /** Ways to reach this window, best first. See `attachForms`. */
   forms: AttachForm[];
   /**
+   * `ssh://user@host[:port]`, for handing the connection to the desktop.
+   *
+   * Deliberately carries no command, because the scheme has nowhere to put one:
+   * draft-ietf-secsh-scp-sftp-ssh-uri says a non-empty path SHOULD be ignored,
+   * and handlers do ignore it. So this opens a terminal logged into the box and
+   * stops there — `vibe-os attach` finishes the journey, and finishes it with no
+   * argument because the window is already marked as handed off.
+   */
+  sshUrl: string;
+  /**
    * The whole ssh-and-dtach command, depending on nothing on the far side.
    *
    * Not offered as a way to attach — it is far too long for anyone to want —
    * but it is what `/t/<ref>` executes, so it lives here with the rest.
    */
   raw: string;
+}
+
+/** `ssh://user@host[:port]` — what a terminal registers itself to open. */
+function sshUrl(endpoint: SshEndpoint): string {
+  const port = endpoint.port === 22 ? '' : `:${endpoint.port}`;
+  return `ssh://${encodeURIComponent(endpoint.user)}@${endpoint.host}${port}`;
 }
 
 /** `ssh -t [-p n] user@host …`, with the tail supplied by the caller. */
@@ -404,6 +441,7 @@ export function attachInfo(
     project: target.project,
     role: target.role,
     endpoint,
+    sshUrl: sshUrl(endpoint),
     forms: attachForms(
       `${sshPrefix(endpoint)} ${invocation()} attach ${target.ref}`,
       `sh -c "$(curl -sSL '${origin}/t/${target.ref}${query}')"`,

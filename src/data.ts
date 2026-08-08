@@ -92,6 +92,8 @@ export interface AttachInfo {
   endpoint: { user: string; host: string; port: number };
   /** Ways to reach the window, best first — the server decides the order. */
   forms: AttachForm[];
+  /** `ssh://user@host[:port]` — opens the desktop's terminal. Carries no command. */
+  sshUrl: string;
 }
 
 async function fetcher<T>(url: string): Promise<T> {

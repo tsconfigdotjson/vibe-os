@@ -2286,26 +2286,52 @@ button {
   text-align: center;
 }
 
-.handoff-cmd {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+/* The primary action, and the only one that needs to look like one: everything
+   else here is a fallback for a machine that cannot open the link. */
+.handoff-open {
+  align-self: center;
+  text-align: center;
+  min-width: 180px;
+  text-decoration: none;
 }
 
-.handoff-hint {
-  font-size: 10.5px;
+.handoff-inline {
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  background: rgb(0 0 0 / 32%);
+  font-size: 11px;
+  color: var(--text);
+  user-select: all;
+}
+
+/* Folded away, because it only matters when the link did nothing — and it
+   fails silently, so the question has to be askable rather than answered up
+   front for everyone who will never need it. */
+.handoff-fallback {
+  font-size: 11px;
   color: var(--muted);
 }
 
-.handoff-row {
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
+.handoff-fallback > summary {
+  cursor: pointer;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.handoff-fallback > summary:hover {
+  color: var(--text);
+}
+
+.handoff-hint {
+  margin: 8px 0 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .handoff-code {
-  flex: 1;
-  min-width: 0;
+  display: block;
   /* One line that scrolls, not a wrapped block: a command you are about to
      paste is easier to recognise when it keeps its shape. */
   overflow-x: auto;
@@ -2318,12 +2344,6 @@ button {
   line-height: 1.5;
   color: var(--text);
   user-select: all;
-}
-
-.handoff-copy {
-  flex: none;
-  padding: 0 10px;
-  font-size: 11px;
 }
 
 .handoff-error {

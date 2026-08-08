@@ -1,25 +1,37 @@
 import { useEffect, useState } from 'react';
 import { windowApi, type AttachInfo } from '../data';
-import { writeClipboard } from '../clipboard';
 
 /**
  * What a window shows while its terminal belongs to a real terminal.
  *
  * The desktop is not mirroring the session here — it has let go of it entirely,
  * the same way it does for a browser pop-out, because dtach sizes the pty to
- * its smallest client and a desktop tile would drag a full-screen terminal down
- * to its own width. So this is a placeholder with the one thing you need next:
- * the command that gets you there.
+ * whichever client arrived last and a desktop tile would drag a full-screen
+ * terminal down to its own width. So this is a placeholder with the one thing
+ * you need next: a way to get there.
  *
- * Two spellings of the same thing, whichever suits this server first — the
- * order comes from `attachForms` on the far side, because which one is nicer
- * depends on whether the token gate is on, and that is not the browser's
- * business to know.
+ * ── Why a link and then a command ────────────────────────────────────────────
+ * `ssh://` opens the terminal your machine already associates with it, which is
+ * the whole point — nothing to select, nothing to paste. What it cannot do is
+ * say *which* window: the scheme carries a user, a host and a port and nothing
+ * else. draft-ietf-secsh-scp-sftp-ssh-uri is explicit that a non-empty path
+ * SHOULD be ignored, and handlers ignore it.
+ *
+ * So the far side has to already know, and it does. Pressing "SSH session"
+ * records the handoff before anyone connects, so `vibe-os attach` with no
+ * argument lands in this window — no name to remember, no line to copy. Two
+ * short steps, neither of them clipboard work.
+ *
+ * The full command stays underneath as text. A scheme handler is a thing an OS
+ * either has or does not: macOS ships one, and elsewhere it is a registration
+ * somebody has to have done. When the link does nothing at all — and it fails
+ * silently, which is the unhelpful part — the line below is the way through,
+ * so it is selectable rather than hidden behind a button that may not work
+ * either: on plain HTTP there is no clipboard API to press.
  */
 export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclaim: () => void }) {
   const [info, setInfo] = useState<AttachInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,12 +44,7 @@ export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclai
     };
   }, [windowId]);
 
-  const copy = async (label: string, text: string) => {
-    if (await writeClipboard(text)) {
-      setCopied(label);
-      window.setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
-    }
-  };
+  const ssh = info?.forms.find((f) => f.key === 'command');
 
   return (
     <div className="popped handoff">
@@ -49,26 +56,23 @@ export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclai
         <p className="popped-hint">resolving…</p>
       ) : (
         <>
-          <p className="handoff-lead">Type either of these into a terminal:</p>
-          {/* Selectable text with a button beside it, never a button alone: on
-              plain HTTP the clipboard API does not exist and the fallback in
-              clipboard.ts can still be refused, and a command you cannot copy
-              is one you should at least be able to read. */}
-          {info.forms.map((form) => (
-            <div className="handoff-cmd" key={form.key}>
-              <div className="handoff-hint">{form.hint}</div>
-              <div className="handoff-row">
-                <code className="handoff-code">{form.command}</code>
-                <button
-                  type="button"
-                  className="ghost handoff-copy"
-                  onClick={() => void copy(form.key, form.command)}
-                >
-                  {copied === form.key ? 'copied' : 'copy'}
-                </button>
-              </div>
-            </div>
-          ))}
+          <a className="btn handoff-open" href={info.sshUrl}>
+            Open a terminal
+          </a>
+          <p className="handoff-lead">
+            then type <code className="handoff-inline">vibe-os attach</code> — it knows which window
+          </p>
+
+          {ssh ? (
+            <details className="handoff-fallback">
+              <summary>Nothing happened?</summary>
+              <p className="handoff-hint">
+                Your machine has no handler for <code className="handoff-inline">ssh://</code> links. This does the
+                whole thing in one:
+              </p>
+              <code className="handoff-code">{ssh.command}</code>
+            </details>
+          ) : null}
         </>
       )}
 
