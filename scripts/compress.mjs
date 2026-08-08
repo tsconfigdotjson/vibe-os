@@ -6,7 +6,7 @@
 // build time (rather than per-request) lets the server hand out a ~5MB body
 // with zero CPU cost at serve time.
 
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";

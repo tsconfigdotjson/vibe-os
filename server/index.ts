@@ -184,7 +184,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
       );
     }
 
-    const redirect = gate.consumeTokenParam(url, secure);
+    const redirect = gate.consumeTokenParam(req, url, secure);
     if (redirect) return redirect;
 
     const denied = gate.check(req);
