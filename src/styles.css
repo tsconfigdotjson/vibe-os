@@ -713,10 +713,17 @@ button {
   box-shadow:
     0 0 44px color-mix(in oklab, var(--accent) 30%, transparent),
     inset 0 0 30px color-mix(in oklab, var(--accent) 8%, transparent);
-  transition:
-    transform 90ms ease,
-    width 90ms ease,
-    height 90ms ease;
+  /*
+   * No transition on position or size, deliberately.
+   *
+   * This rectangle has one job: say which cell the window will land in. Its
+   * value only ever changes by a whole cell, so easing between two of them
+   * means that for the length of the ease it is sitting *between* grid lines —
+   * showing a destination that is not a cell, while the lines behind it say
+   * otherwise. Landing on the cell immediately is the honest reading, and it is
+   * what makes the snap feel like a snap. The overlay's own fade-in still
+   * covers its arrival, so nothing appears abruptly.
+   */
 }
 
 /* ── dock ─────────────────────────────────────────────────────────────── */
