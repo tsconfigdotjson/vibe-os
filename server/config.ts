@@ -18,6 +18,16 @@ export interface Config {
   acmeEmail?: string;
   acmeStaging: boolean;
 
+  /**
+   * The colour an installed PWA paints its window chrome with.
+   *
+   * Configurable because it is the fastest way to tell two installed instances
+   * apart. A laptop, a staging box and the real one all look identical in a
+   * dock otherwise, and installing the wrong one is the kind of mistake you
+   * only notice after typing into it.
+   */
+  themeColor: string;
+
   /** Where the WebSocket bridge points. Defaults to this machine's sshd. */
   sshHost: string;
   sshPort: number;
@@ -71,6 +81,7 @@ export const OPTION_SPEC = {
   token: { type: "string" as const },
   "no-token": { type: "boolean" as const },
   "cert-ttl": { type: "string" as const },
+  "theme-color": { type: "string" as const },
   sessions: { type: "boolean" as const },
   "no-sessions": { type: "boolean" as const },
   help: { type: "boolean" as const, short: "h" },
@@ -123,6 +134,28 @@ async function hasDtach(): Promise<boolean> {
       (err as { stdout?: string })?.stdout?.includes("dtach - version") === true
     );
   }
+}
+
+/**
+ * A CSS hex colour, which is all the manifest and the meta tag accept.
+ *
+ * Validated rather than passed through: it lands in a JSON document and in an
+ * HTML attribute, and "whatever the operator typed" is not something either
+ * should be asked to carry.
+ */
+/**
+ * A neutral slate, deliberately not the cyan accent.
+ *
+ * The accent already means "this is the thing you are pointing at" inside the
+ * app; reusing it for the window chrome would make the chrome look active.
+ */
+const DEFAULT_THEME = "#1c2128";
+
+function hexColour(value: unknown, label: string): string {
+  const colour = String(value).trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(colour))
+    throw new Error(`invalid --${label}: ${colour} is not a #rrggbb colour`);
+  return colour.toLowerCase();
 }
 
 /**
@@ -249,6 +282,10 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
       (values.email as string) ?? process.env.VIBE_OS_ACME_EMAIL ?? undefined,
     acmeStaging: flag(
       values["acme-staging"] ?? process.env.VIBE_OS_ACME_STAGING,
+    ),
+    themeColor: hexColour(
+      values["theme-color"] ?? process.env.VIBE_OS_THEME_COLOR ?? DEFAULT_THEME,
+      "theme-color",
     ),
     sshHost: String(
       values["ssh-host"] ?? process.env.VIBE_OS_SSH_HOST ?? "127.0.0.1",
