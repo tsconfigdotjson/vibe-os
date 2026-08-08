@@ -1,6 +1,4 @@
 import os from 'node:os';
-import Ss from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
 import type { Config } from './config.ts';
 import type { SshCa } from './ssh-ca.ts';
 import { fingerprint } from './ssh-ca.ts';
@@ -399,44 +397,6 @@ export function createApi(deps: ApiDeps) {
         }
       }
       return json({ error: 'method not allowed' }, 405);
-    }
-
-    /*
-     * ── diagnostics ──────────────────────────────────────────────────────────
-     *
-     * Takes the raw bytes a browser terminal received and writes them where
-     * they can be read over ssh, so a corrupted pane can be replayed offline
-     * against `capture-pane` until the two disagree on one escape sequence.
-     *
-     * This exists because that stream cannot be captured any other way. It only
-     * exists inside the page — after SSH has decrypted it and before xterm
-     * parses it — and a browser has no route to disk. Reading it back out of
-     * devtools does not work either: the console truncates, and a megabyte of
-     * escape sequences is not something to move by hand.
-     *
-     * Written by the page only when it was opened with `?debugterm`, so nothing
-     * is recorded unless somebody is deliberately debugging. The body is
-     * verbatim terminal output — the same bytes the session already sent to a client,
-     * carrying whatever was on screen — so it is capped, kept inside the state
-     * directory with the rest of vibe-os's private files, and worth deleting
-     * when an investigation ends.
-     */
-    if (p === '/api/debug/capture' && req.method === 'POST') {
-      const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
-      if (Number(req.headers.get('content-length') ?? 0) > MAX_CAPTURE_BYTES) {
-        return json({ error: 'capture too large' }, 413);
-      }
-      const bytes = new Uint8Array(await req.arrayBuffer());
-      if (bytes.byteLength > MAX_CAPTURE_BYTES) return json({ error: 'capture too large' }, 413);
-
-      const label = (url.searchParams.get('label') ?? 'capture').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
-      const dir = Ss.join(config.stateDir, 'debug');
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      const file = Ss.join(dir, `${label || 'capture'}-${bytes.byteLength}.bin`);
-      await writeFile(file, bytes, { mode: 0o600 });
-
-      log.info(`debug capture: ${bytes.byteLength} bytes → ${file}`);
-      return json({ ok: true, bytes: bytes.byteLength, file }, 201);
     }
 
     // ── wallpapers ───────────────────────────────────────────────────────────
