@@ -6,8 +6,11 @@ export interface DockProps {
   /** Display name per window id — the role's name when it has one. */
   labels: Record<string, string>;
   focused: string | null;
+  /** False when there is nothing to tile, or more windows than a tiling covers. */
+  canTile: boolean;
   onSpawn: () => void;
   onSelect: (id: string) => void;
+  onTile: () => void;
   onWallpaper: () => void;
 }
 
@@ -15,12 +18,25 @@ export interface DockProps {
  * The dock is the only way to open a window, and the only place every running
  * session is listed — including minimised ones, which have no other
  * representation on screen.
+ *
+ * It hides itself between reaches; see the auto-hiding chrome block in the
+ * stylesheet for why, and for what brings it back.
  */
-export function Dock({ windows, hues, labels, focused, onSpawn, onSelect, onWallpaper }: DockProps) {
+export function Dock({
+  windows,
+  hues,
+  labels,
+  focused,
+  canTile,
+  onSpawn,
+  onSelect,
+  onTile,
+  onWallpaper,
+}: DockProps) {
   return (
     <div className="dock-wrap">
       <nav className="dock glass" aria-label="Windows">
-        <button type="button" className="dock-spawn" onClick={onSpawn} title="Open a terminal  (alt t)">
+        <button type="button" className="dock-spawn" onClick={onSpawn} title="Open a terminal">
           <span className="dock-plus" aria-hidden="true">
             +
           </span>
@@ -52,6 +68,21 @@ export function Dock({ windows, hues, labels, focused, onSpawn, onSelect, onWall
         </ul>
 
         <span className="dock-rule" aria-hidden="true" />
+
+        <button
+          type="button"
+          className="dock-icon"
+          onClick={onTile}
+          disabled={!canTile}
+          title={
+            canTile
+              ? 'Tile the windows across the desktop'
+              : 'Tiling arranges up to four windows; past that they are left alone'
+          }
+          aria-label="Tile the windows"
+        >
+          ⊞
+        </button>
 
         <button type="button" className="dock-icon" onClick={onWallpaper} title="Change the wallpaper">
           ◑

@@ -23,9 +23,11 @@ const HARNESS_LABEL: Record<Profile['harness'], string> = {
  * The roles you can open a terminal as, down the right of the workspace.
  *
  * Deliberately the mirror of the workspace sidebar rather than a second dock:
- * the left rail is *where* you are working, this one is *as whom*. Both are
- * lists of things you switch between, so they read as a matched pair holding
- * the surface between them.
+ * the left rail is *where* you are working, this one is *as whom*.
+ *
+ * It parks off the right edge between uses and slides back when the pointer
+ * reaches that edge; the auto-hiding chrome block in the stylesheet has the
+ * reasoning. The windows get the width the rest of the time.
  */
 export function ProfileRail({
   profiles,
@@ -74,14 +76,8 @@ export function ProfileRail({
                   data-live={live || undefined}
                   data-active={profile.id === activeId || undefined}
                   disabled={!canOpen}
-                  // Alt-click is the "I meant a second one" escape hatch, and it
-                  // matches the alt chords the desktop already uses for windows.
-                  onClick={(event) => onOpen(profile.id, { forceNew: event.altKey })}
-                  title={
-                    live
-                      ? `Bring ${profile.name} to the front  (alt-click for another)`
-                      : `Open a terminal as ${profile.name}`
-                  }
+                  onClick={() => onOpen(profile.id, {})}
+                  title={live ? `Bring ${profile.name} to the front` : `Open a terminal as ${profile.name}`}
                 >
                   <span className="rail-chip" aria-hidden="true" />
                   <span className="rail-text">
@@ -89,6 +85,21 @@ export function ProfileRail({
                     <span className="rail-meta">{HARNESS_LABEL[profile.harness]}</span>
                   </span>
                 </button>
+                {/* Wanting a second window as the same role is rare enough to
+                    hide until you hover the row, but it is a button rather than
+                    a modifier click — a chord nobody can see is not an
+                    affordance, and on macOS alt is the terminal's anyway. */}
+                {live ? (
+                  <button
+                    type="button"
+                    className="rail-again"
+                    onClick={() => onOpen(profile.id, { forceNew: true })}
+                    title={`Open another ${profile.name}`}
+                    aria-label={`Open another ${profile.name}`}
+                  >
+                    +
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="rail-edit"

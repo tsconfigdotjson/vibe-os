@@ -84,6 +84,40 @@ export function clampRect(r: Rect, mode: DragMode = 'move'): Rect {
   };
 }
 
+const HALF_COL = GRID_COLS / 2;
+const HALF_ROW = GRID_ROWS / 2;
+
+/**
+ * The layouts the tile button can produce, indexed by how many windows are on
+ * screen.
+ *
+ * Deliberately a short list. One filling the desktop, two across, two across
+ * with a full-width one beneath, or the four corners — past that every tile is
+ * narrower than a terminal wants to be, so five windows and up are left exactly
+ * where they are rather than arranged into something nobody would work in.
+ */
+const TILINGS: Rect[][] = [
+  [{ col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS }],
+  [
+    { col: 0, row: 0, colSpan: HALF_COL, rowSpan: GRID_ROWS },
+    { col: HALF_COL, row: 0, colSpan: HALF_COL, rowSpan: GRID_ROWS },
+  ],
+  [
+    { col: 0, row: 0, colSpan: HALF_COL, rowSpan: HALF_ROW },
+    { col: HALF_COL, row: 0, colSpan: HALF_COL, rowSpan: HALF_ROW },
+    { col: 0, row: HALF_ROW, colSpan: GRID_COLS, rowSpan: HALF_ROW },
+  ],
+  [
+    { col: 0, row: 0, colSpan: HALF_COL, rowSpan: HALF_ROW },
+    { col: HALF_COL, row: 0, colSpan: HALF_COL, rowSpan: HALF_ROW },
+    { col: 0, row: HALF_ROW, colSpan: HALF_COL, rowSpan: HALF_ROW },
+    { col: HALF_COL, row: HALF_ROW, colSpan: HALF_COL, rowSpan: HALF_ROW },
+  ],
+];
+
+/** How many windows the tile button can arrange. */
+export const MAX_TILED = TILINGS.length;
+
 /**
  * Windows for the current workspace, backed by the API.
  *
@@ -225,6 +259,33 @@ export function useWindows(workspaceId: string | null) {
   );
 
   /**
+   * Everything actually on screen. Minimised windows are put away on purpose,
+   * so tiling neither counts them nor drags them back out.
+   */
+  const visible = useMemo(() => windows.filter((w) => !w.minimized), [windows]);
+
+  /**
+   * One local update for the whole layout, then a PATCH per window.
+   *
+   * Not `applyRow` in a loop: each of those hands SWR a function of the current
+   * rows, and four of them fired back to back can each be handed the same
+   * pre-tile rows — leaving three windows visibly where they were until a poll
+   * corrects them. The rects are known up front, so the whole arrangement is a
+   * single map over the list.
+   */
+  const tile = useCallback(() => {
+    const layout = TILINGS[visible.length - 1];
+    if (!layout) return;
+    const rects = new Map(visible.map((win, index) => [win.id, layout[index]]));
+    void mutate((current) => (current ?? []).map((r) => ({ ...r, ...rects.get(r.id) })), {
+      revalidate: false,
+    });
+    for (const [id, rect] of rects) {
+      void windowApi.patch(id, rect).catch(() => void mutate());
+    }
+  }, [visible, mutate]);
+
+  /**
    * Opens a profile — raising the window already running it rather than
    * starting a second one.
    *
@@ -329,6 +390,8 @@ export function useWindows(workspaceId: string | null) {
     raise,
     minimize,
     maximize,
+    tile,
+    tileable: visible.length > 0 && visible.length <= MAX_TILED,
     setStatus,
     setTitle: useCallback((id: string, title: string) => patchRuntime(id, { title }), [patchRuntime]),
   };

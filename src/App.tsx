@@ -113,6 +113,8 @@ function Desktop() {
     raise,
     minimize,
     maximize,
+    tile,
+    tileable,
     setStatus,
     setTitle,
   } = useWindows(workspaceId);
@@ -260,44 +262,6 @@ function Desktop() {
     },
     [remove, workspaceId],
   );
-
-  // Alt chords rather than tmux's ctrl-b: the terminal has focus almost all the
-  // time and ctrl-b belongs to the tmux session running inside it. Capture
-  // phase, because xterm claims keys on its own textarea first.
-  const onKeyDown = useCallback(
-    (event: KeyboardEvent) => {
-      if (!event.altKey || event.ctrlKey || event.metaKey) return;
-      const digit = Number(event.key);
-      if (Number.isInteger(digit) && digit >= 1 && digit <= 9) {
-        const win = windows[digit - 1];
-        if (win) {
-          raise(win.id);
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        return;
-      }
-      const actions: Record<string, () => void> = {
-        t: () => void spawn(),
-        w: () => focused && close(focused),
-        z: () => focused && maximize(focused),
-        m: () => focused && minimize(focused),
-        n: () => void onCreateWorkspace(),
-      };
-      const action = actions[event.key.toLowerCase()];
-      if (action) {
-        action();
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    },
-    [windows, focused, spawn, close, maximize, minimize, raise, onCreateWorkspace],
-  );
-
-  useEffect(() => {
-    window.addEventListener('keydown', onKeyDown, { capture: true });
-    return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
-  }, [onKeyDown]);
 
   if (error) {
     return (
@@ -451,9 +415,6 @@ function Desktop() {
                   <button type="button" className="ghost" onClick={onCreateWorkspace} disabled={wsBusy}>
                     Create a workspace
                   </button>
-                  <p className="empty-hint">
-                    or press <kbd>alt</kbd> <kbd>n</kbd>
-                  </p>
                 </>
               ) : (
                 <>
@@ -461,15 +422,17 @@ function Desktop() {
                   <button type="button" className="ghost" onClick={() => void spawn()}>
                     Open a terminal
                   </button>
-                  <p className="empty-hint">
-                    or press <kbd>alt</kbd> <kbd>t</kbd>
-                  </p>
                 </>
               )}
               </div>
             </div>
           ) : null}
         </main>
+
+        {/* The strip of screen that calls the rail back. It has to come before
+            the rail in the DOM: the stylesheet reveals one from the other with
+            a sibling selector, and there is no state to keep in sync. */}
+        <div className="rail-edge" aria-hidden="true" />
 
         <ProfileRail
           profiles={profiles}
@@ -483,13 +446,18 @@ function Desktop() {
         />
       </div>
 
+      {/* Same trick along the bottom edge, for the dock. */}
+      <div className="dock-edge" aria-hidden="true" />
+
       <Dock
         windows={windows}
         hues={hues}
         labels={labels}
         focused={focused}
+        canTile={tileable}
         onSpawn={() => void spawn()}
         onSelect={raise}
+        onTile={tile}
         onWallpaper={() => setPanelOpen(true)}
       />
 
