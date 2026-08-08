@@ -69,6 +69,20 @@ describe("windowCommand", () => {
     expect(cmd.slice(lockIdx, attachIdx)).toContain("dtach -n");
   });
 
+  /**
+   * The lock must not outlive the critical section.
+   *
+   * flock holds its lock on a file descriptor, and descriptors survive fork and
+   * exec — so without `-o` the daemonised `dtach -n` inherited it and held the
+   * lock for the life of the session, making every later login block forever.
+   * This is a one-character mistake with a symptom (a terminal that hangs just
+   * after "host key trusted") that points nowhere near the cause.
+   */
+  test("closes the lock descriptor so the session cannot inherit it", () => {
+    const cmd = windowCommand("vibe-w-1", "/tmp", config()) as string;
+    expect(cmd).toContain("flock -o ");
+  });
+
   test("still works where flock is absent", () => {
     const cmd = windowCommand("vibe-w-1", "/tmp", config()) as string;
     expect(cmd).toContain("command -v flock");

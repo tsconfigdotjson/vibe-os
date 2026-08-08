@@ -282,6 +282,9 @@ export async function killSession(
     () => {},
   );
   await rm(sock, { force: true }).catch(() => {});
+  // The lock file the forced command serialises on. Harmless to leave behind —
+  // `liveSessions` only looks at `.sock` — but it is ours to clean up.
+  await rm(`${sock}.lock`, { force: true }).catch(() => {});
 }
 
 /**

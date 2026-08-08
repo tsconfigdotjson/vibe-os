@@ -166,6 +166,16 @@ export function windowCommand(
    * with no name: unreachable, still holding a pty, invisible to `clientsOn`
    * and `killSession`, which can only ever find the socket that replaced it.
    *
+   * `-o` is not optional, and leaving it off is a trap worth naming. flock
+   * holds the lock on an open file descriptor, and a descriptor is inherited
+   * across fork and exec — so `dtach -n`, which daemonises and outlives the
+   * command, kept that descriptor and held the lock for the entire life of the
+   * session. Every later login then blocked on flock forever: the terminal got
+   * as far as verifying the host key and hung there, because sshd was still
+   * waiting for the forced command to produce anything. `-o` closes the
+   * descriptor in the child before the command runs, so the lock lasts exactly
+   * as long as the critical section and nothing spawned inside it inherits it.
+   *
    * flock is in util-linux and present on every distro this runs on, but the
    * fallback keeps a box without it working exactly as it did before rather
    * than failing to open a terminal at all.
@@ -181,7 +191,7 @@ export function windowCommand(
   return [
     `mkdir -p ${shellQuote(`${config.stateDir}/sessions`)}`,
     `if command -v flock > /dev/null 2>&1; then ` +
-      `flock ${shellQuote(`${sock}.lock`)} -c ${shellQuote(critical)}; ` +
+      `flock -o ${shellQuote(`${sock}.lock`)} -c ${shellQuote(critical)}; ` +
       `else { ${critical}; }; fi`,
     attach,
   ].join("; ");
