@@ -196,6 +196,8 @@ export interface HarnessInfo {
   aliases: string[];
   models: string[];
   permissionModes: string[];
+  /** Values `--effort` accepts, weakest first — the order is the scale. */
+  effortLevels: string[];
 }
 
 /**

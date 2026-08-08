@@ -29,6 +29,8 @@ export interface ClaudeSettings {
   longContext: boolean;
   /** '' for ask-every-time, 'skip' for the dangerous flag, or a mode name. */
   permission: string;
+  /** How hard the session thinks. Empty for whatever the harness defaults to. */
+  effort: string;
   mcp: McpMode;
   /** Paths passed to `--mcp-config`, in the order they will be given. */
   mcpConfigs: string[];
@@ -68,6 +70,22 @@ const MODE_LABELS: Record<string, string> = {
 };
 
 export const modeLabel = (mode: string): string => MODE_LABELS[mode] ?? mode;
+
+/**
+ * Readable names for the effort ladder. Unknown levels show raw, as modes do.
+ *
+ * `xhigh` is the one that actually needs this — it is the level you reach for
+ * on hard work, and it is the only one whose name does not say what it means.
+ */
+const EFFORT_LABELS: Record<string, string> = {
+  low: 'Low — quick and cheap',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Maximum — slowest, most thorough',
+};
+
+export const effortLabel = (level: string): string => EFFORT_LABELS[level] ?? level;
 
 /** Splits a command line into tokens the way a shell would, honouring quotes. */
 export function tokenize(input: string): string[] {
@@ -121,6 +139,7 @@ export function parseSettings(args: string[]): ClaudeSettings {
   let model = '';
   let longContext = false;
   let permission = '';
+  let effort = '';
   let strictMcp = false;
 
   for (let i = 0; i < args.length; i += 1) {
@@ -151,7 +170,7 @@ export function parseSettings(args: string[]): ClaudeSettings {
       toggles[token] = true;
       continue;
     }
-    if (token === '--model' || token === '--permission-mode') {
+    if (token === '--model' || token === '--permission-mode' || token === '--effort') {
       const value = args[i + 1];
       // A trailing valued flag with nothing after it is malformed; keep it in
       // `extra` rather than swallowing it, so the person can see and fix it.
@@ -163,6 +182,8 @@ export function parseSettings(args: string[]): ClaudeSettings {
       if (token === '--model') {
         longContext = value.endsWith('[1m]');
         model = longContext ? value.slice(0, -4) : value;
+      } else if (token === '--effort') {
+        effort = value;
       } else if (permission !== 'skip') {
         permission = value;
       }
@@ -186,6 +207,7 @@ export function parseSettings(args: string[]): ClaudeSettings {
     model,
     longContext,
     permission,
+    effort,
     mcp: strictMcp ? (mcpConfigs.length > 0 ? 'pick' : 'none') : 'all',
     mcpConfigs,
     toggles,
@@ -204,6 +226,9 @@ export function buildArgs(settings: ClaudeSettings): string {
     tokens.push(SKIP_PERMISSIONS);
   } else if (settings.permission) {
     tokens.push('--permission-mode', settings.permission);
+  }
+  if (settings.effort) {
+    tokens.push('--effort', settings.effort);
   }
   // Selecting nothing is the same command line as selecting none, so it is
   // written as `none` rather than left half-stated.

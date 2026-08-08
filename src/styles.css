@@ -933,6 +933,22 @@ button {
   animation: fade-in 150ms ease;
 }
 
+/*
+ * The scrollbar is styled here for the same reason the rails style theirs, and
+ * it shows up more here than anywhere else in the app.
+ *
+ * macOS has three scrollbar settings and defaults to "automatically based on
+ * mouse or trackpad", so an *unstyled* panel is a thin overlay that fades out
+ * on a laptop and a permanent pale trough the moment a mouse is plugged in —
+ * same build, same panel, two different-looking things depending on what is on
+ * the desk. These two lines pin it to the stylesheet either way.
+ *
+ * Deliberately no `scrollbar-gutter: stable`. It would hold the track's width
+ * whether or not a bar is drawn, which stops the form shifting when the panel
+ * grows past its own height — but that costs 13px of permanent dead space down
+ * the right of every panel too short to scroll, and this one is 360px wide.
+ * A transient shift on the rare harness switch beats a lopsided form always.
+ */
 .panel {
   position: fixed;
   right: 16px;
@@ -940,6 +956,9 @@ button {
   width: min(360px, calc(100vw - 32px));
   max-height: calc(100vh - var(--menubar) - 90px);
   overflow-y: auto;
+  overflow-x: clip;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 14%) transparent;
   z-index: 61;
   border-radius: 16px;
   padding: 14px;
