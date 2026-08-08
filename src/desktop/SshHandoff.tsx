@@ -50,8 +50,12 @@ export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclai
         <p className="popped-hint">resolving…</p>
       ) : (
         <>
-          <p className="handoff-lead">Type this into a terminal:</p>
-          {/* Selectable text with a button beside it, never a button alone: on
+          {/* Nothing introduces this. The heading above already says where the
+              window went, and a line telling you to type a command into a
+              terminal, directly under a line saying it went to a terminal, was
+              the same sentence twice.
+
+              Selectable text with a button beside it, never a button alone: on
               plain HTTP the clipboard API does not exist and the fallback in
               clipboard.ts can still be refused, and a command you cannot copy
               is one you should at least be able to read. */}
