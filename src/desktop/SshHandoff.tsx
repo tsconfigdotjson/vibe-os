@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react';
-import { windowApi, type AttachInfo } from '../data';
-import { writeClipboard } from '../clipboard';
+import { useEffect, useRef, useState } from "react";
+import { writeClipboard } from "../clipboard";
+
+/** How long the copy button stays in its "done" state. */
+const COPY_FEEDBACK_MS = 1_600;
+
+import { type AttachInfo, describeError, windowApi } from "../data";
 
 /**
  * What a window shows while its terminal belongs to a real terminal.
@@ -17,16 +21,27 @@ import { writeClipboard } from '../clipboard';
  * whole appeal of a short URL went with it. An ssh line names the window,
  * carries nothing secret, and is the thing you would have typed anyway.
  */
-export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclaim: () => void }) {
+export function SshHandoff({
+  windowId,
+  onReclaim,
+}: {
+  windowId: string;
+  onReclaim: () => void;
+}) {
   const [info, setInfo] = useState<AttachInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
+
+  // Cleared on unmount: clicking copy and then "Bring it back" inside the
+  // window used to set state on a component that was already gone.
+  const copyTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   useEffect(() => {
     let cancelled = false;
     windowApi.attachInfo(windowId).then(
       (next) => !cancelled && setInfo(next),
-      (err: unknown) => !cancelled && setError(err instanceof Error ? err.message : String(err)),
+      (err: unknown) => !cancelled && setError(describeError(err)),
     );
     return () => {
       cancelled = true;
@@ -34,10 +49,15 @@ export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclai
   }, [windowId]);
 
   const copy = async (text: string) => {
-    if (await writeClipboard(text)) {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    }
+    const ok = await writeClipboard(text);
+    // The panel's own comment anticipates plain-HTTP-to-an-IP, which is where
+    // this fails — and the button used to just do nothing there, silently.
+    setCopied(ok ? "ok" : "failed");
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(
+      () => setCopied(null),
+      COPY_FEEDBACK_MS,
+    );
   };
 
   return (
@@ -61,10 +81,25 @@ export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclai
               is one you should at least be able to read. */}
           <div className="handoff-row">
             <code className="handoff-code">{info.command}</code>
-            <button type="button" className="ghost handoff-copy" onClick={() => void copy(info.command)}>
-              {copied ? 'copied' : 'copy'}
+            <button
+              type="button"
+              className="ghost handoff-copy"
+              data-copied={copied ?? undefined}
+              onClick={() => void copy(info.command)}
+            >
+              {copied === "ok"
+                ? "copied"
+                : copied === "failed"
+                  ? "copy failed"
+                  : "copy"}
             </button>
           </div>
+          {copied === "failed" ? (
+            <p className="popped-hint">
+              The browser refused the clipboard — this page is not a secure
+              origin. Select the command above and copy it by hand.
+            </p>
+          ) : null}
         </>
       )}
 

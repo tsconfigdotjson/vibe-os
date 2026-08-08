@@ -4,13 +4,20 @@
 // between browsers and machines, and so switching workspaces can restore an
 // arrangement rather than rebuild one.
 
-import { eq, and, sql } from 'drizzle-orm';
-import { type Db, windows, workspaces, newId } from './db.ts';
+import { and, eq, sql } from "drizzle-orm";
+import {
+  DEFAULT_WINDOW_COLS,
+  DEFAULT_WINDOW_ROWS,
+  GRID_COLS,
+  GRID_ROWS,
+  MIN_WINDOW_COLS,
+  MIN_WINDOW_ROWS,
+} from "../shared/grid.ts";
+import { sessionName } from "./attach.ts";
+import { type Db, newId, windows, workspaces } from "./db.ts";
 
-export const GRID_COLS = 24;
-export const GRID_ROWS = 14;
-const MIN_COLS = 5;
-const MIN_ROWS = 4;
+const MIN_COLS = MIN_WINDOW_COLS;
+const MIN_ROWS = MIN_WINDOW_ROWS;
 
 export interface Geometry {
   col: number;
@@ -21,7 +28,12 @@ export interface Geometry {
   minimized?: boolean;
 }
 
-const clampInt = (v: unknown, lo: number, hi: number, fallback: number): number => {
+const clampInt = (
+  v: unknown,
+  lo: number,
+  hi: number,
+  fallback: number,
+): number => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
 };
@@ -33,9 +45,22 @@ const clampInt = (v: unknown, lo: number, hi: number, fallback: number): number 
  * a window is 900 cells wide would break every later render. Same rule as the
  * client: size is honoured first, then position is pulled into range.
  */
-export function sanitize(input: Partial<Geometry>, current?: Geometry): Geometry {
-  const colSpan = clampInt(input.colSpan ?? current?.colSpan, MIN_COLS, GRID_COLS, 11);
-  const rowSpan = clampInt(input.rowSpan ?? current?.rowSpan, MIN_ROWS, GRID_ROWS, 8);
+export function sanitize(
+  input: Partial<Geometry>,
+  current?: Geometry,
+): Required<Geometry> {
+  const colSpan = clampInt(
+    input.colSpan ?? current?.colSpan,
+    MIN_COLS,
+    GRID_COLS,
+    DEFAULT_WINDOW_COLS,
+  );
+  const rowSpan = clampInt(
+    input.rowSpan ?? current?.rowSpan,
+    MIN_ROWS,
+    GRID_ROWS,
+    DEFAULT_WINDOW_ROWS,
+  );
   return {
     colSpan,
     rowSpan,
@@ -74,7 +99,7 @@ function toRow(w: typeof windows.$inferSelect) {
     minimized: Boolean(w.minimized),
     promptDone: Boolean(w.promptDone),
     handoffSeen: Boolean(w.handoffSeen),
-    handoff: (w.handoff as 'ssh' | null) ?? null,
+    handoff: (w.handoff as "ssh" | null) ?? null,
   };
 }
 
@@ -85,8 +110,8 @@ function toRow(w: typeof windows.$inferSelect) {
  * back and nudges sideways instead.
  */
 function placement(index: number): Geometry {
-  const colSpan = 11;
-  const rowSpan = 8;
+  const colSpan = DEFAULT_WINDOW_COLS;
+  const rowSpan = DEFAULT_WINDOW_ROWS;
   const step = 2;
   const slots = Math.max(1, Math.floor((GRID_COLS - colSpan) / step));
   const lane = index % slots;
@@ -99,7 +124,11 @@ function placement(index: number): Geometry {
   });
 }
 
-export function createWindow(db: Db, workspaceId: string, profileId?: string | null) {
+export function createWindow(
+  db: Db,
+  workspaceId: string,
+  profileId?: string | null,
+) {
   const existing = listWindows(db, workspaceId);
 
   // Lowest unused index: it becomes part of the session name, which people read
@@ -129,7 +158,9 @@ export function createWindow(db: Db, workspaceId: string, profileId?: string | n
     })
     .run();
 
-  return getWindow(db, id)!;
+  const created = getWindow(db, id);
+  if (!created) throw new Error(`window ${id} vanished after insert`);
+  return created;
 }
 
 export function updateWindow(
@@ -157,7 +188,7 @@ export function updateWindow(
       row: geometry.row,
       colSpan: geometry.colSpan,
       rowSpan: geometry.rowSpan,
-      z: geometry.z!,
+      z: geometry.z,
       minimized: geometry.minimized ? 1 : 0,
       // One-way: the prompt band, once handed off, stays closed.
       promptDone: patch.promptDone || current.promptDone ? 1 : 0,
@@ -187,11 +218,20 @@ export function sessionNameFor(
   windowId: string,
 ): { session: string; cwd: string; profileId: string | null } | undefined {
   const row = db
-    .select({ idx: windows.idx, profileId: windows.profileId, name: workspaces.name, path: workspaces.path })
+    .select({
+      idx: windows.idx,
+      profileId: windows.profileId,
+      name: workspaces.name,
+      path: workspaces.path,
+    })
     .from(windows)
     .innerJoin(workspaces, eq(windows.workspaceId, workspaces.id))
     .where(and(eq(windows.id, windowId)))
     .get();
   if (!row) return undefined;
-  return { session: `vibe-${row.name}-${row.idx}`, cwd: row.path, profileId: row.profileId };
+  return {
+    session: sessionName(row.name, row.idx),
+    cwd: row.path,
+    profileId: row.profileId,
+  };
 }

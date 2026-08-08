@@ -1,5 +1,5 @@
-import path from 'node:path';
-import { EMBEDDED, BUILD_ID } from './assets.generated.ts';
+import path from "node:path";
+import { BUILD_ID, EMBEDDED } from "./assets.generated.ts";
 
 /**
  * Serves the built web app.
@@ -15,44 +15,50 @@ import { EMBEDDED, BUILD_ID } from './assets.generated.ts';
  */
 
 /** Vite writes content-hashed filenames into assets/, so those cache forever. */
+/**
+ * A year, the conventional "forever" for content-addressed assets. Shared with
+ * the wallpaper route, which serves hash-named files under the same rule.
+ */
+export const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
 const IMMUTABLE = /\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
 
 const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
   // Required for WebAssembly.instantiateStreaming to take the fast path.
-  '.wasm': 'application/wasm',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.avif': 'image/avif',
-  '.gif': 'image/gif',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.txt': 'text/plain; charset=utf-8',
+  ".wasm": "application/wasm",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 function cacheControl(urlPath: string): string {
-  if (IMMUTABLE.test(urlPath)) return 'public, max-age=31536000, immutable';
-  if (urlPath.endsWith('.html') || urlPath === '/') return 'no-cache';
+  if (IMMUTABLE.test(urlPath)) return IMMUTABLE_CACHE_CONTROL;
+  if (urlPath.endsWith(".html") || urlPath === "/") return "no-cache";
   // ssh.wasm and wasm_exec.js are big but do change on upgrade: let the client
   // keep them and revalidate cheaply with an ETag.
-  return 'public, max-age=0, must-revalidate';
+  return "public, max-age=0, must-revalidate";
 }
 
-function encodingsFor(req: Request): ('br' | 'gzip')[] {
-  const accept = req.headers.get('accept-encoding') ?? '';
-  const out: ('br' | 'gzip')[] = [];
-  if (/\bbr\b/.test(accept)) out.push('br');
-  if (/\bgzip\b/.test(accept)) out.push('gzip');
+function encodingsFor(req: Request): ("br" | "gzip")[] {
+  const accept = req.headers.get("accept-encoding") ?? "";
+  const out: ("br" | "gzip")[] = [];
+  if (/\bbr\b/.test(accept)) out.push("br");
+  if (/\bgzip\b/.test(accept)) out.push("gzip");
   return out;
 }
 
-const SUFFIX = { br: '.br', gzip: '.gz' } as const;
+const SUFFIX = { br: ".br", gzip: ".gz" } as const;
 
 export function createStaticServer(webRoot: string) {
   const root = path.resolve(webRoot);
@@ -68,8 +74,11 @@ export function createStaticServer(webRoot: string) {
     return (await Bun.file(onDisk).exists()) ? onDisk : null;
   };
 
-  return async function serveStatic(req: Request, urlPath: string): Promise<Response | null> {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return null;
+  return async function serveStatic(
+    req: Request,
+    urlPath: string,
+  ): Promise<Response | null> {
+    if (req.method !== "GET" && req.method !== "HEAD") return null;
 
     let decoded: string;
     try {
@@ -77,24 +86,25 @@ export function createStaticServer(webRoot: string) {
     } catch {
       return null;
     }
-    if (decoded.includes('\0')) return null;
+    if (decoded.includes("\0")) return null;
 
-    let relative = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
+    let relative = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
     let resolved = await locate(relative);
 
     // SPA fallback: anything that is not a real file and does not look like an
     // asset request gets index.html.
     if (!resolved) {
-      if (path.extname(relative) !== '') return null;
-      relative = 'index.html';
+      if (path.extname(relative) !== "") return null;
+      relative = "index.html";
       resolved = await locate(relative);
       if (!resolved) return null;
-      urlPath = '/index.html';
+      urlPath = "/index.html";
     }
 
-    const type = MIME[path.extname(relative).toLowerCase()] ?? 'application/octet-stream';
+    const type =
+      MIME[path.extname(relative).toLowerCase()] ?? "application/octet-stream";
 
-    let encoding: 'br' | 'gzip' | null = null;
+    let encoding: "br" | "gzip" | null = null;
     let body = Bun.file(resolved);
     for (const candidate of encodingsFor(req)) {
       const alt = await locate(`${relative}${SUFFIX[candidate]}`);
@@ -116,22 +126,23 @@ export function createStaticServer(webRoot: string) {
       const st = await Promise.resolve(body.stat()).catch(() => null);
       if (st) version = Math.floor(st.mtimeMs).toString(16);
     }
-    const etag = `W/"${size.toString(16)}-${version}${encoding ? `-${encoding}` : ''}"`;
+    const etag = `W/"${size.toString(16)}-${version}${encoding ? `-${encoding}` : ""}"`;
 
     const headers = new Headers({
-      'content-type': type,
-      'cache-control': cacheControl(urlPath),
+      "content-type": type,
+      "cache-control": cacheControl(urlPath),
       etag,
-      vary: 'Accept-Encoding',
+      vary: "Accept-Encoding",
     });
-    if (encoding) headers.set('content-encoding', encoding);
+    if (encoding) headers.set("content-encoding", encoding);
 
-    if (req.headers.get('if-none-match') === etag) {
+    if (req.headers.get("if-none-match") === etag) {
       return new Response(null, { status: 304, headers });
     }
 
-    headers.set('content-length', String(size));
-    if (req.method === 'HEAD') return new Response(null, { status: 200, headers });
+    headers.set("content-length", String(size));
+    if (req.method === "HEAD")
+      return new Response(null, { status: 200, headers });
     return new Response(body, { status: 200, headers });
   };
 }

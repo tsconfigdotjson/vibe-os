@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 // Generates server/assets.generated.ts, the manifest that lets
 // `bun build --compile` embed the whole web app inside the binary.
 //
@@ -6,21 +7,14 @@
 // written out rather than discovered at runtime. Filenames are content-hashed
 // by Vite and change every build, which is exactly why this is generated.
 
-import { readdir, stat } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import path from 'node:path';
+import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import { walk } from "./lib/walk.ts";
 
-const ROOT = path.resolve(import.meta.dir, '..');
-const WEB = path.join(ROOT, 'dist', 'web');
-const OUT = path.join(ROOT, 'server', 'assets.generated.ts');
-
-async function* walk(dir: string): AsyncGenerator<string> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) yield* walk(full);
-    else yield full;
-  }
-}
+const ROOT = path.resolve(import.meta.dir, "..");
+const WEB = path.join(ROOT, "dist", "web");
+const OUT = path.join(ROOT, "server", "assets.generated.ts");
 
 // A fresh clone has no dist/web yet, but static.ts imports this manifest
 // unconditionally — so emit an empty one rather than failing. postinstall runs
@@ -30,24 +24,36 @@ async function* walk(dir: string): AsyncGenerator<string> {
 const files: string[] = [];
 try {
   for await (const file of walk(WEB)) files.push(file);
-} catch {
-  console.log('vibe-os: no dist/web yet — writing an empty asset manifest');
+} catch (err) {
+  // Only "the directory is not there yet" is the ordinary case. Anything else —
+  // an unreadable subdirectory, EMFILE partway through — leaves `files` half
+  // populated, and reporting that as "empty" would embed a subset of the web
+  // app into the binary and serve 404s for the rest.
+  if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+  if (files.length > 0) {
+    throw new Error(
+      `vibe-os: asset walk failed after ${files.length} file(s); refusing to write a partial manifest`,
+    );
+  }
+  console.log("vibe-os: no dist/web yet — writing an empty asset manifest");
 }
 files.sort();
 
 // Embedded files have no usable mtime, so the ETag needs another source of
 // change. Hash the manifest (names + sizes) into a per-build id.
-const hash = createHash('sha256');
+const hash = createHash("sha256");
 for (const file of files) hash.update(`${file}:${(await stat(file)).size}`);
-const buildId = hash.digest('hex').slice(0, 12);
+const buildId = hash.digest("hex").slice(0, 12);
 
 const imports: string[] = [];
 const entries: string[] = [];
 
 files.forEach((file, i) => {
-  const urlPath = `/${path.relative(WEB, file).split(path.sep).join('/')}`;
+  const urlPath = `/${path.relative(WEB, file).split(path.sep).join("/")}`;
   const specifier = `../dist/web${urlPath}`;
-  imports.push(`import a${i} from ${JSON.stringify(specifier)} with { type: 'file' };`);
+  imports.push(
+    `import a${i} from ${JSON.stringify(specifier)} with { type: 'file' };`,
+  );
   entries.push(`  ${JSON.stringify(urlPath)}: a${i},`);
 });
 
@@ -57,12 +63,12 @@ const source = `// @ts-nocheck — generated; \`with { type: 'file' }\` imports 
 // Maps URL paths to files embedded in the compiled binary. Under \`bun run\`
 // these resolve to real paths on disk, so the same code serves both modes.
 
-${imports.join('\n')}
+${imports.join("\n")}
 
 export const BUILD_ID = ${JSON.stringify(buildId)};
 
 export const EMBEDDED: Record<string, string> = {
-${entries.join('\n')}
+${entries.join("\n")}
 };
 `;
 

@@ -20,19 +20,24 @@
 // process that owns the pty is `dtach -n <socket> …` and every attachment is
 // `dtach -a <socket>`. They differ in argv, so the two are never confused.
 
-import { execFile } from 'node:child_process';
-import { readdir, rm } from 'node:fs/promises';
-import { promisify } from 'node:util';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { and, eq, desc } from 'drizzle-orm';
-
-import { type Db, windows, workspaces, projects, profiles } from './db.ts';
-import type { Config } from './config.ts';
-import { getProfile } from './profiles.ts';
-import { windowCommand, socketPath } from './session.ts';
-import { IS_COMPILED } from './runtime.ts';
-import { log } from './log.ts';
+import { execFile } from "node:child_process";
+import { readdir, rm } from "node:fs/promises";
+import { promisify } from "node:util";
+import { and, desc, eq } from "drizzle-orm";
+import type { AttachInfo, Handoff, SshEndpoint } from "../shared/wire.ts";
+import type { Config } from "./config.ts";
+import {
+  type Db,
+  ID_PATTERN,
+  profiles,
+  projects,
+  windows,
+  workspaces,
+} from "./db.ts";
+import { log } from "./log.ts";
+import { getProfile } from "./profiles.ts";
+import { invocation } from "./runtime.ts";
+import { socketPath, windowCommand } from "./session.ts";
 
 const run = promisify(execFile);
 
@@ -55,7 +60,17 @@ const HANDOFF_GRACE_MS = 15 * 60_000;
 
 /** A ref is `<workspace>-<index>`; the `vibe-` session prefix is optional. */
 const REF = /^(?:vibe-)?([a-z0-9]+(?:-[a-z0-9]+)*)-(\d+)$/;
-const WINDOW_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The dtach session name for a window. `REF` above parses this back, so the two
+ * have to agree; keeping the prefix in one place is what makes that checkable.
+ */
+export const sessionName = (workspace: string, idx: number): string =>
+  `vibe-${workspace}-${idx}`;
+
+/** The same pair as a person types it, without the prefix. */
+export const sessionRef = (workspace: string, idx: number): string =>
+  `${workspace}-${idx}`;
 
 export interface AttachTarget {
   windowId: string;
@@ -70,12 +85,6 @@ export interface AttachTarget {
   role: string | null;
 }
 
-export interface SshEndpoint {
-  user: string;
-  host: string;
-  port: number;
-}
-
 // ── resolution ───────────────────────────────────────────────────────────────
 
 /**
@@ -86,8 +95,15 @@ export interface SshEndpoint {
  * the title bar. A ref is matched against the workspace name and window index
  * that produce the session name, so what you type is what the socket is called.
  */
-export function resolveTarget(db: Db, refOrId: string): AttachTarget | undefined {
-  const rows = db
+/**
+ * The join every attach lookup needs, and the mapping from a row to a target.
+ *
+ * Both were written out twice — same five tables, same seven fields — so a
+ * column added to `AttachTarget` had to be added in two places, and a miss
+ * compiled cleanly in whichever copy happened to leave the field optional.
+ */
+const targetRows = (db: Db) =>
+  db
     .select({
       windowId: windows.id,
       idx: windows.idx,
@@ -103,6 +119,27 @@ export function resolveTarget(db: Db, refOrId: string): AttachTarget | undefined
     .innerJoin(projects, eq(workspaces.projectId, projects.id))
     .leftJoin(profiles, eq(windows.profileId, profiles.id));
 
+type TargetRow = Awaited<
+  ReturnType<ReturnType<typeof targetRows>["all"]>
+>[number];
+
+const toTarget = (r: TargetRow): AttachTarget => ({
+  windowId: r.windowId,
+  ref: sessionRef(r.workspace, r.idx),
+  session: sessionName(r.workspace, r.idx),
+  cwd: r.cwd,
+  profileId: r.profileId,
+  workspace: r.workspace,
+  project: r.project,
+  role: r.role,
+});
+
+export function resolveTarget(
+  db: Db,
+  refOrId: string,
+): AttachTarget | undefined {
+  const rows = targetRows(db);
+
   /*
    * The id is tried first, and both are tried — the obvious shape, matching on
    * whichever pattern the input looks like, is wrong.
@@ -117,10 +154,17 @@ export function resolveTarget(db: Db, refOrId: string): AttachTarget | undefined
   const trimmed = refOrId.trim();
   const match = REF.exec(trimmed);
   const found =
-    (WINDOW_ID.test(trimmed) ? rows.where(eq(windows.id, trimmed)).all()[0] : undefined) ??
+    (ID_PATTERN.test(trimmed)
+      ? rows.where(eq(windows.id, trimmed)).all()[0]
+      : undefined) ??
     (match
       ? rows
-          .where(and(eq(workspaces.name, match[1]), eq(windows.idx, Number(match[2]))))
+          .where(
+            and(
+              eq(workspaces.name, match[1]),
+              eq(windows.idx, Number(match[2])),
+            ),
+          )
           // Workspace names are three random words, so a collision across two
           // projects is vanishingly unlikely rather than impossible. Preferring
           // the one you touched most recently beats picking by row order.
@@ -128,52 +172,26 @@ export function resolveTarget(db: Db, refOrId: string): AttachTarget | undefined
           .all()[0]
       : undefined);
 
-  if (!found) return undefined;
-  return {
-    windowId: found.windowId,
-    ref: `${found.workspace}-${found.idx}`,
-    session: `vibe-${found.workspace}-${found.idx}`,
-    cwd: found.cwd,
-    profileId: found.profileId,
-    workspace: found.workspace,
-    project: found.project,
-    role: found.role,
-  };
+  return found ? toTarget(found) : undefined;
 }
 
 /** Every window that could be attached to, newest workspace first. */
 export function listTargets(db: Db): AttachTarget[] {
-  return db
-    .select({
-      windowId: windows.id,
-      idx: windows.idx,
-      profileId: windows.profileId,
-      workspace: workspaces.name,
-      cwd: workspaces.path,
-      project: projects.name,
-      role: profiles.name,
-    })
-    .from(windows)
-    .innerJoin(workspaces, eq(windows.workspaceId, workspaces.id))
-    .innerJoin(projects, eq(workspaces.projectId, projects.id))
-    .leftJoin(profiles, eq(windows.profileId, profiles.id))
+  return targetRows(db)
     .orderBy(desc(workspaces.lastOpenedAt), windows.idx)
     .all()
-    .map((r) => ({
-      windowId: r.windowId,
-      ref: `${r.workspace}-${r.idx}`,
-      session: `vibe-${r.workspace}-${r.idx}`,
-      cwd: r.cwd,
-      profileId: r.profileId,
-      workspace: r.workspace,
-      project: r.project,
-      role: r.role,
-    }));
+    .map(toTarget);
 }
 
 /** The session command for a target — the same one the certificate forces. */
-export function commandFor(db: Db, config: Config, target: AttachTarget): string | undefined {
-  const profile = target.profileId ? getProfile(db, target.profileId) : undefined;
+export function commandFor(
+  db: Db,
+  config: Config,
+  target: AttachTarget,
+): string | undefined {
+  const profile = target.profileId
+    ? getProfile(db, target.profileId)
+    : undefined;
   return windowCommand(target.session, target.cwd, config, profile);
 }
 
@@ -187,15 +205,17 @@ export async function liveSessions(config: Config): Promise<Set<string>> {
     const live = new Set<string>();
     await Promise.all(
       names
-        .filter((n) => n.endsWith('.sock'))
+        .filter((n) => n.endsWith(".sock"))
         .map(async (n) => {
           // Writing nothing to the socket succeeds only if something is still
           // holding the other end, which is what separates a live session from
           // a socket a crashed one left behind.
-          const ok = await run('dtach', ['-p', `${dir}/${n}`], { timeout: 10_000 })
+          const ok = await run("dtach", ["-p", `${dir}/${n}`], {
+            timeout: 10_000,
+          })
             .then(() => true)
             .catch(() => false);
-          if (ok) live.add(n.replace(/\.sock$/, ''));
+          if (ok) live.add(n.replace(/\.sock$/, ""));
         }),
     );
     return live;
@@ -213,11 +233,19 @@ export async function liveSessions(config: Config): Promise<Set<string>> {
  * apart — matching too loosely here would mean "detach the clients" killing the
  * session along with them.
  */
-export async function clientsOn(config: Config, session: string): Promise<string[]> {
+export async function clientsOn(
+  config: Config,
+  session: string,
+): Promise<string[]> {
   const sock = socketPath(config, session);
   try {
-    const { stdout } = await run('pgrep', ['-f', `^dtach -a ${sock}`], { timeout: 10_000 });
-    return stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    const { stdout } = await run("pgrep", ["-f", `^dtach -a ${sock}`], {
+      timeout: 10_000,
+    });
+    return stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
   } catch {
     // pgrep exits non-zero when nothing matches.
     return [];
@@ -232,20 +260,53 @@ export async function clientsOn(config: Config, session: string): Promise<string
  * was running returns, and the ssh session ends. What was running is untouched
  * — the process that owns the pty is a different process and is left alone.
  */
-export async function detachClients(config: Config, session: string): Promise<void> {
+export async function detachClients(
+  config: Config,
+  session: string,
+): Promise<void> {
   const pids = await clientsOn(config, session);
   for (const pid of pids) {
-    await run('kill', [pid], { timeout: 10_000 }).catch(() => {
+    await run("kill", [pid], { timeout: 10_000 }).catch(() => {
       // Already gone between listing and killing; that is the desired state.
     });
   }
 }
 
 /** Ends a session outright: the program exits and the socket is removed. */
-export async function killSession(config: Config, session: string): Promise<void> {
+export async function killSession(
+  config: Config,
+  session: string,
+): Promise<void> {
   const sock = socketPath(config, session);
-  await run('pkill', ['-f', `^dtach -n ${sock}`], { timeout: 10_000 }).catch(() => {});
+  await run("pkill", ["-f", `^dtach -n ${sock}`], { timeout: 10_000 }).catch(
+    () => {},
+  );
   await rm(sock, { force: true }).catch(() => {});
+}
+
+/**
+ * Ends every dtach session belonging to a workspace.
+ *
+ * Call this *before* deleting the window rows. The name of a session is derived
+ * from the workspace name and the window index, so once the rows are gone there
+ * is no way left to name — and therefore no way to reach — the processes still
+ * holding those ptys. Three deletion paths in `projects.ts` used to drop the
+ * rows on their own and strand a dtach process plus its socket each time.
+ */
+export async function killWorkspaceSessions(
+  db: Db,
+  config: Config,
+  workspaceId: string,
+): Promise<void> {
+  const rows = db
+    .select({ idx: windows.idx, workspace: workspaces.name })
+    .from(windows)
+    .innerJoin(workspaces, eq(windows.workspaceId, workspaces.id))
+    .where(eq(windows.workspaceId, workspaceId))
+    .all();
+  await Promise.all(
+    rows.map((r) => killSession(config, sessionName(r.workspace, r.idx))),
+  );
 }
 
 // ── where to point ssh ───────────────────────────────────────────────────────
@@ -266,18 +327,22 @@ export async function killSession(config: Config, session: string): Promise<void
  */
 /** The host a person would type, from the same forwarded headers. */
 export function publicHost(req: Request, url: URL): string {
-  const first = (name: string) => req.headers.get(name)?.split(',')[0].trim();
-  return first('x-forwarded-host') || first('host') || url.host;
+  const first = (name: string) => req.headers.get(name)?.split(",")[0].trim();
+  return first("x-forwarded-host") || first("host") || url.host;
 }
 
 export function sshEndpoint(config: Config, requestHost: string): SshEndpoint {
   const advertised = config.sshAdvertise?.trim();
   if (advertised) {
-    const [host, port] = advertised.split(':');
+    const [host, port] = advertised.split(":");
     return { user: config.user, host, port: port ? Number(port) : 22 };
   }
   // Strips the web port, which is rarely 22 and never relevant to ssh.
-  return { user: config.user, host: requestHost.replace(/:\d+$/, ''), port: 22 };
+  return {
+    user: config.user,
+    host: requestHost.replace(/:\d+$/, ""),
+    port: 22,
+  };
 }
 
 /**
@@ -290,36 +355,19 @@ export function sshEndpoint(config: Config, requestHost: string): SshEndpoint {
  * and `~/.local/bin` in particular, has to be spelled out in full or the
  * command fails with "not found" for someone who can run it fine by hand.
  */
-export function invocation(): string {
-  const DEFAULT_PATH = new Set(['/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin']);
-  if (!IS_COMPILED) {
-    const entry = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'cli.ts');
-    return `${process.execPath} ${entry}`;
-  }
-  const exe = process.execPath;
-  return DEFAULT_PATH.has(path.dirname(exe)) ? path.basename(exe) : exe;
-}
-
-export interface AttachInfo {
-  ref: string;
-  session: string;
-  cwd: string;
-  workspace: string;
-  project: string;
-  role: string | null;
-  endpoint: SshEndpoint;
-  /** The one command that gets you there. */
-  command: string;
-}
-
 /** `ssh -t [-p n] user@host …`, with the tail supplied by the caller. */
 function sshPrefix(endpoint: SshEndpoint): string {
-  const port = endpoint.port === 22 ? '' : ` -p ${endpoint.port}`;
+  const port = endpoint.port === 22 ? "" : ` -p ${endpoint.port}`;
   return `ssh -t${port} ${endpoint.user}@${endpoint.host}`;
 }
 
 /** Everything the UI needs to offer an SSH handoff. */
-export function attachInfo(db: Db, config: Config, refOrId: string, requestHost: string): AttachInfo | undefined {
+export function attachInfo(
+  db: Db,
+  config: Config,
+  refOrId: string,
+  requestHost: string,
+): AttachInfo | undefined {
   const target = resolveTarget(db, refOrId);
   if (!target) return undefined;
   // Not used in the command, but a window with no way to launch anything is not
@@ -340,10 +388,7 @@ export function attachInfo(db: Db, config: Config, refOrId: string, requestHost:
   };
 }
 
-
 // ── the handoff ──────────────────────────────────────────────────────────────
-
-export type Handoff = 'ssh' | null;
 
 /**
  * Records that a window's terminal has been handed to an ssh client — or taken
@@ -354,7 +399,12 @@ export type Handoff = 'ssh' | null;
  * pop-out can gossip over a BroadcastChannel because both ends are documents on
  * one origin; an ssh client has no such channel, so the row is the record.
  */
-export async function setHandoff(db: Db, config: Config, windowId: string, mode: Handoff): Promise<boolean> {
+export async function setHandoff(
+  db: Db,
+  config: Config,
+  windowId: string,
+  mode: Handoff,
+): Promise<boolean> {
   const target = resolveTarget(db, windowId);
   if (!target) return false;
 
@@ -378,7 +428,11 @@ export async function setHandoff(db: Db, config: Config, windowId: string, mode:
      * handoff as soon as they catch up.
      */
     await detachClients(config, target.session);
-    log.info(mode === 'ssh' ? `handed ${target.session} to a terminal` : `reclaimed ${target.session} from its terminal`);
+    log.info(
+      mode === "ssh"
+        ? `handed ${target.session} to a terminal`
+        : `reclaimed ${target.session} from its terminal`,
+    );
   }
 
   db.update(windows)
@@ -408,7 +462,11 @@ export async function setHandoff(db: Db, config: Config, windowId: string, mode:
  */
 export async function reapStaleHandoffs(db: Db, config: Config): Promise<void> {
   if (!config.sessions) return;
-  const outstanding = db.select().from(windows).where(eq(windows.handoff, 'ssh')).all();
+  const outstanding = db
+    .select()
+    .from(windows)
+    .where(eq(windows.handoff, "ssh"))
+    .all();
   if (outstanding.length === 0) return;
 
   const now = Date.now();
@@ -419,15 +477,22 @@ export async function reapStaleHandoffs(db: Db, config: Config): Promise<void> {
     if ((await clientsOn(config, target.session)).length > 0) {
       // First sighting. From here on, an empty client list means it left.
       if (!row.handoffSeen) {
-        db.update(windows).set({ handoffSeen: 1 }).where(eq(windows.id, row.id)).run();
+        db.update(windows)
+          .set({ handoffSeen: 1 })
+          .where(eq(windows.id, row.id))
+          .run();
         log.debug(`${target.session} picked up by a terminal`);
       }
       continue;
     }
 
-    if (!row.handoffSeen && now - (row.handoffAt ?? 0) < HANDOFF_GRACE_MS) continue;
+    if (!row.handoffSeen && now - (row.handoffAt ?? 0) < HANDOFF_GRACE_MS)
+      continue;
 
-    db.update(windows).set({ handoff: null, handoffAt: null, handoffSeen: 0 }).where(eq(windows.id, row.id)).run();
+    db.update(windows)
+      .set({ handoff: null, handoffAt: null, handoffSeen: 0 })
+      .where(eq(windows.id, row.id))
+      .run();
     log.info(
       row.handoffSeen
         ? `${target.session} was left by its terminal — handing it back to the desktop`
@@ -435,3 +500,5 @@ export async function reapStaleHandoffs(db: Db, config: Config): Promise<void> {
     );
   }
 }
+
+export type { AttachInfo, Handoff, SshEndpoint };

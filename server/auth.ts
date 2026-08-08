@@ -10,23 +10,23 @@
 // `vibe-os` work on a private network without ceremony. Startup prints a
 // warning that says so. Pass --token to turn it on.
 
-import { timingSafeEqual, createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from "node:crypto";
 
-const COOKIE = 'vibe_os_session';
+const COOKIE = "vibe_os_session";
 
 function safeEqual(a: string, b: string): boolean {
   // Hash first so the comparison is over fixed-length buffers and cannot leak
   // length through timingSafeEqual's own length check.
-  const ha = createHash('sha256').update(a).digest();
-  const hb = createHash('sha256').update(b).digest();
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
   return timingSafeEqual(ha, hb);
 }
 
 function readCookie(req: Request, name: string): string | null {
-  const header = req.headers.get('cookie');
+  const header = req.headers.get("cookie");
   if (!header) return null;
-  for (const part of header.split(';')) {
-    const idx = part.indexOf('=');
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
     if (idx === -1) continue;
     if (part.slice(0, idx).trim() === name) {
       try {
@@ -40,7 +40,6 @@ function readCookie(req: Request, name: string): string | null {
 }
 
 export interface Gate {
-  readonly enabled: boolean;
   /** null when allowed, otherwise a reason string. */
   check(req: Request): string | null;
   /**
@@ -54,47 +53,45 @@ export interface Gate {
 export function createGate(token: string | null): Gate {
   if (!token) {
     return {
-      enabled: false,
       check: () => null,
       consumeTokenParam: () => null,
     };
   }
 
   const gate = {
-    enabled: true,
-
     check(req: Request): string | null {
       const cookie = readCookie(req, COOKIE);
       if (cookie && safeEqual(cookie, token)) return null;
 
-      const auth = req.headers.get('authorization');
-      if (auth?.startsWith('Bearer ') && safeEqual(auth.slice(7), token)) return null;
+      const auth = req.headers.get("authorization");
+      if (auth?.startsWith("Bearer ") && safeEqual(auth.slice(7), token))
+        return null;
 
-      return 'missing or invalid session token';
+      return "missing or invalid session token";
     },
 
     consumeTokenParam(url: URL, secure: boolean): Response | null {
-      const supplied = url.searchParams.get('token');
+      const supplied = url.searchParams.get("token");
       if (!supplied) return null;
       if (!safeEqual(supplied, token)) {
-        return new Response('invalid token\n', {
+        return new Response("invalid token\n", {
           status: 403,
-          headers: { 'content-type': 'text/plain; charset=utf-8' },
+          headers: { "content-type": "text/plain; charset=utf-8" },
         });
       }
-      url.searchParams.delete('token');
+      url.searchParams.delete("token");
       const attrs = [
         `${COOKIE}=${encodeURIComponent(token)}`,
-        'Path=/',
-        'HttpOnly',
-        'SameSite=Lax',
-        'Max-Age=31536000',
-        secure ? 'Secure' : '',
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Lax",
+        "Max-Age=31536000",
+        secure ? "Secure" : "",
       ].filter(Boolean);
       return new Response(null, {
         status: 302,
         headers: {
-          'set-cookie': attrs.join('; '),
+          "set-cookie": attrs.join("; "),
           location: `${url.pathname}${url.search}`,
         },
       });

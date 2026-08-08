@@ -55,6 +55,12 @@ Two differences from a VPS worth knowing:
   the host cannot reach. Use `localhost:8080`. On a VPS that same line prints
   the address you actually want.
 
+The port is published on **loopback only** (`127.0.0.1:8080:80`), because this
+compose file runs without a token — and an unauthenticated vibe-os is a shell
+for anyone who can reach the port. To open it up, either tunnel
+(`ssh -L 8080:localhost:8080 box`), publish it on a tailnet address, or bind it
+publicly *and* uncomment `command: ["--token"]`.
+
 Both volumes are worth keeping: `vibe-home` preserves the CA and your work,
 `vibe-sshd` preserves the container's host keys so the browser does not report
 the host key as changed after a rebuild.
@@ -954,7 +960,19 @@ bun run build        # web app + precompressed assets + embedded manifest
 bun run dev          # Vite on :5173, proxying to a vibe-os on :7681
 bun run dev:server   # the server with --hot, on :7681
 bun run compile      # standalone binaries into dist/bin
+
+bun run check        # lint + typecheck + tests, the same three CI runs
+bun run lint         # Biome: recommended rules, and formatting
+bun run lint:fix     # apply the safe fixes
+bun run format       # formatting only
+bun test             # bun's runner; specs sit in test/ and beside the code
 ```
+
+Formatting and linting are [Biome](https://biomejs.dev) with the recommended
+rule set and Prettier's defaults — double quotes, 80 columns, two-space indent.
+Nothing is switched off in `biome.json`; the handful of exceptions are
+`biome-ignore` comments that say why in place. GitHub Actions runs `lint`,
+`typecheck` and `test` on every push and pull request.
 
 The server is TypeScript run directly by Bun — there is no build step for it.
 `bun run compile` bundles it with every web asset into one executable per
@@ -966,7 +984,15 @@ compiled here, so no Go toolchain is needed on the target machine. The build
 precompresses it to about 4.5 MB of brotli, which is what visitors actually
 download.
 
-Pin a version with `SSHTERM_VERSION=v0.8.3 bun run fetch-wasm`.
+The release is pinned in `scripts/fetch-wasm.mjs` and the tarball's SHA-256 is
+verified before anything is extracted — this file becomes the SSH client that
+generates and holds every private key in the browser, so it is not something to
+track `latest` on. To move it, set `SSHTERM_VERSION` to the new tag, run the
+script, and copy the checksum it prints into `PINNED`:
+
+```bash
+SSHTERM_VERSION=v0.9.0 bun run fetch-wasm    # warns, and prints the sha256
+```
 
 ### Stack
 
@@ -976,6 +1002,8 @@ Pin a version with `SSHTERM_VERSION=v0.8.3 bun run fetch-wasm`.
 | storage | SQLite (`bun:sqlite`) via drizzle-orm, idempotent DDL at startup |
 | browser | React 19, Vite, xterm.js v6, SWR for polling |
 | ssh | `ssh.wasm` in the tab; `ssh-keygen` and `ssh-keyscan` on the host |
+| shared | `shared/` — wire types, the grid, and the argv tokeniser, imported by both halves |
+| checks | Biome, `tsc`, `bun test`, run together by `bun run check` |
 
 Two runtime dependencies: `drizzle-orm` and `acme-client`. Everything else is a
 devDependency and ends up bundled.
@@ -986,7 +1014,9 @@ devDependency and ends up bundled.
 same WASM instance, and an unhandled Go panic in *any* window kills the runtime
 for *all* of them. Two consequences: teardown order in `SshTerminal.tsx` is
 load-bearing (close the session and await `done` *before* disposing the
-Terminal — React StrictMode's double-mount hits this immediately), and
+Terminal — React StrictMode's double-mount hits this immediately, and that await
+is raced against a timeout because a panicked runtime never settles `done` at
+all), and
 `onRuntimeDead` exists so the app can rebuild every window instead of leaving
 you with terminals that look fine but accept no input.
 

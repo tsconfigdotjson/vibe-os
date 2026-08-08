@@ -5,14 +5,26 @@
 // responder is just another route on the plain-HTTP server, checked before the
 // redirect-to-HTTPS rule.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 
-import { log } from './log.ts';
+import { writeAtomic } from "./fsx.ts";
+import { describeError, log } from "./log.ts";
 
-const CHALLENGE_PREFIX = '/.well-known/acme-challenge/';
+const CHALLENGE_PREFIX = "/.well-known/acme-challenge/";
 /** Renew this far ahead of expiry. Let's Encrypt certs last 90 days. */
 const RENEW_BEFORE_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * How often to re-check expiry once running.
+ *
+ * The renewal logic below only ever ran at startup, and the documented
+ * deployment is a systemd unit with `Restart=on-failure` plus a compose file
+ * with `restart: unless-stopped` — neither of which restarts a *healthy*
+ * process. A box left alone therefore served an expired certificate on day 90.
+ * Twice a day is far more often than a 30-day window needs, and costs one
+ * `readCertificateInfo` per tick when there is nothing to do.
+ */
+const RENEW_CHECK_MS = 12 * 60 * 60 * 1000;
 
 export interface TlsMaterial {
   key: string;
@@ -31,7 +43,7 @@ export class Acme {
   private readonly dir: string;
 
   constructor(private readonly options: AcmeOptions) {
-    this.dir = path.join(options.stateDir, 'tls');
+    this.dir = path.join(options.stateDir, "tls");
   }
 
   /** Serves the HTTP-01 challenge. Must run before any HTTPS redirect. */
@@ -39,32 +51,51 @@ export class Acme {
     if (!url.pathname.startsWith(CHALLENGE_PREFIX)) return null;
     const token = url.pathname.slice(CHALLENGE_PREFIX.length);
     const value = this.challenges.get(token);
-    if (!value) return new Response('not found\n', { status: 404, headers: { 'content-type': 'text/plain' } });
-    return new Response(value, { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+    if (!value)
+      return new Response("not found\n", {
+        status: 404,
+        headers: { "content-type": "text/plain" },
+      });
+    return new Response(value, {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+    });
   }
 
   private paths() {
     return {
       key: path.join(this.dir, `${this.options.domain}.key`),
       cert: path.join(this.dir, `${this.options.domain}.crt`),
-      account: path.join(this.dir, 'account.key'),
+      account: path.join(this.dir, "account.key"),
     };
   }
 
   private async loadExisting(): Promise<TlsMaterial | null> {
     const { key, cert } = this.paths();
     try {
-      const [keyPem, certPem] = await Promise.all([readFile(key, 'utf8'), readFile(cert, 'utf8')]);
-      const acme = await import('acme-client');
+      const [keyPem, certPem] = await Promise.all([
+        readFile(key, "utf8"),
+        readFile(cert, "utf8"),
+      ]);
+      const acme = await import("acme-client");
       const info = acme.crypto.readCertificateInfo(certPem);
       const remaining = info.notAfter.getTime() - Date.now();
       if (remaining > RENEW_BEFORE_MS) {
-        log.ok(`reusing TLS certificate for ${this.options.domain} (expires ${info.notAfter.toISOString().slice(0, 10)})`);
+        log.ok(
+          `reusing TLS certificate for ${this.options.domain} (expires ${info.notAfter.toISOString().slice(0, 10)})`,
+        );
         return { key: keyPem, cert: certPem };
       }
-      log.info(`TLS certificate for ${this.options.domain} expires soon — renewing`);
+      log.info(
+        `TLS certificate for ${this.options.domain} expires soon — renewing`,
+      );
       return null;
-    } catch {
+    } catch (err) {
+      // ENOENT is the ordinary "no certificate yet" path. Anything else — a
+      // permission problem, a truncated file, a corrupt PEM — must not silently
+      // become a reissue: that burns Let's Encrypt's duplicate-certificate rate
+      // limit, and under a restart loop it burns it fast.
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
       return null;
     }
   }
@@ -76,13 +107,16 @@ export class Acme {
     const existing = await this.loadExisting();
     if (existing) return existing;
 
-    const acme = await import('acme-client');
+    const acme = await import("acme-client");
     const { key: keyPath, cert: certPath, account: accountPath } = this.paths();
 
+    // Same reasoning as loadExisting, but the stakes are higher: overwriting
+    // this key discards the Let's Encrypt registration itself.
     let accountKey: Buffer;
     try {
       accountKey = await readFile(accountPath);
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
       accountKey = await acme.crypto.createPrivateKey();
       await writeFile(accountPath, accountKey, { mode: 0o600 });
     }
@@ -95,15 +129,17 @@ export class Acme {
     });
 
     log.info(`requesting a TLS certificate for ${this.options.domain}…`);
-    const [privateKey, csr] = await acme.crypto.createCsr({ commonName: this.options.domain });
+    const [privateKey, csr] = await acme.crypto.createCsr({
+      commonName: this.options.domain,
+    });
 
     const cert = await client.auto({
       csr,
       email: this.options.email,
       termsOfServiceAgreed: true,
-      challengePriority: ['http-01'],
+      challengePriority: ["http-01"],
       challengeCreateFn: async (_authz, challenge, keyAuthorization) => {
-        if (challenge.type !== 'http-01') return;
+        if (challenge.type !== "http-01") return;
         this.challenges.set(challenge.token, keyAuthorization);
       },
       challengeRemoveFn: async (_authz, challenge) => {
@@ -113,10 +149,34 @@ export class Acme {
 
     const keyPem = privateKey.toString();
     const certPem = cert.toString();
-    await writeFile(keyPath, keyPem, { mode: 0o600 });
-    await writeFile(certPath, certPem, { mode: 0o644 });
+    await writeAtomic(keyPath, keyPem, 0o600);
+    await writeAtomic(certPath, certPem, 0o644);
     log.ok(`TLS certificate issued for ${this.options.domain}`);
 
     return { key: keyPem, cert: certPem };
+  }
+
+  /**
+   * Re-checks expiry on a timer and hands back fresh material when it rolls.
+   *
+   * Returns a stop function. The caller owns swapping the running HTTPS server
+   * over; this only decides when there is something to swap to.
+   */
+  watch(onRenewed: (material: TlsMaterial) => void): () => void {
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          if (await this.loadExisting()) return; // still good
+          onRenewed(await this.obtain());
+        } catch (err) {
+          // A failed renewal must not take the process down: the current
+          // certificate is still being served and there are 30 days of runway.
+          log.warn(`TLS renewal check failed: ${describeError(err)}`);
+        }
+      })();
+    }, RENEW_CHECK_MS);
+    // Do not hold the event loop open just for this.
+    timer.unref?.();
+    return () => clearInterval(timer);
   }
 }

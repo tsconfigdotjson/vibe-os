@@ -1,36 +1,43 @@
-import path from 'node:path';
-import { writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { execFile, spawnSync } from 'node:child_process';
-import { createInterface } from 'node:readline/promises';
-import { promisify } from 'node:util';
-
-import { parseCliArgs, resolveConfig, savePersisted, type Config } from './config.ts';
-import { startServer } from './index.ts';
-import { runDoctor, homeFor, type Check } from './doctor.ts';
-import { IS_COMPILED } from './runtime.ts';
-import { openDb } from './db.ts';
-import { resolveTarget, listTargets, commandFor, liveSessions, type AttachTarget } from './attach.ts';
-import { log, color } from './log.ts';
-import pkg from '../package.json' with { type: 'json' };
+import { execFile, spawnSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { createInterface } from "node:readline/promises";
+import { promisify } from "node:util";
+import pkg from "../package.json" with { type: "json" };
+import {
+  type AttachTarget,
+  commandFor,
+  listTargets,
+  liveSessions,
+  resolveTarget,
+} from "./attach.ts";
+import {
+  type Config,
+  parseCliArgs,
+  resolveConfig,
+  savePersisted,
+} from "./config.ts";
+import { openDb } from "./db.ts";
+import { type Check, homeFor, runDoctor } from "./doctor.ts";
+import { startServer } from "./index.ts";
+import { color, describeError, log } from "./log.ts";
+import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
 
 const run = promisify(execFile);
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PKG_ROOT = path.resolve(HERE, '..');
-const ENTRY = path.join(PKG_ROOT, 'server', 'cli.ts');
 const BUN = process.execPath;
+/** Plenty for the fetcher's few lines of progress output. */
+const FETCH_OUTPUT_LIMIT = 1024 * 1024;
 
 const HELP = `
-  ${color.bold('vibe-os')} — a terminal multiplexer in the browser
+  ${color.bold("vibe-os")} — a terminal multiplexer in the browser
 
-  ${color.bold('Usage')}
+  ${color.bold("Usage")}
     vibe-os [start]              serve the UI and the SSH bridge
     vibe-os attach [window]      attach a real terminal to a window's session
     vibe-os doctor               check this machine is ready
     vibe-os install-service      write and enable a systemd unit (needs root)
     vibe-os fetch-wasm           (re)download the SSH WASM runtime
 
-  ${color.bold('Options')}
+  ${color.bold("Options")}
     --port <n>          HTTP port (default 80)
     --host <addr>       bind address (default 0.0.0.0)
     --domain <fqdn>     provision a Let's Encrypt certificate and serve HTTPS
@@ -70,40 +77,53 @@ function version(): string {
  * up somewhere else.
  */
 function printChecks(checks: Check[]): number {
-  console.log('');
+  console.log("");
   let failed = 0;
   for (const check of checks) {
-    const mark = check.ok ? color.green('\u2713') : check.fatal ? color.red('\u2717') : color.yellow('!');
+    const mark = check.ok
+      ? color.green("\u2713")
+      : check.fatal
+        ? color.red("\u2717")
+        : color.yellow("!");
     if (!check.ok && check.fatal) failed += 1;
-    console.log(`  ${mark} ${color.bold(check.label.padEnd(14))} ${color.dim(check.detail)}`);
-    if (!check.ok && check.fix) console.log(`    ${' '.repeat(14)} ${color.cyan(check.fix)}`);
+    console.log(
+      `  ${mark} ${color.bold(check.label.padEnd(14))} ${color.dim(check.detail)}`,
+    );
+    if (!check.ok && check.fix)
+      console.log(`    ${" ".repeat(14)} ${color.cyan(check.fix)}`);
   }
-  console.log('');
+  console.log("");
   if (failed > 0) {
-    console.log(`  ${color.red(`${failed} blocking problem${failed === 1 ? '' : 's'}.`)} vibe-os will not work until these are fixed.`);
-    console.log('');
+    console.log(
+      `  ${color.red(`${failed} blocking problem${failed === 1 ? "" : "s"}.`)} vibe-os will not work until these are fixed.`,
+    );
+    console.log("");
   }
   return failed > 0 ? 1 : 0;
 }
 
-const UNIT_PATH = '/etc/systemd/system/vibe-os.service';
+const UNIT_PATH = "/etc/systemd/system/vibe-os.service";
 
 async function installService(config: Config, argv: string[]): Promise<number> {
   if (process.getuid?.() !== 0) {
-    log.error('install-service must run as root (try: sudo vibe-os install-service …)');
+    log.error(
+      "install-service must run as root (try: sudo vibe-os install-service …)",
+    );
     return 1;
   }
 
   // Forward the flags used here to the unit so the service behaves identically.
-  const forwarded = argv.filter((a) => a !== 'install-service');
+  const forwarded = argv.filter((a) => a !== "install-service");
 
   const user = process.env.SUDO_USER ?? config.user;
-  if (!user || user === 'unknown' || user === 'root') {
+  if (!user || user === "unknown" || user === "root") {
     log.error(
-      `refusing to install a unit that runs as ${user || 'an unknown user'} — ` +
-        'windows would get a root shell, and the CA line would land in root\'s home.',
+      `refusing to install a unit that runs as ${user || "an unknown user"} — ` +
+        "windows would get a root shell, and the CA line would land in root's home.",
     );
-    log.error('run this with sudo from your own account, or pass --user <name>.');
+    log.error(
+      "run this with sudo from your own account, or pass --user <name>.",
+    );
     return 1;
   }
 
@@ -142,7 +162,7 @@ Environment=HOME=${home}
 Environment=PATH=${home}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NODE_ENV=production
 WorkingDirectory=${home}
-ExecStart=${command} start${forwarded.length ? ` ${forwarded.join(' ')}` : ''}
+ExecStart=${command} start${forwarded.length ? ` ${forwarded.join(" ")}` : ""}
 Restart=on-failure
 RestartSec=2
 # Lets an unprivileged user bind port 80 without setcap on the node binary.
@@ -157,13 +177,13 @@ WantedBy=multi-user.target
   await writeFile(UNIT_PATH, unit, { mode: 0o644 });
   log.ok(`wrote ${UNIT_PATH}`);
 
-  await run('systemctl', ['daemon-reload']);
-  await run('systemctl', ['enable', '--now', 'vibe-os']);
-  log.ok('enabled and started vibe-os.service');
-  console.log('');
-  console.log(`  logs:    ${color.cyan('journalctl -u vibe-os -f')}`);
-  console.log(`  restart: ${color.cyan('systemctl restart vibe-os')}`);
-  console.log('');
+  await run("systemctl", ["daemon-reload"]);
+  await run("systemctl", ["enable", "--now", "vibe-os"]);
+  log.ok("enabled and started vibe-os.service");
+  console.log("");
+  console.log(`  logs:    ${color.cyan("journalctl -u vibe-os -f")}`);
+  console.log(`  restart: ${color.cyan("systemctl restart vibe-os")}`);
+  console.log("");
   return 0;
 }
 
@@ -178,27 +198,37 @@ WantedBy=multi-user.target
  * Returns undefined when the person backs out, which must not be confused with
  * a failure — quitting the picker is a perfectly good outcome.
  */
-async function pickTarget(config: Config, targets: AttachTarget[]): Promise<AttachTarget | undefined> {
+async function pickTarget(
+  config: Config,
+  targets: AttachTarget[],
+): Promise<AttachTarget | undefined> {
   const live = await liveSessions(config);
-  console.log('');
-  console.log(`  ${color.bold(color.cyan('vibe-os'))} ${color.dim(`· ${targets.length} window${targets.length === 1 ? '' : 's'}`)}`);
-  console.log('');
+  console.log("");
+  console.log(
+    `  ${color.bold(color.cyan("vibe-os"))} ${color.dim(`· ${targets.length} window${targets.length === 1 ? "" : "s"}`)}`,
+  );
+  console.log("");
   targets.forEach((t, i) => {
     const n = color.bold(String(i + 1).padStart(3));
-    const state = live.has(t.session) ? color.green('live') : color.dim('idle');
-    const role = t.role ?? color.dim('terminal');
-    console.log(`  ${n}  ${state}  ${t.ref.padEnd(28)} ${role.padEnd(22)} ${color.dim(`${t.project}/${t.workspace}`)}`);
+    const state = live.has(t.session) ? color.green("live") : color.dim("idle");
+    const role = t.role ?? color.dim("terminal");
+    console.log(
+      `  ${n}  ${state}  ${t.ref.padEnd(28)} ${role.padEnd(22)} ${color.dim(`${t.project}/${t.workspace}`)}`,
+    );
   });
-  console.log('');
+  console.log("");
 
   // Closed before anything is spawned: dtach needs the terminal in raw mode and
   // readline holds it in canonical mode until it lets go.
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`  attach [1-${targets.length}, q to quit]: `);
+  const answer = await rl.question(
+    `  attach [1-${targets.length}, q to quit]: `,
+  );
   rl.close();
 
   const choice = Number(answer.trim());
-  if (!Number.isInteger(choice) || choice < 1 || choice > targets.length) return undefined;
+  if (!Number.isInteger(choice) || choice < 1 || choice > targets.length)
+    return undefined;
   return targets[choice - 1];
 }
 
@@ -211,9 +241,14 @@ async function pickTarget(config: Config, targets: AttachTarget[]): Promise<Atta
  * dtach invocation here instead would be one line shorter and would drift away
  * from the browser's the first time either changed.
  */
-async function attach(config: Config, ref: string | undefined): Promise<number> {
+async function attach(
+  config: Config,
+  ref: string | undefined,
+): Promise<number> {
   if (!config.sessions) {
-    log.error('attach needs dtach — this server runs plain login shells (--no-sessions)');
+    log.error(
+      "attach needs dtach — this server runs plain login shells (--no-sessions)",
+    );
     return 1;
   }
 
@@ -224,16 +259,20 @@ async function attach(config: Config, ref: string | undefined): Promise<number> 
     // Almost always the cause: sshd logged you in as someone else, so the
     // state directory resolved to a different home and vibe-os made an empty
     // database there rather than reading the one with the windows in it.
-    log.error(`open the desktop and make one, or check you are logged in as the user vibe-os runs as`);
+    log.error(
+      `open the desktop and make one, or check you are logged in as the user vibe-os runs as`,
+    );
     return 1;
   }
 
-  const target = ref ? resolveTarget(db, ref) : await pickTarget(config, targets);
+  const target = ref
+    ? resolveTarget(db, ref)
+    : await pickTarget(config, targets);
   if (ref && !target) {
     log.error(`no window called ${ref}`);
-    console.log('');
+    console.log("");
     for (const t of targets) console.log(`    ${t.ref}`);
-    console.log('');
+    console.log("");
     return 1;
   }
   if (!target) return 0;
@@ -255,7 +294,7 @@ async function attach(config: Config, ref: string | undefined): Promise<number> 
    * exit code needs to be ours. There is no exec() to replace the process with
    * in a Bun binary, so this one stays resident and idle for the session.
    */
-  const child = spawnSync('/bin/sh', ['-c', command], { stdio: 'inherit' });
+  const child = spawnSync("/bin/sh", ["-c", command], { stdio: "inherit" });
   if (child.error) {
     log.error(`could not start the session: ${child.error.message}`);
     return 1;
@@ -264,17 +303,17 @@ async function attach(config: Config, ref: string | undefined): Promise<number> 
 }
 
 export async function main(argv: string[]): Promise<number> {
-  let parsed;
+  let parsed: ReturnType<typeof parseCliArgs>;
   try {
     parsed = parseCliArgs(argv);
   } catch (err) {
-    log.error(err instanceof Error ? err.message : String(err));
+    log.error(describeError(err));
     console.log(HELP);
     return 1;
   }
 
   const { values, positionals } = parsed;
-  const command = positionals[0] ?? 'start';
+  const command = positionals[0] ?? "start";
 
   if (values.help) {
     console.log(HELP);
@@ -285,27 +324,50 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const config = await resolveConfig(values);
+  // Inside the same guard as arg parsing: `--port abc` and `--bogus` are the
+  // same class of mistake, and only one of them used to get a readable answer.
+  // `resolveConfig` throws for any unparsable numeric flag, and main.ts has no
+  // catch, so the other one printed a raw unhandled-rejection stack trace.
+  let config: Awaited<ReturnType<typeof resolveConfig>>;
+  try {
+    config = await resolveConfig(values);
+  } catch (err) {
+    log.error(describeError(err));
+    console.log(HELP);
+    return 1;
+  }
 
   switch (command) {
-    case 'start': {
+    case "start": {
       // A generated token is only useful if it survives a restart.
-      if (config.token) await savePersisted(config.stateDir, { token: config.token });
+      if (config.token)
+        await savePersisted(config.stateDir, { token: config.token });
       await startServer(config);
       return -1; // keep running
     }
-    case 'attach':
+    case "attach":
       return attach(config, positionals[1]);
-    case 'doctor':
+    case "doctor":
       return printChecks(await runDoctor(config));
-    case 'install-service':
+    case "install-service":
       return installService(config, argv);
-    case 'fetch-wasm': {
-      const script = path.join(PKG_ROOT, 'scripts', 'fetch-wasm.mjs');
-      await run(process.execPath, [script], { maxBuffer: 1024 * 1024 }).then(({ stdout }) => process.stdout.write(stdout));
+    case "fetch-wasm": {
+      // A standalone binary carries the wasm inside it: there is no script on
+      // disk to run (FETCH_WASM points into the virtual /$bunfs root) and
+      // process.execPath is this binary rather than bun, so running it would
+      // re-invoke vibe-os with a path as its subcommand, hit the default arm,
+      // and surface as an unhandled rejection.
+      if (IS_COMPILED) {
+        log.info("this build has the SSH runtime embedded — nothing to fetch");
+        return 0;
+      }
+      const { stdout } = await run(process.execPath, [FETCH_WASM], {
+        maxBuffer: FETCH_OUTPUT_LIMIT,
+      });
+      process.stdout.write(stdout);
       return 0;
     }
-    case 'help':
+    case "help":
       console.log(HELP);
       return 0;
     default:

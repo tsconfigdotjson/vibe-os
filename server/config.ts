@@ -1,11 +1,10 @@
-import { parseArgs } from 'node:util';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import path from 'node:path';
-import os from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs, promisify } from "node:util";
 
 const run = promisify(execFile);
 
@@ -49,39 +48,38 @@ export interface Config {
    * from whether dtach is installed, unless forced.
    */
   sessions: boolean;
-
-  open: boolean;
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** server/config.ts -> dist/web */
-const DEFAULT_WEB_ROOT = path.resolve(HERE, '..', 'dist', 'web');
+const DEFAULT_WEB_ROOT = path.resolve(HERE, "..", "dist", "web");
 
 export const OPTION_SPEC = {
-  port: { type: 'string' as const },
-  host: { type: 'string' as const },
-  domain: { type: 'string' as const },
-  'tls-port': { type: 'string' as const },
-  email: { type: 'string' as const },
-  'acme-staging': { type: 'boolean' as const },
-  'ssh-host': { type: 'string' as const },
-  'ssh-port': { type: 'string' as const },
-  'ssh-advertise': { type: 'string' as const },
-  user: { type: 'string' as const },
-  'state-dir': { type: 'string' as const },
-  'web-root': { type: 'string' as const },
-  workspace: { type: 'string' as const },
-  token: { type: 'string' as const },
-  'no-token': { type: 'boolean' as const },
-  'cert-ttl': { type: 'string' as const },
-  sessions: { type: 'boolean' as const },
-  'no-sessions': { type: 'boolean' as const },
-  open: { type: 'boolean' as const },
-  help: { type: 'boolean' as const, short: 'h' },
-  version: { type: 'boolean' as const, short: 'v' },
+  port: { type: "string" as const },
+  host: { type: "string" as const },
+  domain: { type: "string" as const },
+  "tls-port": { type: "string" as const },
+  email: { type: "string" as const },
+  "acme-staging": { type: "boolean" as const },
+  "ssh-host": { type: "string" as const },
+  "ssh-port": { type: "string" as const },
+  "ssh-advertise": { type: "string" as const },
+  user: { type: "string" as const },
+  "state-dir": { type: "string" as const },
+  "web-root": { type: "string" as const },
+  workspace: { type: "string" as const },
+  token: { type: "string" as const },
+  "no-token": { type: "boolean" as const },
+  "cert-ttl": { type: "string" as const },
+  sessions: { type: "boolean" as const },
+  "no-sessions": { type: "boolean" as const },
+  help: { type: "boolean" as const, short: "h" },
+  version: { type: "boolean" as const, short: "v" },
 };
 
-export type RawOptions = Partial<Record<keyof typeof OPTION_SPEC, string | boolean>>;
+export type RawOptions = Partial<
+  Record<keyof typeof OPTION_SPEC, string | boolean>
+>;
 
 /**
  * Makes a bare `--token` mean "generate one".
@@ -95,13 +93,16 @@ export type RawOptions = Partial<Record<keyof typeof OPTION_SPEC, string | boole
  */
 function allowBareToken(argv: string[]): string[] {
   return argv.map((arg, i) => {
-    if (arg !== '--token') return arg;
+    if (arg !== "--token") return arg;
     const next = argv[i + 1];
-    return next === undefined || next.startsWith('-') ? '--token=' : arg;
+    return next === undefined || next.startsWith("-") ? "--token=" : arg;
   });
 }
 
-export function parseCliArgs(argv: string[]): { values: RawOptions; positionals: string[] } {
+export function parseCliArgs(argv: string[]): {
+  values: RawOptions;
+  positionals: string[];
+} {
   const { values, positionals } = parseArgs({
     args: allowBareToken(argv),
     options: OPTION_SPEC,
@@ -115,17 +116,36 @@ async function hasDtach(): Promise<boolean> {
   try {
     // dtach exits non-zero with no mode, so its usage text is the liveness
     // check; `--help` is not a flag it accepts either.
-    await run('dtach', ['--help'], { timeout: 5_000 });
+    await run("dtach", ["--help"], { timeout: 5_000 });
     return true;
   } catch (err) {
-    return (err as { stdout?: string })?.stdout?.includes('dtach - version') === true;
+    return (
+      (err as { stdout?: string })?.stdout?.includes("dtach - version") === true
+    );
   }
+}
+
+/**
+ * A Unix username, as `ssh-keygen -n` will read it.
+ *
+ * That flag takes a comma-separated *list*, so `--user vibe,root` would quietly
+ * mint certificates valid for root as well. Operator-supplied rather than
+ * attacker-supplied, so this is a footgun rather than a hole — but the check is
+ * one line, and the same value is interpolated into doctor's `-C user=…` spec,
+ * where a comma corrupts the connection string too.
+ */
+function userName(value: unknown, label: string): string {
+  const name = String(value);
+  if (!/^[a-z_][a-z0-9_-]*\$?$/.test(name))
+    throw new Error(`invalid --${label}: ${name}`);
+  return name;
 }
 
 function num(value: unknown, fallback: number, label: string): number {
   if (value === undefined) return fallback;
   const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) throw new Error(`invalid --${label}: ${String(value)}`);
+  if (!Number.isFinite(n) || n < 0)
+    throw new Error(`invalid --${label}: ${String(value)}`);
   return n;
 }
 
@@ -134,59 +154,103 @@ interface PersistedConfig {
   [key: string]: unknown;
 }
 
-export async function loadPersisted(stateDir: string): Promise<PersistedConfig> {
+export async function loadPersisted(
+  stateDir: string,
+): Promise<PersistedConfig> {
   try {
-    return JSON.parse(await readFile(path.join(stateDir, 'config.json'), 'utf8')) as PersistedConfig;
+    return JSON.parse(
+      await readFile(path.join(stateDir, "config.json"), "utf8"),
+    ) as PersistedConfig;
   } catch {
     return {};
   }
 }
 
-export async function savePersisted(stateDir: string, patch: PersistedConfig): Promise<void> {
+export async function savePersisted(
+  stateDir: string,
+  patch: PersistedConfig,
+): Promise<void> {
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const current = await loadPersisted(stateDir);
-  await writeFile(path.join(stateDir, 'config.json'), `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  await writeFile(
+    path.join(stateDir, "config.json"),
+    `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  );
 }
 
 export async function resolveConfig(values: RawOptions): Promise<Config> {
-  const stateDir = String(values['state-dir'] ?? process.env.VIBE_OS_STATE_DIR ?? path.join(os.homedir(), '.vibe-os'));
+  const stateDir = String(
+    values["state-dir"] ??
+      process.env.VIBE_OS_STATE_DIR ??
+      path.join(os.homedir(), ".vibe-os"),
+  );
   const persisted = await loadPersisted(stateDir);
 
   // --token with no value means "generate one"; --no-token means "no gate".
   let token: string | null;
-  if (values['no-token']) {
+  if (values["no-token"]) {
     token = null;
-  } else if (typeof values.token === 'string' && values.token.length > 0) {
+  } else if (typeof values.token === "string" && values.token.length > 0) {
     token = values.token;
   } else if (process.env.VIBE_OS_TOKEN) {
     token = process.env.VIBE_OS_TOKEN;
-  } else if (values.token === '' || values.token === true) {
-    token = persisted.token ?? randomBytes(24).toString('base64url');
+  } else if (values.token === "" || values.token === true) {
+    token = persisted.token ?? randomBytes(24).toString("base64url");
   } else {
     token = persisted.token ?? null;
   }
 
-  const sessions = values['no-sessions'] ? false : values.sessions ? true : await hasDtach();
+  const sessions = values["no-sessions"]
+    ? false
+    : values.sessions
+      ? true
+      : await hasDtach();
 
   return {
-    port: num(values.port ?? process.env.VIBE_OS_PORT, 80, 'port'),
-    host: String(values.host ?? process.env.VIBE_OS_HOST ?? '0.0.0.0'),
-    domain: (values.domain as string) ?? process.env.VIBE_OS_DOMAIN ?? undefined,
-    tlsPort: num(values['tls-port'], 443, 'tls-port'),
-    acmeEmail: (values.email as string) ?? process.env.VIBE_OS_ACME_EMAIL ?? undefined,
-    acmeStaging: Boolean(values['acme-staging'] ?? process.env.VIBE_OS_ACME_STAGING),
-    sshHost: String(values['ssh-host'] ?? process.env.VIBE_OS_SSH_HOST ?? '127.0.0.1'),
-    sshPort: num(values['ssh-port'] ?? process.env.VIBE_OS_SSH_PORT, 22, 'ssh-port'),
-    sshAdvertise: (values['ssh-advertise'] as string) ?? process.env.VIBE_OS_SSH_ADVERTISE ?? undefined,
-    user: String(values.user ?? process.env.VIBE_OS_USER ?? os.userInfo().username),
+    port: num(values.port ?? process.env.VIBE_OS_PORT, 80, "port"),
+    host: String(values.host ?? process.env.VIBE_OS_HOST ?? "0.0.0.0"),
+    domain:
+      (values.domain as string) ?? process.env.VIBE_OS_DOMAIN ?? undefined,
+    tlsPort: num(values["tls-port"], 443, "tls-port"),
+    acmeEmail:
+      (values.email as string) ?? process.env.VIBE_OS_ACME_EMAIL ?? undefined,
+    acmeStaging: Boolean(
+      values["acme-staging"] ?? process.env.VIBE_OS_ACME_STAGING,
+    ),
+    sshHost: String(
+      values["ssh-host"] ?? process.env.VIBE_OS_SSH_HOST ?? "127.0.0.1",
+    ),
+    sshPort: num(
+      values["ssh-port"] ?? process.env.VIBE_OS_SSH_PORT,
+      22,
+      "ssh-port",
+    ),
+    sshAdvertise:
+      (values["ssh-advertise"] as string) ??
+      process.env.VIBE_OS_SSH_ADVERTISE ??
+      undefined,
+    user: userName(
+      values.user ?? process.env.VIBE_OS_USER ?? os.userInfo().username,
+      "user",
+    ),
     stateDir,
-    webRoot: path.resolve(String(values['web-root'] ?? process.env.VIBE_OS_WEB_ROOT ?? DEFAULT_WEB_ROOT)),
-    workspace: path.resolve(String(values.workspace ?? process.env.VIBE_OS_WORKSPACE ?? path.join(os.homedir(), 'workspace'))),
+    webRoot: path.resolve(
+      String(
+        values["web-root"] ?? process.env.VIBE_OS_WEB_ROOT ?? DEFAULT_WEB_ROOT,
+      ),
+    ),
+    workspace: path.resolve(
+      String(
+        values.workspace ??
+          process.env.VIBE_OS_WORKSPACE ??
+          path.join(os.homedir(), "workspace"),
+      ),
+    ),
     token,
-    certTtlSeconds: num(values['cert-ttl'], 12 * 60 * 60, 'cert-ttl'),
+    certTtlSeconds: num(values["cert-ttl"], 12 * 60 * 60, "cert-ttl"),
     sessions,
-    open: Boolean(values.open),
   };
 }

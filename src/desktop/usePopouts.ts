@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { postOnce } from "../broadcast";
 
 /**
  * Which windows are currently open in a pop-out browser window.
@@ -10,14 +11,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * with two clients fighting over one session. So the desktop asks, and every
  * live pop-out answers.
  */
-const CHANNEL = 'vibe-os:popouts:v1';
+const CHANNEL = "vibe-os:popouts:v1";
+
+/**
+ * Big enough for a usable terminal without covering the desktop it came from.
+ * No chrome: this window is one terminal, and a toolbar would only offer ways
+ * to navigate away from it.
+ */
+const POPOUT_FEATURES = "width=900,height=600,menubar=no,toolbar=no";
 
 type Message =
-  | { type: 'open'; id: string }
-  | { type: 'close'; id: string }
-  | { type: 'who' }
-  | { type: 'claim'; id: string }
-  | { type: 'reclaim'; id: string };
+  | { type: "open"; id: string }
+  | { type: "close"; id: string }
+  | { type: "who" }
+  | { type: "claim"; id: string }
+  | { type: "reclaim"; id: string };
 
 /**
  * Sends one message on a channel of its own.
@@ -28,26 +36,23 @@ type Message =
  * nothing at all, silently. A BroadcastChannel is cheap enough that owning one
  * per message is a fair price for the send never depending on lifecycle timing.
  */
-function announce(message: Message): void {
-  if (typeof BroadcastChannel === 'undefined') return;
-  const bc = new BroadcastChannel(CHANNEL);
-  bc.postMessage(message);
-  bc.close();
-}
+const announce = (message: Message): void => postOnce(CHANNEL, message);
 
 /** Opened by the desktop: tracks pop-outs and can ask them to close. */
 export function usePopoutHost() {
   const [popped, setPopped] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return;
+    if (typeof BroadcastChannel === "undefined") return;
     const bc = new BroadcastChannel(CHANNEL);
 
     bc.onmessage = (event: MessageEvent<Message>) => {
       const msg = event.data;
-      if (msg.type === 'open' || msg.type === 'claim') {
-        setPopped((current) => (current.has(msg.id) ? current : new Set(current).add(msg.id)));
-      } else if (msg.type === 'close') {
+      if (msg.type === "open" || msg.type === "claim") {
+        setPopped((current) =>
+          current.has(msg.id) ? current : new Set(current).add(msg.id),
+        );
+      } else if (msg.type === "close") {
         setPopped((current) => {
           if (!current.has(msg.id)) return current;
           const next = new Set(current);
@@ -58,16 +63,16 @@ export function usePopoutHost() {
     };
 
     // Re-discover after a desktop reload; live pop-outs answer with `claim`.
-    bc.postMessage({ type: 'who' } satisfies Message);
+    bc.postMessage({ type: "who" } satisfies Message);
 
     return () => bc.close();
   }, []);
 
   const open = useCallback((id: string, label: string, color: string) => {
     const url = new URL(window.location.href);
-    url.hash = '';
+    url.hash = "";
     url.search = `?popout=${encodeURIComponent(id)}&name=${encodeURIComponent(label)}&color=${encodeURIComponent(color)}`;
-    const child = window.open(url.toString(), `vibe-os-${id}`, 'width=900,height=600,menubar=no,toolbar=no');
+    const child = window.open(url.toString(), `vibe-os-${id}`, POPOUT_FEATURES);
     if (!child) return false;
     // Marked here as well as on the pop-out's own announcement: a blocked or
     // slow child would otherwise leave the desktop rendering a terminal that is
@@ -86,7 +91,7 @@ export function usePopoutHost() {
    * closed by hand — and can no longer answer — still frees its window here.
    */
   const reclaim = useCallback((id: string) => {
-    announce({ type: 'reclaim', id });
+    announce({ type: "reclaim", id });
     setPopped((current) => {
       const next = new Set(current);
       next.delete(id);
@@ -113,16 +118,16 @@ export function usePopoutGuest(id: string, onReclaimed: () => void) {
   reclaimed.current = onReclaimed;
 
   useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return;
+    if (typeof BroadcastChannel === "undefined") return;
     const bc = new BroadcastChannel(CHANNEL);
 
-    announce({ type: 'open', id });
+    announce({ type: "open", id });
     bc.onmessage = (event: MessageEvent<Message>) => {
       const msg = event.data;
-      if (msg.type === 'who') announce({ type: 'claim', id });
+      if (msg.type === "who") announce({ type: "claim", id });
       // The desktop wants this terminal back. The session outlives the
       // connection either way, so the desktop reattaches to exactly this state.
-      if (msg.type === 'reclaim' && msg.id === id) {
+      if (msg.type === "reclaim" && msg.id === id) {
         reclaimed.current();
         window.close();
       }
@@ -132,12 +137,12 @@ export function usePopoutGuest(id: string, onReclaimed: () => void) {
     // page goes into the back/forward cache, and the one browsers have not been
     // steadily deprecating. It also fires after this channel may already be
     // closed, which is the other reason to send on a fresh one.
-    const leave = () => announce({ type: 'close', id });
-    window.addEventListener('pagehide', leave);
+    const leave = () => announce({ type: "close", id });
+    window.addEventListener("pagehide", leave);
 
     return () => {
       leave();
-      window.removeEventListener('pagehide', leave);
+      window.removeEventListener("pagehide", leave);
       bc.close();
     };
   }, [id]);
@@ -152,13 +157,13 @@ export interface PopoutTarget {
 /** Reads the pop-out request out of the URL, or null for the normal desktop. */
 export function readPopoutTarget(): PopoutTarget | null {
   const params = new URLSearchParams(window.location.search);
-  const id = params.get('popout');
+  const id = params.get("popout");
   if (!id) return null;
   return {
     id,
-    name: params.get('name') ?? 'terminal',
+    name: params.get("name") ?? "terminal",
     // Display only — the server resolves everything that matters from the
     // window id, so a doctored URL changes nothing but this page's colour.
-    color: params.get('color') ?? 'cyan',
+    color: params.get("color") ?? "cyan",
   };
 }

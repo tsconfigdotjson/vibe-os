@@ -1,4 +1,4 @@
-import type { Profile } from '../data';
+import type { Profile } from "../data";
 
 export interface ProfileRailProps {
   profiles: Profile[];
@@ -12,12 +12,6 @@ export interface ProfileRailProps {
   onEdit: (id: string) => void;
   onCreate: () => void;
 }
-
-const HARNESS_LABEL: Record<Profile['harness'], string> = {
-  claude: 'claude',
-  shell: 'shell',
-  custom: 'custom',
-};
 
 /**
  * The roles you can open a terminal as, down the right of the workspace.
@@ -58,10 +52,10 @@ export function ProfileRail({
         <p className="rail-empty">Choose a project to see its profiles.</p>
       ) : profiles.length === 0 ? (
         <p className="rail-empty">
-          No profiles yet.{' '}
+          No profiles yet.{" "}
           <button type="button" className="linkish" onClick={onCreate}>
             Create one
-          </button>{' '}
+          </button>{" "}
           to open a terminal with a harness and a prompt ready.
         </p>
       ) : (
@@ -69,7 +63,12 @@ export function ProfileRail({
           {profiles.map((profile) => {
             const live = running.has(profile.id);
             return (
-              <li key={profile.id} style={{ ['--win-color' as string]: `var(--profile-${profile.color})` }}>
+              <li
+                key={profile.id}
+                style={{
+                  ["--win-color" as string]: `var(--profile-${profile.color})`,
+                }}
+              >
                 <button
                   type="button"
                   className="rail-item"
@@ -77,12 +76,16 @@ export function ProfileRail({
                   data-active={profile.id === activeId || undefined}
                   disabled={!canOpen}
                   onClick={() => onOpen(profile.id, {})}
-                  title={live ? `Bring ${profile.name} to the front` : `Open a terminal as ${profile.name}`}
+                  title={
+                    live
+                      ? `Bring ${profile.name} to the front`
+                      : `Open a terminal as ${profile.name}`
+                  }
                 >
                   <span className="rail-chip" aria-hidden="true" />
                   <span className="rail-text">
                     <span className="rail-name">{profile.name}</span>
-                    <span className="rail-meta">{HARNESS_LABEL[profile.harness]}</span>
+                    <span className="rail-meta">{profile.harness}</span>
                   </span>
                 </button>
                 {/* Wanting a second window as the same role is rare enough to

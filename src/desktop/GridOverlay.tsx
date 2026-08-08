@@ -1,5 +1,6 @@
-import { GRID_COLS, GRID_ROWS, rectToPixels, type Viewport } from './geometry';
-import type { Rect } from './useWindows';
+import { GRID_COLS, GRID_ROWS } from "../../shared/grid";
+import { GUTTER, rectToPixels, type Viewport } from "./geometry";
+import type { Rect } from "./useWindows";
 
 export interface GridOverlayProps {
   /** The cell a dragged window would land in, or null when nothing is moving. */
@@ -17,19 +18,27 @@ export interface GridOverlayProps {
 export function GridOverlay({ preview, view }: GridOverlayProps) {
   if (!preview) return null;
   const box = rectToPixels(preview, view);
+  const pitchX = (view.width - GUTTER) / GRID_COLS;
+  const pitchY = (view.height - GUTTER) / GRID_ROWS;
 
   return (
     <div className="grid-overlay" aria-hidden="true">
-      <svg width="100%" height="100%">
+      <svg width="100%" height="100%" role="presentation">
         <defs>
           <pattern
             id="vibe-grid"
-            width={(view.width - 10) / GRID_COLS}
-            height={(view.height - 10) / GRID_ROWS}
+            // The pitch is cell + gutter, and the first cell starts one gutter
+            // in — see rectToPixels. Without x/y the lines sat a gutter to the
+            // left of and above the boundaries they were drawn to show, which
+            // is the one thing this overlay exists to communicate.
+            x={GUTTER}
+            y={GUTTER}
+            width={pitchX}
+            height={pitchY}
             patternUnits="userSpaceOnUse"
           >
             <path
-              d={`M ${(view.width - 10) / GRID_COLS} 0 L 0 0 0 ${(view.height - 10) / GRID_ROWS}`}
+              d={`M ${pitchX} 0 L 0 0 0 ${pitchY}`}
               fill="none"
               stroke="currentColor"
               strokeWidth="1"
@@ -40,7 +49,11 @@ export function GridOverlay({ preview, view }: GridOverlayProps) {
       </svg>
       <div
         className="grid-target"
-        style={{ transform: `translate(${box.left}px, ${box.top}px)`, width: box.width, height: box.height }}
+        style={{
+          transform: `translate(${box.left}px, ${box.top}px)`,
+          width: box.width,
+          height: box.height,
+        }}
       />
     </div>
   );

@@ -16,11 +16,11 @@ export async function writeClipboard(text: string): Promise<boolean> {
     }
   }
 
-  const scratch = document.createElement('textarea');
+  const scratch = document.createElement("textarea");
   scratch.value = text;
   // Off-screen rather than hidden: execCommand ignores an unfocusable element.
-  scratch.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0';
-  scratch.setAttribute('readonly', '');
+  scratch.style.cssText = "position:fixed;top:-1000px;left:-1000px;opacity:0";
+  scratch.setAttribute("readonly", "");
   document.body.appendChild(scratch);
 
   // Whatever the user had selected is theirs; putting it back matters most in
@@ -29,7 +29,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
   try {
     scratch.select();
     scratch.setSelectionRange(0, scratch.value.length);
-    return document.execCommand('copy');
+    return document.execCommand("copy");
   } catch {
     return false;
   } finally {

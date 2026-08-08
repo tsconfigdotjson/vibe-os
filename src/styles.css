@@ -25,7 +25,11 @@
   --accent: #56cfe1;
 
   /* Glass recipe. Kept as variables so every surface stays in the same family. */
-  --glass-bg: linear-gradient(160deg, rgb(255 255 255 / 9%), rgb(255 255 255 / 3.5%));
+  --glass-bg: linear-gradient(
+    160deg,
+    rgb(255 255 255 / 9%),
+    rgb(255 255 255 / 3.5%)
+  );
   --glass-blur: blur(26px) saturate(165%);
   --glass-edge: rgb(255 255 255 / 11%);
   --glass-sheen: inset 0 1px 0 rgb(255 255 255 / 14%);
@@ -48,9 +52,12 @@
      wallpaper Dim control is there for anyone whose image needs more. */
   --plate: rgb(9 12 18 / 62%);
 
-  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo,
-    Consolas, monospace;
+  --sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter,
+    sans-serif;
+  --mono:
+    ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", "Cascadia Mono",
+    Menlo, Consolas, monospace;
 
   --menubar: 34px;
   --sidebar: 210px;
@@ -123,11 +130,16 @@ button {
 
 /* Glass you can read through, for menus and panels. */
 .glass-solid {
-  background: linear-gradient(160deg, rgb(255 255 255 / 7%), rgb(255 255 255 / 2%)), var(--popover);
+  background:
+    linear-gradient(160deg, rgb(255 255 255 / 7%), rgb(255 255 255 / 2%)),
+    var(--popover);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--popover-edge);
-  box-shadow: 0 24px 64px rgb(0 0 0 / 62%), 0 2px 10px rgb(0 0 0 / 45%), var(--glass-sheen);
+  box-shadow:
+    0 24px 64px rgb(0 0 0 / 62%),
+    0 2px 10px rgb(0 0 0 / 45%),
+    var(--glass-sheen);
 }
 
 /* ── desktop ──────────────────────────────────────────────────────────── */
@@ -160,7 +172,11 @@ button {
   /* A whisper of depth so glass edges have something to refract even before a
      wallpaper is chosen. Not an image — remove this line and the ground is
      flat. */
-  background-image: radial-gradient(120% 90% at 50% 0%, #10151f 0%, #06080c 62%);
+  background-image: radial-gradient(
+    120% 90% at 50% 0%,
+    #10151f 0%,
+    #06080c 62%
+  );
 }
 
 .wallpaper-dim {
@@ -284,13 +300,17 @@ button {
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow), var(--glass-sheen);
   /* Position is a transform so dragging never triggers layout. */
-  transition: box-shadow 160ms ease, border-color 160ms ease;
+  transition:
+    box-shadow 160ms ease,
+    border-color 160ms ease;
   will-change: transform;
 }
 
 .win[data-focused] {
   border-color: color-mix(in oklab, var(--win-color) 42%, var(--glass-edge));
-  box-shadow: 0 24px 70px rgb(0 0 0 / 55%), 0 0 0 1px color-mix(in oklab, var(--win-color) 22%, transparent),
+  box-shadow:
+    0 24px 70px rgb(0 0 0 / 55%),
+    0 0 0 1px color-mix(in oklab, var(--win-color) 22%, transparent),
     var(--glass-sheen);
 }
 
@@ -299,10 +319,6 @@ button {
 .win[data-dragging] {
   transition: none;
   cursor: grabbing;
-}
-
-.win[data-dragging] .win-body {
-  pointer-events: none;
 }
 
 .win-bar {
@@ -320,7 +336,9 @@ button {
    * something has to be *read* over an unknown backdrop; a title bar is that,
    * so it uses the same one rather than a number invented here.
    */
-  background: linear-gradient(rgb(255 255 255 / 4%), rgb(255 255 255 / 4%)), var(--popover);
+  background:
+    linear-gradient(rgb(255 255 255 / 4%), rgb(255 255 255 / 4%)),
+    var(--popover);
   border-bottom: 1px solid rgb(255 255 255 / 7%);
   cursor: grab;
   touch-action: none;
@@ -337,20 +355,20 @@ button {
   box-shadow: 0 0 10px color-mix(in oklab, var(--win-color) 60%, transparent);
 }
 
-.win[data-status='loading'] .win-dot {
+.win[data-status="loading"] .win-dot {
   animation: pulse 1.1s ease-in-out infinite;
 }
-.win[data-status='error'] .win-dot {
+.win[data-status="error"] .win-dot {
   background: var(--err);
   box-shadow: none;
 }
 /* Steady and dimmed: the window is fine, it is just being rendered elsewhere. */
-.win[data-status='popped'] .win-dot {
+.win[data-status="popped"] .win-dot {
   animation: none;
   opacity: 0.5;
 }
 
-.win[data-status='ended'] .win-dot {
+.win[data-status="ended"] .win-dot {
   background: var(--muted);
   box-shadow: none;
 }
@@ -391,10 +409,10 @@ button {
   color: var(--muted);
 }
 
-.win[data-status='ready'] .win-state {
+.win[data-status="ready"] .win-state {
   color: var(--text-dim);
 }
-.win[data-status='error'] .win-state {
+.win[data-status="error"] .win-state {
   color: var(--err);
 }
 
@@ -419,7 +437,9 @@ button {
   place-items: center;
   font-size: 11px;
   color: var(--muted);
-  transition: background-color 120ms ease, color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .win-buttons button:hover {
@@ -474,7 +494,6 @@ button {
   gap: 9px;
   padding: 7px 8px;
   border-radius: 7px;
-  place-items: unset;
   text-align: left;
 }
 
@@ -524,7 +543,15 @@ button {
   min-width: 0;
   padding: 6px 4px 4px 8px;
   /* The plate that makes terminal text readable over any wallpaper. */
-  background: linear-gradient(180deg, rgb(255 255 255 / 3%), transparent 120px), var(--plate);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 3%), transparent 120px),
+    var(--plate);
+}
+
+/* Dragging: the terminal must not swallow pointer events mid-drag. Sits
+   after .win-body so the base rule it overrides comes first. */
+.win[data-dragging] .win-body {
+  pointer-events: none;
 }
 
 .win-term {
@@ -541,7 +568,12 @@ button {
  * wrapper, which punches a solid black rectangle straight through the glass —
  * the terminal renders correctly and the effect silently disappears. These are
  * the elements that have to be cleared for the plate underneath to show.
+ *
+ * !important rather than specificity: xterm assigns `style.backgroundColor` on
+ * these elements from JS, and an inline declaration outranks any selector. This
+ * is the one mechanism that beats it.
  */
+/* biome-ignore-start lint/complexity/noImportantStyles: only !important beats an inline style */
 .win-term > div,
 .win-term .xterm,
 .win-term .xterm-viewport,
@@ -549,6 +581,7 @@ button {
 .win-term .xterm-scrollable-element {
   background-color: transparent !important;
 }
+/* biome-ignore-end lint/complexity/noImportantStyles: only !important beats an inline style */
 
 /*
  * No scrollbar on a terminal.
@@ -677,9 +710,13 @@ button {
   border-radius: var(--radius);
   border: 1.5px dashed color-mix(in oklab, var(--accent) 75%, transparent);
   background: color-mix(in oklab, var(--accent) 13%, transparent);
-  box-shadow: 0 0 44px color-mix(in oklab, var(--accent) 30%, transparent),
+  box-shadow:
+    0 0 44px color-mix(in oklab, var(--accent) 30%, transparent),
     inset 0 0 30px color-mix(in oklab, var(--accent) 8%, transparent);
-  transition: transform 90ms ease, width 90ms ease, height 90ms ease;
+  transition:
+    transform 90ms ease,
+    width 90ms ease,
+    height 90ms ease;
 }
 
 /* ── dock ─────────────────────────────────────────────────────────────── */
@@ -725,7 +762,9 @@ button {
   font-weight: 500;
   color: var(--text);
   background: rgb(255 255 255 / 7%);
-  transition: background-color 130ms ease, transform 130ms ease;
+  transition:
+    background-color 130ms ease,
+    transform 130ms ease;
   flex: none;
 }
 
@@ -768,7 +807,10 @@ button {
   border-radius: 10px;
   font-size: 12px;
   color: var(--text-dim);
-  transition: background-color 130ms ease, color 130ms ease, opacity 130ms ease;
+  transition:
+    background-color 130ms ease,
+    color 130ms ease,
+    opacity 130ms ease;
   white-space: nowrap;
 }
 
@@ -787,10 +829,6 @@ button {
   opacity: 0.5;
 }
 
-.dock-item[data-status='error'] .dock-chip {
-  background: var(--err);
-}
-
 .dock-chip {
   display: grid;
   place-items: center;
@@ -802,6 +840,10 @@ button {
   font-weight: 600;
   color: #05070a;
   background: var(--win-color);
+}
+
+.dock-item[data-status="error"] .dock-chip {
+  background: var(--err);
 }
 
 .dock-label {
@@ -817,7 +859,9 @@ button {
   place-items: center;
   font-size: 15px;
   color: var(--text-dim);
-  transition: background-color 130ms ease, color 130ms ease;
+  transition:
+    background-color 130ms ease,
+    color 130ms ease;
   flex: none;
 }
 
@@ -907,11 +951,13 @@ button {
 /* A hairline in each strip, so the chrome is hidden rather than secret. */
 .dock-edge::after,
 .rail-edge::after {
-  content: '';
+  content: "";
   position: absolute;
   border-radius: 2px;
   background: rgb(255 255 255 / 16%);
-  transition: background-color 140ms ease, opacity 140ms ease;
+  transition:
+    background-color 140ms ease,
+    opacity 140ms ease;
 }
 
 .dock-edge::after {
@@ -949,7 +995,7 @@ button {
  * with it — a hidden dock leaves no phantom hover region behind.
  */
 .dock::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0 0 -20px;
   z-index: -1;
@@ -1062,7 +1108,9 @@ button {
   border: 1px solid rgb(255 255 255 / 10%);
   background-size: cover;
   background-position: center;
-  transition: border-color 130ms ease, transform 130ms ease;
+  transition:
+    border-color 130ms ease,
+    transform 130ms ease;
 }
 
 .thumb:hover {
@@ -1118,7 +1166,9 @@ button {
   font-size: 12px;
   color: var(--text-dim);
   text-align: center;
-  transition: border-color 130ms ease, color 130ms ease;
+  transition:
+    border-color 130ms ease,
+    color 130ms ease;
 }
 
 .upload:hover:not(:disabled) {
@@ -1141,7 +1191,19 @@ button {
   margin-top: 14px;
 }
 
-.field label {
+/* A group of buttons that acts as one control is a fieldset, not a div with a
+   floating label — the label has nothing to point `for` at. Browsers give
+   fieldset and legend their own box model, so both are reset back to the plain
+   block the div was. */
+fieldset.field {
+  border: 0;
+  padding: 0;
+  margin-inline: 0;
+  min-width: 0;
+}
+
+.field label,
+.field-label {
   display: flex;
   justify-content: space-between;
   font-size: 11px;
@@ -1149,12 +1211,17 @@ button {
   margin-bottom: 6px;
 }
 
+legend.field-label {
+  padding: 0;
+  width: 100%;
+}
+
 .field-value {
   font-family: var(--mono);
   color: var(--text-dim);
 }
 
-.field input[type='range'] {
+.field input[type="range"] {
   width: 100%;
   accent-color: var(--accent);
 }
@@ -1171,7 +1238,9 @@ button {
   padding: 5px 0;
   font-size: 11px;
   color: var(--muted);
-  transition: background-color 120ms ease, color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .segmented button:hover {
@@ -1229,10 +1298,6 @@ button {
   color: var(--text-dim);
 }
 
-.empty .ghost {
-  pointer-events: auto;
-}
-
 .ghost {
   padding: 7px 14px;
   border-radius: 9px;
@@ -1240,7 +1305,13 @@ button {
   color: var(--text);
   border: 1px solid rgb(255 255 255 / 14%);
   background: rgb(255 255 255 / 6%);
-  transition: border-color 130ms ease, background-color 130ms ease;
+  transition:
+    border-color 130ms ease,
+    background-color 130ms ease;
+}
+
+.empty .ghost {
+  pointer-events: auto;
 }
 
 .ghost:hover {
@@ -1292,6 +1363,10 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* The one place !important is the correct tool: this has to beat every
+     component-level transition in the file, and a person who has asked their OS
+     to reduce motion is not asking politely. */
+  /* biome-ignore-start lint/complexity/noImportantStyles: overriding every animation is the point */
   *,
   *::before,
   *::after {
@@ -1299,12 +1374,12 @@ button {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  /* biome-ignore-end lint/complexity/noImportantStyles: overriding every animation is the point */
 
   .caret {
     opacity: 1;
   }
 }
-
 
 /* ── project picker ───────────────────────────────────────────────────── */
 
@@ -1324,12 +1399,14 @@ button {
   color: var(--text);
   background: rgb(255 255 255 / 6%);
   border: 1px solid rgb(255 255 255 / 8%);
-  transition: background-color 130ms ease, border-color 130ms ease;
+  transition:
+    background-color 130ms ease,
+    border-color 130ms ease;
   max-width: 340px;
 }
 
 .picker-trigger:hover,
-.picker-trigger[aria-expanded='true'] {
+.picker-trigger[aria-expanded="true"] {
   background: rgb(255 255 255 / 11%);
   border-color: color-mix(in oklab, var(--accent) 34%, transparent);
 }
@@ -1491,7 +1568,11 @@ button {
   flex-direction: column;
   min-height: 0;
   padding: 10px 0 10px 8px;
-  background: linear-gradient(180deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 5%),
+    rgb(255 255 255 / 2%)
+  );
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   /* The divider is an inset shadow rather than a border because children paint
@@ -1530,7 +1611,9 @@ button {
   line-height: 1;
   color: var(--accent);
   background: color-mix(in oklab, var(--accent) 15%, transparent);
-  transition: background-color 130ms ease, transform 130ms ease;
+  transition:
+    background-color 130ms ease,
+    transform 130ms ease;
 }
 
 .sidebar-new:hover:not(:disabled) {
@@ -1607,23 +1690,6 @@ button {
   background: rgb(255 255 255 / 7%);
 }
 
-/*
- * Rows wake up as a whole.
- *
- * A row that only changes its fill on hover leaves its own label sitting at
- * reading-dim, which makes the fill look like a stray highlight rather than
- * "this is the thing you are about to pick". Primary text goes to full
- * strength and secondary text comes up one step behind it, so the row gains a
- * hierarchy on hover instead of just a background.
- */
-.ws:hover .ws-name {
-  color: var(--text);
-}
-
-.ws:hover .ws-meta {
-  color: var(--text-dim);
-}
-
 .ws[data-active] {
   /* The same plate the terminals sit on, so row and surface are one material. */
   background: var(--plate);
@@ -1668,7 +1734,10 @@ button {
   font-size: 9px;
   color: var(--muted);
   opacity: 0;
-  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .sidebar-list li:hover .ws-remove {
@@ -1704,6 +1773,23 @@ button {
   line-height: 1.45;
 }
 
+/*
+ * Rows wake up as a whole.
+ *
+ * A row that only changes its fill on hover leaves its own label sitting at
+ * reading-dim, which makes the fill look like a stray highlight rather than
+ * "this is the thing you are about to pick". Primary text goes to full
+ * strength and secondary text comes up one step behind it, so the row gains a
+ * hierarchy on hover instead of just a background.
+ */
+.ws:hover .ws-name {
+  color: var(--text);
+}
+
+.ws:hover .ws-meta {
+  color: var(--text-dim);
+}
+
 .ws-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1718,7 +1804,10 @@ button {
   font-size: 11.5px;
   font-weight: 500;
   text-align: center;
-  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
 }
 
 .btn-quiet {
@@ -1786,7 +1875,9 @@ button {
    * everywhere else: if you have to read it over an unknown backdrop, give it a
    * base.
    */
-  background: linear-gradient(180deg, rgb(255 255 255 / 6%), rgb(255 255 255 / 3%)), var(--popover);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 6%), rgb(255 255 255 / 3%)),
+    var(--popover);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border-left: 1px solid var(--popover-edge);
@@ -1817,7 +1908,9 @@ button {
   line-height: 1;
   color: var(--accent);
   background: color-mix(in oklab, var(--accent) 15%, transparent);
-  transition: background-color 130ms ease, transform 130ms ease;
+  transition:
+    background-color 130ms ease,
+    transform 130ms ease;
 }
 
 .rail-new:hover:not(:disabled) {
@@ -1862,12 +1955,6 @@ button {
   align-items: center;
 }
 
-/* A live role reserves room for both hover buttons, always — widening the row
-   only while it is hovered would shuffle the name under the cursor. */
-.rail-list li:has(.rail-again) .rail-item {
-  padding-right: 46px;
-}
-
 /* Mirrors .ws: full-bleed to the rail's inner edge, square on that side, so a
    selected row joins the surface it owns. */
 .rail-item {
@@ -1882,22 +1969,10 @@ button {
   transition: background-color 120ms ease;
 }
 
-.rail-item:hover:not(:disabled) {
-  background: rgb(255 255 255 / 6%);
-}
-
-.rail-item:hover:not(:disabled) .rail-name {
-  color: var(--text);
-}
-
-.rail-item:hover:not(:disabled) .rail-meta {
-  color: var(--text-dim);
-}
-
-/* A role that is not running is dimmed; hovering it should still light the
-   chip, or the row looks half-disabled under the cursor. */
-.rail-item:hover:not(:disabled) .rail-chip {
-  opacity: 1;
+/* A live role reserves room for both hover buttons, always — widening the row
+   only while it is hovered would shuffle the name under the cursor. */
+.rail-list li:has(.rail-again) .rail-item {
+  padding-right: 46px;
 }
 
 .rail-item:disabled {
@@ -1920,7 +1995,9 @@ button {
   /* Dim until the role is running, so the rail shows at a glance which of them
      are live without needing a second indicator. */
   opacity: 0.42;
-  transition: opacity 140ms ease, box-shadow 140ms ease;
+  transition:
+    opacity 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .rail-item[data-live] .rail-chip {
@@ -1957,6 +2034,26 @@ button {
   text-overflow: ellipsis;
 }
 
+/* Hover states last: they are the most specific selectors in this section,
+   so they have to follow every base rule they are meant to override. */
+.rail-item:hover:not(:disabled) {
+  background: rgb(255 255 255 / 6%);
+}
+
+.rail-item:hover:not(:disabled) .rail-name {
+  color: var(--text);
+}
+
+.rail-item:hover:not(:disabled) .rail-meta {
+  color: var(--text-dim);
+}
+
+/* A role that is not running is dimmed; hovering it should still light the
+   chip, or the row looks half-disabled under the cursor. */
+.rail-item:hover:not(:disabled) .rail-chip {
+  opacity: 1;
+}
+
 .rail-edit,
 .rail-again {
   position: absolute;
@@ -1969,7 +2066,10 @@ button {
   line-height: 1;
   color: var(--muted);
   opacity: 0;
-  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background-color 120ms ease;
 }
 
 .rail-edit {
@@ -2029,7 +2129,7 @@ button {
    glass rather than a different background colour. Non-interactive: the
    terminal underneath still takes every click. */
 .win[data-profile] .win-body::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -2088,7 +2188,8 @@ button {
   margin: -6px -4px 6px -8px;
   padding: 9px 10px 8px;
   background: color-mix(in oklab, var(--win-color) 11%, rgb(9 12 18 / 72%));
-  border-bottom: 1px solid color-mix(in oklab, var(--win-color) 24%, transparent);
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--win-color) 24%, transparent);
 }
 
 .band-head {
@@ -2112,7 +2213,9 @@ button {
   place-items: center;
   font-size: 11px;
   color: var(--muted);
-  transition: color 120ms ease, background-color 120ms ease;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
 }
 
 .band-x:hover {
@@ -2160,12 +2263,15 @@ button {
   color: var(--text);
   background: color-mix(in oklab, var(--win-color) 14%, transparent);
   border: none;
-  border-bottom: 1px solid color-mix(in oklab, var(--win-color) 55%, transparent);
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--win-color) 55%, transparent);
   border-radius: 3px 3px 0 0;
   padding: 0 4px;
   margin: 0 1px;
   min-width: 3ch;
-  transition: background-color 120ms ease, border-color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
 }
 
 .blank::placeholder {
@@ -2336,7 +2442,8 @@ button {
       color-mix(in oklab, var(--win-color) 11%, transparent)
     ),
     var(--popover);
-  border-bottom: 1px solid color-mix(in oklab, var(--win-color) 26%, transparent);
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--win-color) 26%, transparent);
   user-select: none;
 }
 
@@ -2354,7 +2461,9 @@ button {
 .popout-body {
   min-height: 0;
   padding: 6px 4px 4px 8px;
-  background: linear-gradient(180deg, rgb(255 255 255 / 3%), transparent 120px), var(--plate);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 3%), transparent 120px),
+    var(--plate);
 }
 
 .popout-body .win-term {
@@ -2381,7 +2490,11 @@ button {
 
 .text-input:focus {
   outline: none;
-  border-color: color-mix(in oklab, var(--win-color, var(--accent)) 55%, transparent);
+  border-color: color-mix(
+    in oklab,
+    var(--win-color, var(--accent)) 55%,
+    transparent
+  );
 }
 
 .text-input.mono {
@@ -2411,7 +2524,9 @@ button {
   /* The ring is drawn outside the swatch so picking one does not shrink the
      colour you are judging it by. */
   box-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
-  transition: transform 120ms ease, box-shadow 120ms ease;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .swatch:hover {
@@ -2419,7 +2534,9 @@ button {
 }
 
 .swatch[data-active] {
-  box-shadow: 0 0 0 2px var(--void), 0 0 0 4px currentColor;
+  box-shadow:
+    0 0 0 2px var(--void),
+    0 0 0 4px currentColor;
   color: var(--text);
 }
 
@@ -2428,10 +2545,15 @@ button {
 .select {
   appearance: none;
   padding-right: 26px;
-  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
     linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
-  background-position: calc(100% - 14px) 52%, calc(100% - 9px) 52%;
-  background-size: 5px 5px, 5px 5px;
+  background-position:
+    calc(100% - 14px) 52%,
+    calc(100% - 9px) 52%;
+  background-size:
+    5px 5px,
+    5px 5px;
   background-repeat: no-repeat;
   cursor: pointer;
 }
@@ -2593,7 +2715,10 @@ button {
   color: var(--text-dim);
   background: rgb(255 255 255 / 6%);
   border: 1px solid rgb(255 255 255 / 9%);
-  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
 }
 
 .chip:hover {

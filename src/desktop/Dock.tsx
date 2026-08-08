@@ -1,4 +1,4 @@
-import type { WindowState } from './useWindows';
+import type { WindowState } from "./useWindows";
 
 export interface DockProps {
   windows: WindowState[];
@@ -36,14 +36,21 @@ export function Dock({
   return (
     <div className="dock-wrap">
       <nav className="dock glass" aria-label="Windows">
-        <button type="button" className="dock-spawn" onClick={onSpawn} title="Open a terminal">
+        <button
+          type="button"
+          className="dock-spawn"
+          onClick={onSpawn}
+          title="Open a terminal"
+        >
           <span className="dock-plus" aria-hidden="true">
             +
           </span>
           terminal
         </button>
 
-        {windows.length > 0 ? <span className="dock-rule" aria-hidden="true" /> : null}
+        {windows.length > 0 ? (
+          <span className="dock-rule" aria-hidden="true" />
+        ) : null}
 
         <ul className="dock-list">
           {windows.map((win) => (
@@ -51,12 +58,18 @@ export function Dock({
               <button
                 type="button"
                 className="dock-item"
-                data-active={win.id === focused && !win.minimized ? '' : undefined}
+                data-active={
+                  win.id === focused && !win.minimized ? "" : undefined
+                }
                 data-minimized={win.minimized || undefined}
                 data-status={win.status}
-                style={{ ['--win-color' as string]: hues[win.id] }}
+                style={{ ["--win-color" as string]: hues[win.id] }}
                 onClick={() => onSelect(win.id)}
-                title={win.minimized ? 'Restore this window' : 'Bring this window to the front'}
+                title={
+                  win.minimized
+                    ? "Restore this window"
+                    : "Bring this window to the front"
+                }
               >
                 <span className="dock-chip" aria-hidden="true">
                   {win.idx}
@@ -76,15 +89,20 @@ export function Dock({
           disabled={!canTile}
           title={
             canTile
-              ? 'Tile the windows across the desktop'
-              : 'Tiling arranges up to four windows; past that they are left alone'
+              ? "Tile the windows across the desktop"
+              : "Tiling arranges up to four windows; past that they are left alone"
           }
           aria-label="Tile the windows"
         >
           ⊞
         </button>
 
-        <button type="button" className="dock-icon" onClick={onWallpaper} title="Change the wallpaper">
+        <button
+          type="button"
+          className="dock-icon"
+          onClick={onWallpaper}
+          title="Change the wallpaper"
+        >
           ◑
         </button>
       </nav>

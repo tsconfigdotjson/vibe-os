@@ -1,4 +1,4 @@
-import type { SshSession, SshTermConfig } from './types';
+import type { SshSession, SshTermConfig } from "./types";
 
 /**
  * Loads and boots the sshterm Go/WASM runtime exactly once per page.
@@ -31,28 +31,55 @@ export function onRuntimeDead(listener: () => void): () => void {
   return () => deathListeners.delete(listener);
 }
 
+/**
+ * One in-flight load per URL, keyed here rather than by probing the DOM.
+ *
+ * The tag used to be the record of "already loading", which got two things
+ * wrong. A tag still in flight counted as loaded, so a second caller resolved
+ * before the script had run; and a tag whose `onerror` had fired was never
+ * removed, so it counted as loaded forever. That second one defeated the retry
+ * this module deliberately allows — `bootstrap` is reset to null on failure so
+ * a later attempt can start over, but the retry found the dead tag, resolved
+ * instantly, and failed further along with `wasm_exec.js did not define
+ * globalThis.Go`, which points at the wrong thing entirely.
+ */
+const inFlight = new Map<string, Promise<void>>();
+
 function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[data-sshterm="${src}"]`);
-    if (existing) {
-      resolve();
-      return;
-    }
-    const script = document.createElement('script');
+  const running = inFlight.get(src);
+  if (running) return running;
+
+  const load = new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
     script.src = src;
     script.async = false;
     script.dataset.sshterm = src;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`failed to load ${src}`));
+    script.onerror = () => {
+      // Take the tag with it, so nothing later mistakes it for a good load.
+      script.remove();
+      reject(new Error(`failed to load ${src}`));
+    };
     document.head.appendChild(script);
   });
+
+  inFlight.set(src, load);
+  // A failure must not be cached: the next caller should get a fresh attempt.
+  load.catch(() => inFlight.delete(src));
+  return load;
 }
 
-async function instantiate(wasmUrl: string, importObject: WebAssembly.Imports): Promise<WebAssembly.Instance> {
+async function instantiate(
+  wasmUrl: string,
+  importObject: WebAssembly.Imports,
+): Promise<WebAssembly.Instance> {
   // instantiateStreaming requires an application/wasm content type. Not every
   // static file server sets it, so fall back to buffering the module.
   try {
-    const result = await WebAssembly.instantiateStreaming(fetch(wasmUrl), importObject);
+    const result = await WebAssembly.instantiateStreaming(
+      fetch(wasmUrl),
+      importObject,
+    );
     return result.instance;
   } catch {
     const bytes = await fetch(wasmUrl).then((r) => {
@@ -70,7 +97,7 @@ async function boot(urls: RuntimeUrls): Promise<void> {
 
   await loadScript(wasmExecUrl);
   if (!window.Go) {
-    throw new Error('wasm_exec.js did not define globalThis.Go');
+    throw new Error("wasm_exec.js did not define globalThis.Go");
   }
 
   // Must be in place before go.run() — main.go panics if it is missing.
@@ -130,7 +157,9 @@ export async function startSshSession(
   await loadSshRuntime(urls);
   const start = window.sshApp?.start;
   if (!start) {
-    throw new Error('sshApp.start is unavailable — the WASM runtime failed to boot');
+    throw new Error(
+      "sshApp.start is unavailable — the WASM runtime failed to boot",
+    );
   }
   return start({ ...config, term });
 }

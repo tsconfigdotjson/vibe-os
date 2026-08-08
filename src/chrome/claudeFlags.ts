@@ -1,3 +1,5 @@
+import { detokenize } from "../../shared/args";
+
 /**
  * Translating between what the editor shows and what the harness is given.
  *
@@ -10,7 +12,15 @@
  */
 
 /** Flags that take a value, as `--flag value`. */
-const VALUED = new Set(['--model', '--permission-mode', '--agent', '--effort', '--fallback-model', '--name']);
+/**
+ * Flags whose value is the next token, for the ones that fall through to
+ * `extra`.
+ *
+ * `--model`, `--permission-mode` and `--effort` are deliberately absent: they
+ * are handled by their own branch above, which always `continue`s, so listing
+ * them here only made it look as though this set governed them.
+ */
+const VALUED = new Set(["--agent", "--fallback-model", "--name"]);
 
 /**
  * How much of the box's MCP configuration a session gets.
@@ -20,7 +30,7 @@ const VALUED = new Set(['--model', '--permission-mode', '--agent', '--effort', '
  * the box has, `--strict-mcp-config` on its own means none of it, and adding
  * `--mcp-config` gives back exactly the files listed.
  */
-export type McpMode = 'all' | 'pick' | 'none';
+export type McpMode = "all" | "pick" | "none";
 
 export interface ClaudeSettings {
   /** Model alias or id, without any context-window suffix. Empty for default. */
@@ -40,33 +50,45 @@ export interface ClaudeSettings {
 }
 
 /** Boolean flags the editor offers as switches. */
-export const TOGGLES: { flag: string; label: string; hint: string; warn?: boolean }[] = [
+export const TOGGLES: {
+  flag: string;
+  label: string;
+  hint: string;
+}[] = [
   {
-    flag: '--remote-control',
-    label: 'Remote control',
-    hint: 'Drive this session from claude.ai. Needs nothing on the box beyond outbound network.',
+    flag: "--remote-control",
+    label: "Remote control",
+    hint: "Drive this session from claude.ai. Needs nothing on the box beyond outbound network.",
   },
   {
-    flag: '--chrome',
-    label: 'Browser tools',
-    hint: 'Claude in Chrome. Pairs with the extension on the machine you are browsing from.',
+    flag: "--chrome",
+    label: "Browser tools",
+    hint: "Claude in Chrome. Pairs with the extension on the machine you are browsing from.",
   },
-  { flag: '--continue', label: 'Resume last conversation', hint: 'Pick up the most recent session in this directory.' },
-  { flag: '--verbose', label: 'Verbose output', hint: 'Show full tool output rather than the collapsed form.' },
+  {
+    flag: "--continue",
+    label: "Resume last conversation",
+    hint: "Pick up the most recent session in this directory.",
+  },
+  {
+    flag: "--verbose",
+    label: "Verbose output",
+    hint: "Show full tool output rather than the collapsed form.",
+  },
 ];
 
-export const SKIP_PERMISSIONS = '--dangerously-skip-permissions';
-export const STRICT_MCP = '--strict-mcp-config';
-export const MCP_CONFIG = '--mcp-config';
+export const SKIP_PERMISSIONS = "--dangerously-skip-permissions";
+export const STRICT_MCP = "--strict-mcp-config";
+export const MCP_CONFIG = "--mcp-config";
 
 /** Plain-English names for the modes the CLI reports. Unknown ones show raw. */
 const MODE_LABELS: Record<string, string> = {
-  acceptEdits: 'Accept edits automatically',
-  plan: 'Plan first, then ask',
-  auto: 'Decide automatically',
-  manual: 'Ask every time',
-  dontAsk: 'Never ask',
-  bypassPermissions: 'Bypass permission checks',
+  acceptEdits: "Accept edits automatically",
+  plan: "Plan first, then ask",
+  auto: "Decide automatically",
+  manual: "Ask every time",
+  dontAsk: "Never ask",
+  bypassPermissions: "Bypass permission checks",
 };
 
 export const modeLabel = (mode: string): string => MODE_LABELS[mode] ?? mode;
@@ -78,52 +100,17 @@ export const modeLabel = (mode: string): string => MODE_LABELS[mode] ?? mode;
  * on hard work, and it is the only one whose name does not say what it means.
  */
 const EFFORT_LABELS: Record<string, string> = {
-  low: 'Low — quick and cheap',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'Extra high',
-  max: 'Maximum — slowest, most thorough',
+  low: "Low — quick and cheap",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Maximum — slowest, most thorough",
 };
 
-export const effortLabel = (level: string): string => EFFORT_LABELS[level] ?? level;
+export { detokenize };
 
-/** Splits a command line into tokens the way a shell would, honouring quotes. */
-export function tokenize(input: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let started = false;
-
-  for (const ch of input) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else current += ch;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      started = true;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (started) tokens.push(current);
-      current = '';
-      started = false;
-      continue;
-    }
-    current += ch;
-    started = true;
-  }
-  if (started) tokens.push(current);
-  return tokens;
-}
-
-/** Renders tokens back to editable text. Mirrors the server's `detokenize`. */
-export function detokenize(tokens: string[]): string {
-  return tokens
-    .map((t) => (t === '' || /[\s"']/.test(t) ? `'${t.replaceAll("'", `'\\''`)}'` : t))
-    .join(' ');
-}
+export const effortLabel = (level: string): string =>
+  EFFORT_LABELS[level] ?? level;
 
 /**
  * Reads stored argv into the editor's controls.
@@ -136,17 +123,17 @@ export function parseSettings(args: string[]): ClaudeSettings {
   const known = new Set(TOGGLES.map((t) => t.flag));
   const leftovers: string[] = [];
   const mcpConfigs: string[] = [];
-  let model = '';
+  let model = "";
   let longContext = false;
-  let permission = '';
-  let effort = '';
+  let permission = "";
+  let effort = "";
   let strictMcp = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
 
     if (token === SKIP_PERMISSIONS) {
-      permission = 'skip';
+      permission = "skip";
       continue;
     }
     if (token === STRICT_MCP) {
@@ -157,7 +144,7 @@ export function parseSettings(args: string[]): ClaudeSettings {
     // it, so it swallows tokens until the next thing that looks like a flag.
     if (token === MCP_CONFIG) {
       const before = mcpConfigs.length;
-      while (args[i + 1] !== undefined && !args[i + 1].startsWith('-')) {
+      while (args[i + 1] !== undefined && !args[i + 1].startsWith("-")) {
         mcpConfigs.push(args[i + 1]);
         i += 1;
       }
@@ -170,28 +157,36 @@ export function parseSettings(args: string[]): ClaudeSettings {
       toggles[token] = true;
       continue;
     }
-    if (token === '--model' || token === '--permission-mode' || token === '--effort') {
+    if (
+      token === "--model" ||
+      token === "--permission-mode" ||
+      token === "--effort"
+    ) {
       const value = args[i + 1];
       // A trailing valued flag with nothing after it is malformed; keep it in
       // `extra` rather than swallowing it, so the person can see and fix it.
-      if (value === undefined || value.startsWith('-')) {
+      if (value === undefined || value.startsWith("-")) {
         leftovers.push(token);
         continue;
       }
       i += 1;
-      if (token === '--model') {
-        longContext = value.endsWith('[1m]');
+      if (token === "--model") {
+        longContext = value.endsWith("[1m]");
         model = longContext ? value.slice(0, -4) : value;
-      } else if (token === '--effort') {
+      } else if (token === "--effort") {
         effort = value;
-      } else if (permission !== 'skip') {
+      } else if (permission !== "skip") {
         permission = value;
       }
       continue;
     }
     leftovers.push(token);
     // Keep a value attached to the flag it belongs to.
-    if (VALUED.has(token) && args[i + 1] !== undefined && !args[i + 1].startsWith('-')) {
+    if (
+      VALUED.has(token) &&
+      args[i + 1] !== undefined &&
+      !args[i + 1].startsWith("-")
+    ) {
       leftovers.push(args[i + 1]);
       i += 1;
     }
@@ -201,14 +196,15 @@ export function parseSettings(args: string[]): ClaudeSettings {
   // also these", which the three-way control cannot say. Rather than quietly
   // add the strict flag and change what the profile does, that combination is
   // handed back to the advanced field exactly as it was written.
-  if (!strictMcp && mcpConfigs.length > 0) leftovers.push(MCP_CONFIG, ...mcpConfigs.splice(0));
+  if (!strictMcp && mcpConfigs.length > 0)
+    leftovers.push(MCP_CONFIG, ...mcpConfigs.splice(0));
 
   return {
     model,
     longContext,
     permission,
     effort,
-    mcp: strictMcp ? (mcpConfigs.length > 0 ? 'pick' : 'none') : 'all',
+    mcp: strictMcp ? (mcpConfigs.length > 0 ? "pick" : "none") : "all",
     mcpConfigs,
     toggles,
     extra: detokenize(leftovers),
@@ -220,21 +216,27 @@ export function buildArgs(settings: ClaudeSettings): string {
   const tokens: string[] = [];
 
   if (settings.model) {
-    tokens.push('--model', settings.longContext ? `${settings.model}[1m]` : settings.model);
+    tokens.push(
+      "--model",
+      settings.longContext ? `${settings.model}[1m]` : settings.model,
+    );
   }
-  if (settings.permission === 'skip') {
+  if (settings.permission === "skip") {
     tokens.push(SKIP_PERMISSIONS);
   } else if (settings.permission) {
-    tokens.push('--permission-mode', settings.permission);
+    tokens.push("--permission-mode", settings.permission);
   }
   if (settings.effort) {
-    tokens.push('--effort', settings.effort);
+    tokens.push("--effort", settings.effort);
   }
   // Selecting nothing is the same command line as selecting none, so it is
   // written as `none` rather than left half-stated.
-  if (settings.mcp === 'none' || (settings.mcp === 'pick' && settings.mcpConfigs.length === 0)) {
+  if (
+    settings.mcp === "none" ||
+    (settings.mcp === "pick" && settings.mcpConfigs.length === 0)
+  ) {
     tokens.push(STRICT_MCP);
-  } else if (settings.mcp === 'pick') {
+  } else if (settings.mcp === "pick") {
     tokens.push(STRICT_MCP, MCP_CONFIG, ...settings.mcpConfigs);
   }
   for (const { flag } of TOGGLES) {
@@ -242,5 +244,5 @@ export function buildArgs(settings: ClaudeSettings): string {
   }
 
   const extra = settings.extra.trim();
-  return [detokenize(tokens), extra].filter(Boolean).join(' ');
+  return [detokenize(tokens), extra].filter(Boolean).join(" ");
 }
