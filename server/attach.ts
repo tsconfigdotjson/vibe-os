@@ -30,7 +30,7 @@ import { and, eq, desc } from 'drizzle-orm';
 import { type Db, windows, workspaces, projects, profiles } from './db.ts';
 import type { Config } from './config.ts';
 import { getProfile } from './profiles.ts';
-import { windowCommand, shellQuote, socketPath } from './session.ts';
+import { windowCommand, socketPath } from './session.ts';
 import { IS_COMPILED } from './runtime.ts';
 import { log } from './log.ts';
 
@@ -264,25 +264,6 @@ export async function killSession(config: Config, session: string): Promise<void
  * `--ssh-advertise` overrides it for the case where the two genuinely differ,
  * such as a reverse proxy in front of the web port.
  */
-/**
- * The origin a person could actually type, as opposed to the one we were dialled on.
- *
- * Behind `tailscale serve` — the recommended deployment — the connection that
- * reaches this process is plain HTTP to `127.0.0.1:7681`, so `url.origin` says
- * `http://…` for a site that is only served over HTTPS. The forwarded headers
- * carry the truth: measured on the box, serve sends `X-Forwarded-Proto: https`
- * and `X-Forwarded-Host` alongside a `Host` it leaves intact.
- *
- * Trusting a client-supplied header is fine here and only here: the result is
- * a string echoed back to the caller who sent it. Someone forging these is
- * writing their own copy of a command they already have.
- */
-export function publicOrigin(req: Request, url: URL): string {
-  const first = (name: string) => req.headers.get(name)?.split(',')[0].trim();
-  const proto = first('x-forwarded-proto') || url.protocol.replace(':', '');
-  return `${proto}://${publicHost(req, url)}`;
-}
-
 /** The host a person would type, from the same forwarded headers. */
 export function publicHost(req: Request, url: URL): string {
   const first = (name: string) => req.headers.get(name)?.split(',')[0].trim();
@@ -319,13 +300,6 @@ export function invocation(): string {
   return DEFAULT_PATH.has(path.dirname(exe)) ? path.basename(exe) : exe;
 }
 
-export interface AttachForm {
-  key: 'command' | 'url';
-  /** What this one is, in a few words. The UI puts it above the command. */
-  hint: string;
-  command: string;
-}
-
 export interface AttachInfo {
   ref: string;
   session: string;
@@ -334,15 +308,8 @@ export interface AttachInfo {
   project: string;
   role: string | null;
   endpoint: SshEndpoint;
-  /** Ways to reach this window, best first. See `attachForms`. */
-  forms: AttachForm[];
-  /**
-   * The whole ssh-and-dtach command, depending on nothing on the far side.
-   *
-   * Not offered as a way to attach — it is far too long for anyone to want —
-   * but it is what `/t/<ref>` executes, so it lives here with the rest.
-   */
-  raw: string;
+  /** The one command that gets you there. */
+  command: string;
 }
 
 /** `ssh -t [-p n] user@host …`, with the tail supplied by the caller. */
@@ -351,50 +318,15 @@ function sshPrefix(endpoint: SshEndpoint): string {
   return `ssh -t${port} ${endpoint.user}@${endpoint.host}`;
 }
 
-/**
- * The two ways to reach a window, in the order they deserve to be offered.
- *
- * The URL's whole appeal is being short enough to type from memory once you
- * know a window's name — and a token gate takes that away, because the token
- * has to ride along in the query string for `curl` to get past the gate. What
- * is left is a hundred characters of opaque string that also puts the token in
- * your shell history, which is worse in every respect than the ssh command
- * sitting next to it.
- *
- * So the order flips with the gate. Ungated, the URL is the nicer answer and
- * goes first. Gated, ssh does.
- *
- * The ssh form has no such caveat: `invocation()` spells out an absolute path
- * whenever the binary is not somewhere sshd's PATH would find it, so it
- * resolves either way.
- */
-export function attachForms(ssh: string, url: string, gated: boolean): AttachForm[] {
-  const forms: AttachForm[] = [
-    { key: 'command', hint: 'ssh, straight to the session', command: ssh },
-    { key: 'url', hint: 'a URL the server resolves for you', command: url },
-  ];
-  return gated ? forms : forms.reverse();
-}
-
 /** Everything the UI needs to offer an SSH handoff. */
-export function attachInfo(
-  db: Db,
-  config: Config,
-  refOrId: string,
-  origin: string,
-  requestHost: string,
-): AttachInfo | undefined {
+export function attachInfo(db: Db, config: Config, refOrId: string, requestHost: string): AttachInfo | undefined {
   const target = resolveTarget(db, refOrId);
   if (!target) return undefined;
-  const command = commandFor(db, config, target);
-  if (!command) return undefined;
+  // Not used in the command, but a window with no way to launch anything is not
+  // one worth offering a handoff for.
+  if (!commandFor(db, config, target)) return undefined;
 
   const endpoint = sshEndpoint(config, requestHost);
-
-  // The token rides in the URL when the gate is on, because the thing fetching
-  // it is curl, which has no cookie and no session to establish. See
-  // Gate.checkAllowingParam — this is the one route that accepts it that way.
-  const query = config.token ? `?token=${encodeURIComponent(config.token)}` : '';
 
   return {
     ref: target.ref,
@@ -404,37 +336,10 @@ export function attachInfo(
     project: target.project,
     role: target.role,
     endpoint,
-    forms: attachForms(
-      `${sshPrefix(endpoint)} ${invocation()} attach ${target.ref}`,
-      `sh -c "$(curl -sSL '${origin}/t/${target.ref}${query}')"`,
-      config.token !== null,
-    ),
-    raw: `${sshPrefix(endpoint)} -- ${shellQuote(command)}`,
+    command: `${sshPrefix(endpoint)} ${invocation()} attach ${target.ref}`,
   };
 }
 
-/**
- * The script behind `/t/<ref>`.
- *
- * Written to be read before it is run: `curl <url>` on its own shows you a
- * commented three-line file, and the `sh -c "$(…)"` form runs exactly what you
- * just looked at. That form matters — `curl … | sh` makes the script's stdin
- * the pipe, so the `ssh -t` inside it has no terminal to attach to and dtach
- * fails on arrival.
- */
-export function attachScript(info: AttachInfo): string {
-  const where = info.role ? `${info.role} in ${info.project}/${info.workspace}` : `${info.project}/${info.workspace}`;
-  return [
-    '#!/bin/sh',
-    `# vibe-os — attach to ${info.ref} (${where})`,
-    '#',
-    '# Run it with:  sh -c "$(curl -sSL <this-url>)"',
-    '# Not with a pipe: `curl … | sh` leaves ssh without a terminal.',
-    '',
-    `exec ${info.raw}`,
-    '',
-  ].join('\n');
-}
 
 // ── the handoff ──────────────────────────────────────────────────────────────
 

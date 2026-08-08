@@ -18,7 +18,7 @@ import { listProfiles, getProfile, createProfile, updateProfile, deleteProfile, 
 import { discoverClaude } from './harness.ts';
 import { discoverMcp, syncMcpMirrors, type McpScan, type McpServer } from './mcp.ts';
 import { windowCommand } from './session.ts';
-import { attachInfo, setHandoff, reapStaleHandoffs, publicOrigin, publicHost, killSession } from './attach.ts';
+import { attachInfo, setHandoff, reapStaleHandoffs, publicHost, killSession } from './attach.ts';
 import { listWindows, getWindow, createWindow, updateWindow, deleteWindow, sessionNameFor } from './windows.ts';
 import { log } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
@@ -281,7 +281,7 @@ export function createApi(deps: ApiDeps) {
       const id = decodeURIComponent(attachMatch[1]);
       if (!ID.test(id)) return json({ error: 'invalid window id' }, 400);
       if (!config.sessions) return json({ error: 'this server runs plain login shells (--no-sessions)' }, 409);
-      const info = attachInfo(db, config, id, publicOrigin(req, url), publicHost(req, url));
+      const info = attachInfo(db, config, id, publicHost(req, url));
       return info ? json(info) : json({ error: 'unknown window' }, 404);
     }
 

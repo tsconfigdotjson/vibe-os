@@ -74,13 +74,6 @@ export interface WindowRow {
   createdAt: number;
 }
 
-/** Mirrors AttachForm in server/attach.ts. */
-export interface AttachForm {
-  key: 'command' | 'url';
-  hint: string;
-  command: string;
-}
-
 /** Mirrors AttachInfo in server/attach.ts. */
 export interface AttachInfo {
   ref: string;
@@ -90,8 +83,8 @@ export interface AttachInfo {
   project: string;
   role: string | null;
   endpoint: { user: string; host: string; port: number };
-  /** Ways to reach the window, best first — the server decides the order. */
-  forms: AttachForm[];
+  /** The one command that gets you there. */
+  command: string;
 }
 
 async function fetcher<T>(url: string): Promise<T> {

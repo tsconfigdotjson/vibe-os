@@ -2286,17 +2286,6 @@ button {
   text-align: center;
 }
 
-.handoff-cmd {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.handoff-hint {
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
 .handoff-row {
   display: flex;
   align-items: stretch;
