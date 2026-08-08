@@ -13,14 +13,18 @@
 
 const BLANK = /\{\{([^{}\n]{1,60})\}\}/g;
 
-export interface Segment {
-  /** Literal prompt text, or a blank to be filled. */
-  type: 'text' | 'blank';
-  /** The text, or for a blank its label. */
-  value: string;
-  /** Stable key for a blank: its position among the blanks. */
-  index?: number;
-}
+/**
+ * A discriminated union, not one shape with an optional `index`.
+ *
+ * Only blanks have an index, and the optional field made that invisible to the
+ * type system: the band knew a `blank` segment always carried one, and had to
+ * say so with a non-null assertion at every use. Narrowing on `type` now proves
+ * it instead.
+ */
+export type Segment =
+  | { type: "text"; value: string; key: string }
+  /** `value` is the label; `index` is its position among the blanks. */
+  | { type: "blank"; value: string; index: number; key: string };
 
 /**
  * Splits a prompt into literal runs and blanks.
@@ -35,13 +39,26 @@ export function parsePrompt(prompt: string): Segment[] {
   let last = 0;
   let index = 0;
 
+  // Keyed by offset in the prompt: unique, and stable for as long as the prompt
+  // is — which is the band's whole lifetime.
   for (const match of prompt.matchAll(BLANK)) {
     const at = match.index ?? 0;
-    if (at > last) segments.push({ type: 'text', value: prompt.slice(last, at) });
-    segments.push({ type: 'blank', value: match[1].trim(), index: index++ });
+    if (at > last)
+      segments.push({
+        type: "text",
+        value: prompt.slice(last, at),
+        key: `t${last}`,
+      });
+    segments.push({
+      type: "blank",
+      value: match[1].trim(),
+      index: index++,
+      key: `b${at}`,
+    });
     last = at + match[0].length;
   }
-  if (last < prompt.length) segments.push({ type: 'text', value: prompt.slice(last) });
+  if (last < prompt.length)
+    segments.push({ type: "text", value: prompt.slice(last), key: `t${last}` });
   return segments;
 }
 
@@ -58,7 +75,10 @@ export function countBlanks(prompt: string): number {
  * report". The band asks before letting that happen, but the text should be
  * sane either way.
  */
-export function fillPrompt(prompt: string, values: Record<number, string>): string {
+export function fillPrompt(
+  prompt: string,
+  values: Record<number, string>,
+): string {
   let index = 0;
   return prompt.replace(BLANK, (_, label: string) => {
     const value = values[index++];

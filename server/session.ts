@@ -11,8 +11,8 @@
 // too, and api.ts needs attach.ts — importing in a circle to share three pure
 // functions is not a trade worth making.
 
-import type { Config } from './config.ts';
-import type { Profile } from './profiles.ts';
+import type { Config } from "./config.ts";
+import type { Profile } from "./profiles.ts";
 
 /** Single-quote for the login shell that runs a certificate's force-command. */
 export function shellQuote(value: string): string {
@@ -40,9 +40,14 @@ export function shellQuote(value: string): string {
  * command, and the whole string is quoted again by the caller.
  */
 export function harnessCommand(profile: Profile): string | undefined {
-  const executable = profile.harness === 'claude' ? 'claude' : profile.harness === 'custom' ? profile.command : null;
+  const executable =
+    profile.harness === "claude"
+      ? "claude"
+      : profile.harness === "custom"
+        ? profile.command
+        : null;
   if (!executable) return undefined;
-  const argv = [executable, ...profile.args].map(shellQuote).join(' ');
+  const argv = [executable, ...profile.args].map(shellQuote).join(" ");
 
   /*
    * The PATH a forced command gets is not the PATH you get when you log in.
@@ -117,6 +122,8 @@ export function windowCommand(
   cwd: string,
   config: Config,
   profile?: Profile | null,
+  /** `forDisplay` drops the locking wrapper, leaving the readable essentials. */
+  opts?: { forDisplay?: boolean },
 ): string | undefined {
   if (!config.sessions) return undefined;
 
@@ -138,7 +145,7 @@ export function windowCommand(
    * once, at startup. Reattaching later inherits nothing, which is the same
    * reason the working directory belongs here too.
    */
-  const env = 'export TERM=xterm-256color COLORTERM=truecolor;';
+  const env = "export TERM=xterm-256color COLORTERM=truecolor;";
   const inner = `cd ${shellQuote(cwd)} && ${env} ${harness ?? 'exec "$SHELL"'}`;
 
   // `dtach -p` writes to a live socket and fails on a dead one, which makes it
@@ -148,9 +155,34 @@ export function windowCommand(
   const create = `dtach -n ${shellQuote(sock)} -E -z /bin/sh -c ${shellQuote(inner)}`;
   const attach = `exec dtach -a ${shellQuote(sock)} -E -z -r winch`;
 
+  /*
+   * Probe-then-create has to be one critical section.
+   *
+   * This whole string is the certificate's force-command, so it runs once per
+   * login — and two logins for the same window are ordinary: two tabs, a reload
+   * racing a reconnect, two machines. Unserialised, both probe a missing socket
+   * and both take the create branch, at which point the second one's `rm -f`
+   * unlinks the socket the first is already living on. That session survives
+   * with no name: unreachable, still holding a pty, invisible to `clientsOn`
+   * and `killSession`, which can only ever find the socket that replaced it.
+   *
+   * flock is in util-linux and present on every distro this runs on, but the
+   * fallback keeps a box without it working exactly as it did before rather
+   * than failing to open a terminal at all.
+   */
+  const critical = `${probe} || { rm -f ${shellQuote(sock)}; ${create}; }`;
+
+  // The banner wants to show what a window actually runs, which is the create
+  // and the attach. Printing the locking wrapper as well — twice, once per
+  // branch, with three levels of nested quoting — buries that in a wall of
+  // backslashes and tells the reader nothing they can act on.
+  if (opts?.forDisplay) return [create, attach].join("; ");
+
   return [
     `mkdir -p ${shellQuote(`${config.stateDir}/sessions`)}`,
-    `{ ${probe} || { rm -f ${shellQuote(sock)}; ${create}; }; }`,
+    `if command -v flock > /dev/null 2>&1; then ` +
+      `flock ${shellQuote(`${sock}.lock`)} -c ${shellQuote(critical)}; ` +
+      `else { ${critical}; }; fi`,
     attach,
-  ].join('; ');
+  ].join("; ");
 }

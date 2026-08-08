@@ -12,9 +12,11 @@ FROM oven/bun:1-debian AS builder
 
 WORKDIR /src
 # scripts/ comes along with the manifest because postinstall runs from there.
-COPY package.json ./
+# bun.lock comes along so the image resolves the same dependency graph a
+# developer has, rather than re-resolving every range at build time.
+COPY package.json bun.lock ./
 COPY scripts ./scripts
-RUN bun install
+RUN bun install --frozen-lockfile
 
 COPY . .
 
@@ -64,6 +66,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # It lands in /opt rather than the vibe user's home because that home is a
 # volume in compose — anything baked into it at build time is masked the moment
 # an existing volume mounts over it.
+# Note: the installer is fetched at build time and is not version-pinned, so
+# two builds on different days can produce different `claude` binaries. That is
+# upstream's distribution model; if you need a reproducible image, install a
+# specific release here instead of running the script.
 ARG WITH_CLAUDE=0
 RUN if [ "$WITH_CLAUDE" = "1" ]; then \
       mkdir -p /opt/claude \
@@ -84,7 +90,13 @@ RUN useradd --create-home --shell /bin/bash vibe \
     # makes a fresh set on first boot instead.
     && rm -f /etc/ssh/ssh_host_*
 
-COPY docker/sshd-vibe-os.conf /etc/ssh/sshd_config.d/vibe-os.conf
+# Staged outside /etc/ssh on purpose. compose puts a named volume over that
+# directory to keep host keys stable across rebuilds, and a named volume is
+# seeded from the image only when it is first created — so a drop-in copied
+# straight to its final path would be masked from the second `up` onwards, and
+# editing this file would silently have no effect. The entrypoint installs it
+# on every boot instead.
+COPY docker/sshd-vibe-os.conf /usr/local/share/vibe-os/sshd-vibe-os.conf
 COPY docker/entrypoint.sh /usr/local/bin/vibe-os-entrypoint
 COPY --from=builder /out-binary /usr/local/bin/vibe-os
 
@@ -94,5 +106,16 @@ RUN chmod +x /usr/local/bin/vibe-os-entrypoint /usr/local/bin/vibe-os \
     && setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
 
 EXPOSE 80
+
+# Both halves have to be up for a terminal to work: the web port serves the
+# desktop, and sshd is what every window actually connects to. sshd is started
+# in the background by the entrypoint, so if it dies later the container would
+# otherwise stay "running" with every terminal broken and compose's
+# restart policy never firing.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS -o /dev/null http://127.0.0.1:80/ \
+        && ssh-keyscan -T 3 -p 22 127.0.0.1 > /dev/null 2>&1 \
+        || exit 1
+
 ENTRYPOINT ["/usr/local/bin/vibe-os-entrypoint"]
 CMD []

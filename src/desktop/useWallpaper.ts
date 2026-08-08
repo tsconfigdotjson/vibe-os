@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DesktopPrefs, Wallpaper } from "../../shared/wire";
+import { describeError, request } from "../data";
 
-export interface Wallpaper {
-  id: string;
-  name: string;
-  mime: string;
-  size: number;
-}
+/** The routes this hook owns, named so they are not spelled out at five sites. */
+const WALLPAPERS = "/api/wallpapers";
+const DESKTOP = "/api/desktop";
 
-export interface DesktopPrefs {
-  wallpaper: string | null;
-  fit: 'cover' | 'contain' | 'tile';
-  dim: number;
-}
+/** Matches the server's DEFAULT_PREFS; what shows before /api/desktop answers. */
+const DEFAULT_PREFS: DesktopPrefs = {
+  wallpaper: null,
+  fit: "cover",
+  dim: 0.35,
+};
+
+/** The URL that renders a stored wallpaper. */
+export const wallpaperUrl = (id: string): string => `${WALLPAPERS}/${id}`;
 
 /**
  * Wallpaper choice lives on the server rather than in localStorage, so the same
@@ -20,20 +23,33 @@ export interface DesktopPrefs {
  */
 export function useWallpaper() {
   const [list, setList] = useState<Wallpaper[]>([]);
-  const [prefs, setPrefs] = useState<DesktopPrefs>({ wallpaper: null, fit: 'cover', dim: 0.35 });
+  const [prefs, setPrefs] = useState<DesktopPrefs>(DEFAULT_PREFS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Which save is the newest.
+   *
+   * The dim slider fires a PUT per pointer move, and the responses are not
+   * guaranteed to come back in order — so without this the reply to an earlier,
+   * lower value could land last and drag the slider backwards under the cursor.
+   * Only the newest request is allowed to write state.
+   */
+  const saveSeq = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
       const [wallpapers, desktop] = await Promise.all([
-        fetch('/api/wallpapers').then((r) => r.json() as Promise<Wallpaper[]>),
-        fetch('/api/desktop').then((r) => r.json() as Promise<DesktopPrefs>),
+        request<Wallpaper[]>(WALLPAPERS),
+        request<DesktopPrefs>(DESKTOP),
       ]);
       setList(wallpapers);
-      setPrefs(desktop);
+      // A save in flight is newer than anything this refresh just read.
+      if (saveSeq.current === 0) setPrefs(desktop);
+      return desktop;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
+      return null;
     }
   }, []);
 
@@ -43,16 +59,18 @@ export function useWallpaper() {
 
   const save = useCallback(async (next: DesktopPrefs) => {
     setPrefs(next); // optimistic: the desktop should react immediately
+    saveSeq.current += 1;
+    const seq = saveSeq.current;
     try {
-      const res = await fetch('/api/desktop', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(next),
+      const stored = await request<DesktopPrefs>(DESKTOP, {
+        method: "PUT",
+        body: next,
       });
-      if (!res.ok) throw new Error(`saving preferences failed (HTTP ${res.status})`);
-      setPrefs((await res.json()) as DesktopPrefs);
+      if (seq === saveSeq.current) setPrefs(stored);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
+    } finally {
+      if (seq === saveSeq.current) saveSeq.current = 0;
     }
   }, []);
 
@@ -61,17 +79,23 @@ export function useWallpaper() {
       setBusy(true);
       setError(null);
       try {
-        const res = await fetch(`/api/wallpapers?name=${encodeURIComponent(file.name)}`, {
-          method: 'POST',
-          headers: { 'content-type': file.type || 'application/octet-stream' },
-          body: file,
-        });
-        const body = (await res.json()) as Wallpaper | { error: string };
-        if (!res.ok) throw new Error('error' in body ? body.error : `upload failed (HTTP ${res.status})`);
-        await refresh();
-        await save({ ...prefs, wallpaper: (body as Wallpaper).id });
+        const stored = await request<Wallpaper>(
+          `${WALLPAPERS}?name=${encodeURIComponent(file.name)}`,
+          {
+            method: "POST",
+            raw: file,
+            headers: {
+              "content-type": file.type || "application/octet-stream",
+            },
+          },
+        );
+        // Build on what the server just told us, not on the `prefs` this
+        // closure captured at render time — refresh has since replaced it, and
+        // saving the stale copy would put the old fit and dim back.
+        const current = (await refresh()) ?? prefs;
+        await save({ ...current, wallpaper: stored.id });
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(describeError(err));
       } finally {
         setBusy(false);
       }
@@ -81,11 +105,26 @@ export function useWallpaper() {
 
   const remove = useCallback(
     async (id: string) => {
-      await fetch(`/api/wallpapers/${id}`, { method: 'DELETE' }).catch(() => {});
+      try {
+        await request<void>(wallpaperUrl(id), { method: "DELETE" });
+      } catch (err) {
+        // A delete that fails used to look exactly like one that succeeded.
+        setError(describeError(err));
+      }
       await refresh();
     },
     [refresh],
   );
 
-  return { list, prefs, busy, error, save, upload, remove, dismissError: () => setError(null) };
+  return {
+    list,
+    prefs,
+    busy,
+    error,
+    save,
+    upload,
+    remove,
+  };
 }
+
+export type { DesktopPrefs, Wallpaper };

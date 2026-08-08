@@ -1,12 +1,13 @@
-import { useEffect, useRef } from 'react';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { WebLinksAddon } from '@xterm/addon-web-links';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
-import '@xterm/xterm/css/xterm.css';
-import { startSshSession } from './runtime';
-import { writeClipboard } from '../clipboard';
-import type { SshStatus, SshTermConfig } from './types';
+import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Terminal } from "@xterm/xterm";
+import { useEffect, useRef } from "react";
+import { describeError } from "../data";
+import "@xterm/xterm/css/xterm.css";
+import { writeClipboard } from "../clipboard";
+import { startSshSession } from "./runtime";
+import type { SshStatus, SshTermConfig } from "./types";
 
 export interface SshTerminalProps {
   config: SshTermConfig;
@@ -32,28 +33,47 @@ export interface SshTerminalProps {
  * through the glass. Needs allowTransparency below to take effect.
  */
 const THEME = {
-  background: 'rgba(0, 0, 0, 0)',
-  foreground: '#c8cedb',
-  cursor: '#56cfe1',
-  cursorAccent: '#090c12',
-  selectionBackground: 'rgba(86, 207, 225, 0.26)',
-  black: '#161b25',
-  red: '#ef6b73',
-  green: '#7ee081',
-  yellow: '#f2c14e',
-  blue: '#56cfe1',
-  magenta: '#a78bfa',
-  cyan: '#63d4c0',
-  white: '#c8cedb',
-  brightBlack: '#5c6678',
-  brightRed: '#ff8288',
-  brightGreen: '#95e998',
-  brightYellow: '#ffd166',
-  brightBlue: '#7bdcea',
-  brightMagenta: '#c0a8ff',
-  brightCyan: '#83e3d3',
-  brightWhite: '#e7ecf3',
+  background: "rgba(0, 0, 0, 0)",
+  foreground: "#c8cedb",
+  cursor: "#56cfe1",
+  cursorAccent: "#090c12",
+  selectionBackground: "rgba(86, 207, 225, 0.26)",
+  black: "#161b25",
+  red: "#ef6b73",
+  green: "#7ee081",
+  yellow: "#f2c14e",
+  blue: "#56cfe1",
+  magenta: "#a78bfa",
+  cyan: "#63d4c0",
+  white: "#c8cedb",
+  brightBlack: "#5c6678",
+  brightRed: "#ff8288",
+  brightGreen: "#95e998",
+  brightYellow: "#ffd166",
+  brightBlue: "#7bdcea",
+  brightMagenta: "#c0a8ff",
+  brightCyan: "#83e3d3",
+  brightWhite: "#e7ecf3",
 };
+
+/** The escape byte that opens every CSI sequence. */
+/** How long the selection must hold still before it is worth copying. */
+const SELECTION_SETTLE_MS = 120;
+/** How long to wait for a closing session before disposing the terminal anyway. */
+const CLOSE_GRACE_MS = 2_000;
+
+const ESC = "\u001b";
+
+/**
+ * Colour codes, stripped before the banner match so styling cannot hide it.
+ * Built from a constant because the escape byte cannot sit in a regex literal.
+ */
+const SGR_CODES = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
+
+/** Muted and reset, for the terminal's own asides. */
+const DIM = `${ESC}[2m`;
+const RED = `${ESC}[31m`;
+const RESET = `${ESC}[0m`;
 
 /**
  * Swallows the banner upstream prints into every session.
@@ -75,12 +95,12 @@ function suppressBanner(term: Terminal): void {
   let filtering = true;
   let sawBox = false;
 
-  (term as unknown as { writeln: Terminal['writeln'] }).writeln = ((
+  (term as unknown as { writeln: Terminal["writeln"] }).writeln = ((
     data: string | Uint8Array,
     callback?: () => void,
   ) => {
-    if (filtering && typeof data === 'string') {
-      const plain = data.replace(/\x1b\[[0-9;]*m/g, '');
+    if (filtering && typeof data === "string") {
+      const plain = data.replace(SGR_CODES, "");
       if (BANNER.test(plain)) {
         sawBox = true;
         callback?.();
@@ -88,7 +108,7 @@ function suppressBanner(term: Terminal): void {
       }
       // The banner ends with one blank line; anything else means real output
       // has started and the filter has done its job.
-      if (sawBox && plain.trim() === '') {
+      if (sawBox && plain.trim() === "") {
         filtering = false;
         callback?.();
         return;
@@ -96,7 +116,7 @@ function suppressBanner(term: Terminal): void {
       filtering = false;
     }
     return original(data as string, callback);
-  }) as Terminal['writeln'];
+  }) as Terminal["writeln"];
 }
 
 /**
@@ -117,8 +137,20 @@ export function SshTerminal({
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Held in a ref so changing callback identity never restarts the session.
-  const handlers = useRef({ onStatusChange, onTitleChange, onBell, onFocus, onTerminal });
-  handlers.current = { onStatusChange, onTitleChange, onBell, onFocus, onTerminal };
+  const handlers = useRef({
+    onStatusChange,
+    onTitleChange,
+    onBell,
+    onFocus,
+    onTerminal,
+  });
+  handlers.current = {
+    onStatusChange,
+    onTitleChange,
+    onBell,
+    onFocus,
+    onTerminal,
+  };
 
   const configRef = useRef(config);
   configRef.current = config;
@@ -132,14 +164,14 @@ export function SshTerminal({
 
     // Own child element per session, so a StrictMode double-mount never has
     // two terminals fighting over the same node.
-    const host = document.createElement('div');
-    host.style.cssText = 'width: 100%; height: 100%;';
+    const host = document.createElement("div");
+    host.style.cssText = "width: 100%; height: 100%;";
     container.appendChild(host);
 
     const term = new Terminal({
       cursorBlink: true,
-      cursorStyle: 'block',
-      cursorInactiveStyle: 'outline',
+      cursorStyle: "block",
+      cursorInactiveStyle: "outline",
       fontFamily:
         'ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace',
       fontSize: 13,
@@ -172,7 +204,7 @@ export function SshTerminal({
      */
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
-    term.unicode.activeVersion = '11';
+    term.unicode.activeVersion = "11";
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -214,9 +246,23 @@ export function SshTerminal({
     // right-click / middle-click. Paste needs a secure context, which plain
     // HTTP on an IP address is not, so it silently no-ops there; copy has a
     // fallback that works anywhere.
+    /*
+     * Copy once the selection settles, not on every change.
+     *
+     * xterm fires onSelectionChange whenever the endpoints move, which during a
+     * drag is once per animation frame. On plain HTTP — the deployment this is
+     * built for — `navigator.clipboard` is undefined, so each of those ran the
+     * textarea-and-execCommand fallback: append an element, select it, copy,
+     * remove it, and hand focus back. Dozens of times, mid-gesture.
+     */
+    let copyTimer: number | undefined;
     const copySelection = () => {
-      const selection = term.getSelection();
-      if (selection !== '') void writeClipboard(selection);
+      window.clearTimeout(copyTimer);
+      copyTimer = window.setTimeout(() => {
+        if (disposed) return;
+        const selection = term.getSelection();
+        if (selection !== "") void writeClipboard(selection);
+      }, SELECTION_SETTLE_MS);
     };
 
     /**
@@ -236,10 +282,10 @@ export function SshTerminal({
      * should hand that over for free.
      */
     const onOsc52 = (data: string): boolean => {
-      const semi = data.indexOf(';');
+      const semi = data.indexOf(";");
       if (semi === -1) return false;
       const payload = data.slice(semi + 1);
-      if (payload === '?' || payload === '') return false;
+      if (payload === "?" || payload === "") return false;
       try {
         const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
         void writeClipboard(new TextDecoder().decode(bytes));
@@ -250,11 +296,24 @@ export function SshTerminal({
       }
     };
     const paste = () => {
-      if (!navigator.clipboard?.readText) return;
+      // Reads have no fallback the way writes do: execCommand('paste') is not
+      // permitted from script. On an insecure origin there is nothing to try,
+      // so say so in the terminal rather than having the click do nothing.
+      if (!navigator.clipboard?.readText) {
+        term.writeln(
+          `\r\n${DIM}paste needs a secure origin (https or localhost)${RESET}`,
+        );
+        return;
+      }
       navigator.clipboard
         .readText()
-        .then((text) => term.paste(text))
-        .catch(() => {});
+        .then((text) => {
+          if (!disposed) term.paste(text);
+        })
+        .catch(() => {
+          if (!disposed)
+            term.writeln(`\r\n${DIM}clipboard read was blocked${RESET}`);
+        });
     };
     const onContextMenu = (event: MouseEvent) => {
       event.preventDefault();
@@ -271,12 +330,15 @@ export function SshTerminal({
       term.onTitleChange((title) => handlers.current.onTitleChange?.(title)),
       term.onBell(() => handlers.current.onBell?.()),
     ];
-    term.element?.addEventListener('contextmenu', onContextMenu);
-    term.element?.addEventListener('mousedown', onMouseDown);
-    term.textarea?.addEventListener('focus', () => handlers.current.onFocus?.());
+    const onFocus = () => {
+      if (!disposed) handlers.current.onFocus?.();
+    };
+    term.element?.addEventListener("contextmenu", onContextMenu);
+    term.element?.addEventListener("mousedown", onMouseDown);
+    term.textarea?.addEventListener("focus", onFocus);
 
     handlers.current.onTerminal?.(term);
-    handlers.current.onStatusChange?.('loading');
+    handlers.current.onStatusChange?.("loading");
 
     // Started synchronously so teardown can always await the same promise,
     // even when the component unmounts before the runtime finishes booting.
@@ -285,7 +347,7 @@ export function SshTerminal({
     sessionPromise.then(
       (session) => {
         if (disposed) return; // cleanup owns shutdown from here
-        handlers.current.onStatusChange?.('ready');
+        handlers.current.onStatusChange?.("ready");
         fit();
 
         /*
@@ -321,7 +383,12 @@ export function SshTerminal({
         const blank = (): boolean => {
           const buf = term.buffer.active;
           for (let y = 0; y < term.rows; y++) {
-            if ((buf.getLine(buf.viewportY + y)?.translateToString(true) ?? '').trim() !== '') return false;
+            if (
+              (
+                buf.getLine(buf.viewportY + y)?.translateToString(true) ?? ""
+              ).trim() !== ""
+            )
+              return false;
           }
           return true;
         };
@@ -336,21 +403,21 @@ export function SshTerminal({
 
         session.done
           .then((result) => {
-            if (!disposed) handlers.current.onStatusChange?.('ended', result);
+            if (!disposed) handlers.current.onStatusChange?.("ended", result);
           })
           .catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = describeError(err);
             if (!disposed) {
-              term.writeln(`\r\n\x1b[31m${message}\x1b[0m`);
-              handlers.current.onStatusChange?.('error', message);
+              term.writeln(`\r\n${RED}${message}${RESET}`);
+              handlers.current.onStatusChange?.("error", message);
             }
           });
       },
       (err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = describeError(err);
         if (!disposed) {
-          term.writeln(`\x1b[31mFailed to start SSH runtime: ${message}\x1b[0m`);
-          handlers.current.onStatusChange?.('error', message);
+          term.writeln(`${RED}Failed to start SSH runtime: ${message}${RESET}`);
+          handlers.current.onStatusChange?.("error", message);
         }
       },
     );
@@ -362,8 +429,14 @@ export function SshTerminal({
       for (const n of nudges) window.clearTimeout(n);
       // Retracted before disposal, so nothing outside can write to a dead term.
       handlers.current.onTerminal?.(null);
-      term.element?.removeEventListener('contextmenu', onContextMenu);
-      term.element?.removeEventListener('mousedown', onMouseDown);
+      window.clearTimeout(copyTimer);
+      term.element?.removeEventListener("contextmenu", onContextMenu);
+      term.element?.removeEventListener("mousedown", onMouseDown);
+      // The one listener that used to outlive the terminal. The host div stays
+      // in the document until the async teardown below runs, which can be a
+      // whole session close later, so a focus landing on the retired textarea
+      // would raise a window on behalf of a terminal being torn down.
+      term.textarea?.removeEventListener("focus", onFocus);
       for (const d of disposables) d.dispose();
 
       // Teardown must be ordered: ssh.wasm is one shared Go runtime for the
@@ -373,7 +446,14 @@ export function SshTerminal({
       void sessionPromise
         .then(async (session) => {
           session.close();
-          await session.done.catch(() => {});
+          // Raced against a timeout: `done` is a promise handed over from Go,
+          // and a panicked runtime settles nothing. That is exactly when every
+          // terminal on the page unmounts at once, so waiting forever would
+          // leave every dead host div stacked inside its container.
+          await Promise.race([
+            session.done.catch(() => {}),
+            new Promise((r) => setTimeout(r, CLOSE_GRACE_MS)),
+          ]);
         })
         .catch(() => {
           // start() failed; nothing to close.

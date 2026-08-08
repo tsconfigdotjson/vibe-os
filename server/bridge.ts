@@ -24,9 +24,9 @@
 // It is still capped defensively, because "the peer is malicious" is a
 // different question from "the peer is slow".
 
-import net from 'node:net';
-import type { ServerWebSocket } from 'bun';
-import { log } from './log.ts';
+import net from "node:net";
+import type { ServerWebSocket } from "bun";
+import { log } from "./log.ts";
 
 /** Cap on bytes buffered toward sshd before we treat the client as hostile. */
 const MAX_PENDING_TO_SSHD = 8 * 1024 * 1024;
@@ -57,9 +57,9 @@ export function bridgeConnections(): number {
  * mistake or an attack.
  */
 export function originAllowed(req: Request): boolean {
-  const origin = req.headers.get('origin');
+  const origin = req.headers.get("origin");
   if (!origin) return true; // non-browser client
-  const host = req.headers.get('host');
+  const host = req.headers.get("host");
   if (!host) return false;
   try {
     return new URL(origin).host === host;
@@ -68,7 +68,10 @@ export function originAllowed(req: Request): boolean {
   }
 }
 
-export function createBridgeHandlers(target: BridgeTarget, maxConnections = 64) {
+export function createBridgeHandlers(
+  target: BridgeTarget,
+  maxConnections = 64,
+) {
   const shutdown = (ws: ServerWebSocket<BridgeData>, why: string) => {
     if (ws.data.closed) return;
     ws.data.closed = true;
@@ -103,34 +106,38 @@ export function createBridgeHandlers(target: BridgeTarget, maxConnections = 64) 
         // connected WebSocket until the OS gives up, which can be minutes.
         socket.setTimeout(15_000, () => {
           if (socket.connecting) {
-            log.warn(`bridge ${ws.data.peer}: ${target.host}:${target.port} did not answer`);
-            shutdown(ws, 'connect timeout');
+            log.warn(
+              `bridge ${ws.data.peer}: ${target.host}:${target.port} did not answer`,
+            );
+            shutdown(ws, "connect timeout");
           }
         });
 
-        socket.on('connect', () => {
+        socket.on("connect", () => {
           socket.setTimeout(0);
           log.debug(`bridge ${ws.data.peer} → ${target.host}:${target.port}`);
         });
 
-        socket.on('data', (chunk: Buffer) => {
+        socket.on("data", (chunk: Buffer) => {
           const rc = ws.send(chunk);
           if (rc === 0) {
             // Should be unreachable given the pause below. If it ever happens
             // the stream is already corrupt, so fail loudly rather than let a
             // half-broken SSH session limp along.
-            log.warn(`bridge ${ws.data.peer}: websocket dropped a frame — closing`);
-            shutdown(ws, 'backpressure drop');
+            log.warn(
+              `bridge ${ws.data.peer}: websocket dropped a frame — closing`,
+            );
+            shutdown(ws, "backpressure drop");
             return;
           }
           if (rc === -1) socket.pause();
         });
 
-        socket.on('error', (err) => {
+        socket.on("error", (err) => {
           log.debug(`bridge ${ws.data.peer} tcp error: ${err.message}`);
-          shutdown(ws, 'tcp error');
+          shutdown(ws, "tcp error");
         });
-        socket.on('close', () => shutdown(ws, 'tcp closed'));
+        socket.on("close", () => shutdown(ws, "tcp closed"));
       },
 
       message(ws: ServerWebSocket<BridgeData>, message: string | Buffer) {
@@ -138,10 +145,12 @@ export function createBridgeHandlers(target: BridgeTarget, maxConnections = 64) 
         if (!socket || socket.destroyed) return;
         if (socket.writableLength > MAX_PENDING_TO_SSHD) {
           log.warn(`bridge ${ws.data.peer}: client outran sshd — closing`);
-          shutdown(ws, 'write buffer full');
+          shutdown(ws, "write buffer full");
           return;
         }
-        socket.write(typeof message === 'string' ? Buffer.from(message) : message);
+        socket.write(
+          typeof message === "string" ? Buffer.from(message) : message,
+        );
       },
 
       drain(ws: ServerWebSocket<BridgeData>) {
@@ -149,7 +158,7 @@ export function createBridgeHandlers(target: BridgeTarget, maxConnections = 64) 
       },
 
       close(ws: ServerWebSocket<BridgeData>) {
-        shutdown(ws, 'ws closed');
+        shutdown(ws, "ws closed");
       },
     },
   };

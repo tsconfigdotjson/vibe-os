@@ -1,15 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { fetchServerConfig, windowSshConfig, type ServerConfig } from '../api';
-import { SshTerminal } from '../sshterm';
-import type { SshStatus } from '../sshterm';
-import { usePopoutGuest, type PopoutTarget } from './usePopouts';
-
-const STATUS_LABEL: Record<SshStatus, string> = {
-  loading: 'connecting',
-  ready: 'live',
-  ended: 'closed',
-  error: 'error',
-};
+import { useEffect, useMemo, useState } from "react";
+import { windowSshConfig } from "../api";
+import { useServerConfig } from "../data";
+import type { SshStatus } from "../sshterm";
+import { SshTerminal } from "../sshterm";
+import { Boot, BootError } from "./Boot";
+import { type PopoutTarget, usePopoutGuest } from "./usePopouts";
+import { STATUS_LABEL } from "./useWindows";
 
 /**
  * One terminal, filling its own browser window.
@@ -25,57 +21,43 @@ const STATUS_LABEL: Record<SshStatus, string> = {
  * One client at a time means this window gets the size it actually has.
  */
 export function PopoutView({ target }: { target: PopoutTarget }) {
-  const [server, setServer] = useState<ServerConfig | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<SshStatus>('loading');
+  const { server, error } = useServerConfig();
+  const [status, setStatus] = useState<SshStatus>("loading");
   const [reclaimed, setReclaimed] = useState(false);
 
   usePopoutGuest(target.id, () => setReclaimed(true));
 
   useEffect(() => {
-    let cancelled = false;
-    fetchServerConfig().then(
-      (config) => !cancelled && setServer(config),
-      (err: unknown) => !cancelled && setError(err instanceof Error ? err.message : String(err)),
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     document.title = `${target.name} — vibe-os`;
   }, [target.name]);
 
-  const config = useMemo(() => (server ? windowSshConfig(server, target.id) : null), [server, target.id]);
+  const config = useMemo(
+    () => (server ? windowSshConfig(server, target.id) : null),
+    [server, target.id],
+  );
 
   if (error) {
-    return (
-      <div className="boot boot-error">
-        <p className="boot-line">could not reach the vibe-os server</p>
-        <p className="boot-detail">{error}</p>
-      </div>
-    );
+    return <BootError message={error} />;
   }
 
   if (!config) {
-    return (
-      <div className="boot">
-        <p className="boot-line">
-          {target.name}
-          <span className="caret" aria-hidden="true" />
-        </p>
-        <p className="boot-detail">attaching…</p>
-      </div>
-    );
+    return <Boot title={target.name} detail="attaching…" />;
   }
 
   return (
-    <div className="popout" style={{ ['--win-color' as string]: `var(--profile-${target.color})` }}>
+    <div
+      className="popout"
+      style={{ ["--win-color" as string]: `var(--profile-${target.color})` }}
+    >
       <header className="popout-bar">
         <span className="win-dot" aria-hidden="true" />
         <span className="popout-name">{target.name}</span>
-        <span className="win-state">{STATUS_LABEL[status]}</span>
+        {/* Once reclaimed the terminal is unmounted, so `status` freezes at
+            whatever it last was — which read as "live" above a panel saying the
+            desktop had taken the terminal back. */}
+        <span className="win-state">
+          {reclaimed ? "reclaimed" : STATUS_LABEL[status]}
+        </span>
       </header>
       <div className="popout-body">
         {/* Unmounted the moment the desktop reclaims, so this page stops being
@@ -86,10 +68,16 @@ export function PopoutView({ target }: { target: PopoutTarget }) {
           // to fit both. Popping out again is a decision the desktop makes.
           <div className="popped">
             <p className="popped-line">The desktop took this terminal back.</p>
-            <p className="popped-hint">You can close this window. Nothing was lost.</p>
+            <p className="popped-hint">
+              You can close this window. Nothing was lost.
+            </p>
           </div>
         ) : (
-          <SshTerminal config={config} className="win-term" onStatusChange={(next) => setStatus(next)} />
+          <SshTerminal
+            config={config}
+            className="win-term"
+            onStatusChange={(next) => setStatus(next)}
+          />
         )}
       </div>
     </div>

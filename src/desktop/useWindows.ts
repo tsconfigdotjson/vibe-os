@@ -1,7 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { SshStatus } from '../sshterm';
-import { onRuntimeDead } from '../sshterm';
-import { useWindowRows, windowApi, nudgeWindows, type WindowRow } from '../data';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DEFAULT_WINDOW_COLS,
+  DEFAULT_WINDOW_ROWS,
+  GRID_COLS,
+  GRID_ROWS,
+  MIN_WINDOW_COLS,
+  MIN_WINDOW_ROWS,
+} from "../../shared/grid";
+import {
+  nudgeWindows,
+  useWindowRows,
+  type WindowRow,
+  windowApi,
+} from "../data";
+import type { SshStatus } from "../sshterm";
+import { onRuntimeDead } from "../sshterm";
 
 /**
  * Window geometry lives in grid units, not pixels.
@@ -11,14 +24,20 @@ import { useWindowRows, windowApi, nudgeWindows, type WindowRow } from '../data'
  * nearest cell. It also means a window keeps its proportions across screens of
  * different sizes, which pixel coordinates would not.
  */
-export const MIN_WINDOW_COLS = 5;
-export const MIN_WINDOW_ROWS = 4;
-
-export const GRID_COLS = 24;
-export const GRID_ROWS = 14;
-
 const MIN_COLS = MIN_WINDOW_COLS;
 const MIN_ROWS = MIN_WINDOW_ROWS;
+
+/**
+ * What each connection state is called in the UI. `WindowState["status"]` is
+ * `SshStatus`, so the desktop and the pop-out were rendering the same four
+ * strings from two separate maps.
+ */
+export const STATUS_LABEL: Record<SshStatus, string> = {
+  loading: "connecting",
+  ready: "live",
+  ended: "closed",
+  error: "error",
+};
 
 export interface WindowState {
   id: string;
@@ -37,7 +56,7 @@ export interface WindowState {
   /** The prompt band has been handed off; it stays closed from then on. */
   promptDone: boolean;
   /** 'ssh' while a real terminal holds this window's session. */
-  handoff: 'ssh' | null;
+  handoff: "ssh" | null;
   status: SshStatus;
   detail?: string;
   title?: string;
@@ -51,9 +70,10 @@ export interface Rect {
   rowSpan: number;
 }
 
-export type DragMode = 'move' | 'resize';
+export type DragMode = "move" | "resize";
 
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.max(lo, Math.min(hi, Math.round(v)));
 
 /**
  * Constrains a rect to the grid.
@@ -63,8 +83,8 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, M
  * span first and deriving position from it means growing a window's right edge
  * silently drags its left edge inwards.
  */
-export function clampRect(r: Rect, mode: DragMode = 'move'): Rect {
-  if (mode === 'move') {
+export function clampRect(r: Rect, mode: DragMode = "move"): Rect {
+  if (mode === "move") {
     const colSpan = clamp(r.colSpan, MIN_COLS, GRID_COLS);
     const rowSpan = clamp(r.rowSpan, MIN_ROWS, GRID_ROWS);
     return {
@@ -127,13 +147,21 @@ export const MAX_TILED = TILINGS.length;
  * detached, not killed, which is exactly what dtach is for.
  */
 export function useWindows(workspaceId: string | null) {
-  const { rows, mutate, isLoading } = useWindowRows(workspaceId);
-  const [runtime, setRuntime] = useState<Record<string, Partial<WindowState>>>({});
+  const { rows, mutate } = useWindowRows(workspaceId);
+  const [runtime, setRuntime] = useState<Record<string, Partial<WindowState>>>(
+    {},
+  );
   const [focused, setFocused] = useState<string | null>(null);
   const zCounter = useRef(1);
 
   // Transient per-session state (status, title, uptime) is keyed by window id
   // and deliberately not persisted — it describes a live connection, not layout.
+  //
+  // The rule below reads `workspaceId` as an outer-scope value. It is this
+  // hook's parameter, and re-running on it is the entire point: its suggested
+  // fix (drop the dependency) would leave the previous workspace's statuses and
+  // titles showing against the new workspace's windows.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: parameter, not outer scope
   useEffect(() => {
     setRuntime({});
     setFocused(null);
@@ -153,29 +181,47 @@ export function useWindows(workspaceId: string | null) {
       profileId: r.profileId,
       promptDone: r.promptDone,
       handoff: r.handoff ?? null,
-      status: 'loading' as SshStatus,
+      status: "loading" as SshStatus,
       ...runtime[r.id],
     }));
     zCounter.current = list.reduce((max, w) => Math.max(max, w.z), 0);
     return list;
   }, [rows, runtime]);
 
-  const ordered = useMemo(() => [...windows].sort((a, b) => a.z - b.z), [windows]);
+  const ordered = useMemo(
+    () => [...windows].sort((a, b) => a.z - b.z),
+    [windows],
+  );
 
   useEffect(() => {
-    if (focused === null && ordered.length > 0) setFocused(ordered.at(-1)!.id);
+    if (focused !== null) return;
+    // Topmost that is actually on screen: a minimized window renders as null,
+    // so focusing one gives no focus ring and lights up the wrong profile.
+    const next = ordered.filter((w) => !w.minimized).at(-1) ?? ordered.at(-1);
+    if (next) setFocused(next.id);
   }, [focused, ordered]);
 
   const patchRuntime = useCallback((id: string, next: Partial<WindowState>) => {
-    setRuntime((current) => ({ ...current, [id]: { ...current[id], ...next } }));
+    setRuntime((current) => ({
+      ...current,
+      [id]: { ...current[id], ...next },
+    }));
   }, []);
 
   /** Applies a row change locally, then persists it. */
   const applyRow = useCallback(
-    (id: string, changes: Partial<WindowRow>, persist: () => Promise<unknown>) => {
-      void mutate((current) => (current ?? []).map((r) => (r.id === id ? { ...r, ...changes } : r)), {
-        revalidate: false,
-      });
+    (
+      id: string,
+      changes: Partial<WindowRow>,
+      persist: () => Promise<unknown>,
+    ) => {
+      void mutate(
+        (current) =>
+          (current ?? []).map((r) => (r.id === id ? { ...r, ...changes } : r)),
+        {
+          revalidate: false,
+        },
+      );
       void persist().catch(() => void mutate());
     },
     [mutate],
@@ -184,8 +230,11 @@ export function useWindows(workspaceId: string | null) {
   const raise = useCallback(
     (id: string) => {
       setFocused(id);
-      const z = (zCounter.current += 1);
-      applyRow(id, { z, minimized: false }, () => windowApi.patch(id, { raise: true, minimized: false }));
+      zCounter.current += 1;
+      const z = zCounter.current;
+      applyRow(id, { z, minimized: false }, () =>
+        windowApi.patch(id, { raise: true, minimized: false }),
+      );
     },
     [applyRow],
   );
@@ -194,7 +243,9 @@ export function useWindows(workspaceId: string | null) {
     async (profileId?: string | null) => {
       if (!workspaceId) return;
       const created = await windowApi.create(workspaceId, profileId);
-      await mutate((current) => [...(current ?? []), created], { revalidate: false });
+      await mutate((current) => [...(current ?? []), created], {
+        revalidate: false,
+      });
       setFocused(created.id);
       return created;
     },
@@ -213,26 +264,41 @@ export function useWindows(workspaceId: string | null) {
     (id: string) => {
       const remaining = (rows ?? []).filter((r) => r.id !== id);
       void mutate(remaining, { revalidate: false });
-      setFocused((f) => (f === id ? (remaining.at(-1)?.id ?? null) : f));
+      // Cleared rather than guessed. This picked by array position while the
+      // fallback effect above picks by z, and `applyRow` rewrites z in place
+      // without re-sorting — so after any raise or tile the two disagreed and
+      // closing the focused window landed focus on an arbitrary one. Setting
+      // null hands the choice to the single implementation.
+      setFocused((f) => (f === id ? null : f));
       void windowApi.remove(id).catch(() => void mutate());
     },
     [rows, mutate],
   );
 
-  const restart = useCallback(
-    (id: string) => {
-      patchRuntime(id, {
-        generation: (runtime[id]?.generation ?? 0) + 1,
-        status: 'loading',
+  /**
+   * Bumping `generation` changes the terminal's React key, which is what forces
+   * a remount. It has to be computed from the state being updated, not from the
+   * `runtime` this callback closed over: two bumps in one tick both read the
+   * pre-update value, land on the same number, leave the key unchanged, and the
+   * second restart silently does nothing. Reading it functionally also drops
+   * `runtime` from the deps, so `restart` stops changing identity every time a
+   * terminal retitles itself — which for an interactive shell is every command.
+   */
+  const restart = useCallback((id: string) => {
+    setRuntime((current) => ({
+      ...current,
+      [id]: {
+        ...current[id],
+        generation: (current[id]?.generation ?? 0) + 1,
+        status: "loading",
         detail: undefined,
         readyAt: undefined,
-      });
-    },
-    [patchRuntime, runtime],
-  );
+      },
+    }));
+  }, []);
 
   const move = useCallback(
-    (id: string, rect: Rect, mode: DragMode = 'move') => {
+    (id: string, rect: Rect, mode: DragMode = "move") => {
       const clamped = clampRect(rect, mode);
       applyRow(id, clamped, () => windowApi.patch(id, clamped));
     },
@@ -240,7 +306,10 @@ export function useWindows(workspaceId: string | null) {
   );
 
   const minimize = useCallback(
-    (id: string) => applyRow(id, { minimized: true }, () => windowApi.patch(id, { minimized: true })),
+    (id: string) =>
+      applyRow(id, { minimized: true }, () =>
+        windowApi.patch(id, { minimized: true }),
+      ),
     [applyRow],
   );
 
@@ -248,9 +317,15 @@ export function useWindows(workspaceId: string | null) {
     (id: string) => {
       const current = (rows ?? []).find((r) => r.id === id);
       if (!current) return;
-      const isFull = current.colSpan === GRID_COLS && current.rowSpan === GRID_ROWS;
+      const isFull =
+        current.colSpan === GRID_COLS && current.rowSpan === GRID_ROWS;
       const rect = isFull
-        ? { col: 2, row: 1, colSpan: 11, rowSpan: 8 }
+        ? {
+            col: 2,
+            row: 1,
+            colSpan: DEFAULT_WINDOW_COLS,
+            rowSpan: DEFAULT_WINDOW_ROWS,
+          }
         : { col: 0, row: 0, colSpan: GRID_COLS, rowSpan: GRID_ROWS };
       applyRow(id, rect, () => windowApi.patch(id, rect));
       raise(id);
@@ -277,9 +352,12 @@ export function useWindows(workspaceId: string | null) {
     const layout = TILINGS[visible.length - 1];
     if (!layout) return;
     const rects = new Map(visible.map((win, index) => [win.id, layout[index]]));
-    void mutate((current) => (current ?? []).map((r) => ({ ...r, ...rects.get(r.id) })), {
-      revalidate: false,
-    });
+    void mutate(
+      (current) => (current ?? []).map((r) => ({ ...r, ...rects.get(r.id) })),
+      {
+        revalidate: false,
+      },
+    );
     for (const [id, rect] of rects) {
       void windowApi.patch(id, rect).catch(() => void mutate());
     }
@@ -308,7 +386,10 @@ export function useWindows(workspaceId: string | null) {
   );
 
   const markPromptDone = useCallback(
-    (id: string) => applyRow(id, { promptDone: true }, () => windowApi.patch(id, { promptDone: true })),
+    (id: string) =>
+      applyRow(id, { promptDone: true }, () =>
+        windowApi.patch(id, { promptDone: true }),
+      ),
     [applyRow],
   );
 
@@ -323,20 +404,29 @@ export function useWindows(workspaceId: string | null) {
    * takes, which is precisely the state this whole dance exists to prevent.
    */
   const handoff = useCallback(
-    async (id: string, mode: 'ssh' | null) => {
+    async (id: string, mode: "ssh" | null) => {
       // Other tabs are showing this same window and have to let go of it too,
       // or they stay attached and the terminal ends up sharing the session.
       const tell = () => workspaceId && nudgeWindows(workspaceId);
 
-      if (mode === 'ssh') {
-        applyRow(id, { handoff: 'ssh' }, () => windowApi.handoff(id, 'ssh').then((row) => (tell(), row)));
+      if (mode === "ssh") {
+        applyRow(id, { handoff: "ssh" }, () =>
+          windowApi.handoff(id, "ssh").then((row) => {
+            tell();
+            return row;
+          }),
+        );
         return;
       }
       try {
         const row = await windowApi.handoff(id, null);
-        await mutate((current) => (current ?? []).map((r) => (r.id === id ? { ...r, ...row } : r)), {
-          revalidate: false,
-        });
+        await mutate(
+          (current) =>
+            (current ?? []).map((r) => (r.id === id ? { ...r, ...row } : r)),
+          {
+            revalidate: false,
+          },
+        );
         tell();
       } catch {
         void mutate();
@@ -347,7 +437,11 @@ export function useWindows(workspaceId: string | null) {
 
   const setStatus = useCallback(
     (id: string, status: SshStatus, detail?: string) => {
-      patchRuntime(id, { status, detail, ...(status === 'ready' ? { readyAt: Date.now() } : {}) });
+      patchRuntime(id, {
+        status,
+        detail,
+        ...(status === "ready" ? { readyAt: Date.now() } : {}),
+      });
     },
     [patchRuntime],
   );
@@ -364,8 +458,8 @@ export function useWindows(workspaceId: string | null) {
             next[id] = {
               ...state,
               generation: (state.generation ?? 0) + 1,
-              status: 'loading',
-              detail: 'runtime restarted',
+              status: "loading",
+              detail: "runtime restarted",
               readyAt: undefined,
             };
           }
@@ -379,7 +473,6 @@ export function useWindows(workspaceId: string | null) {
     windows,
     ordered,
     focused,
-    isLoading,
     spawn,
     openProfile,
     markPromptDone,
@@ -393,6 +486,9 @@ export function useWindows(workspaceId: string | null) {
     tile,
     tileable: visible.length > 0 && visible.length <= MAX_TILED,
     setStatus,
-    setTitle: useCallback((id: string, title: string) => patchRuntime(id, { title }), [patchRuntime]),
+    setTitle: useCallback(
+      (id: string, title: string) => patchRuntime(id, { title }),
+      [patchRuntime],
+    ),
   };
 }

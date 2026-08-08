@@ -29,7 +29,7 @@ export interface KnownHost {
 
 export interface GenerateKey {
   name: string;
-  type?: 'ed25519' | 'ecdsa' | 'rsa';
+  type?: "ed25519" | "ecdsa" | "rsa";
   bits?: number;
   /**
    * URL that turns this key into a certificate. The app POSTs the public key
@@ -77,7 +77,7 @@ export interface SshSession {
   done: Promise<string>;
 }
 
-export type SshStatus = 'loading' | 'ready' | 'ended' | 'error';
+export type SshStatus = "loading" | "ready" | "ended" | "error";
 
 interface GoRuntime {
   importObject: WebAssembly.Imports;
@@ -91,8 +91,12 @@ declare global {
      * runtime starts. Go calls sshIsReady() and sets start().
      */
     sshApp?: {
-      ready?: Promise<void>;
       sshIsReady?: () => void;
+      /**
+       * Written by the Go side when its main() returns. Initialised here
+       * because main.go expects the field to exist; nothing on this side reads
+       * it — session end arrives through the `done` promise instead.
+       */
       exited?: string | null;
       start?: (cfg: SshTermConfig & { term: unknown }) => Promise<SshSession>;
     };

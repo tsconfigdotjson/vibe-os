@@ -1,31 +1,33 @@
-import { access, copyFile, stat } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { log } from './log.ts';
-import { IS_COMPILED } from './runtime.ts';
+import { spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { access, copyFile } from "node:fs/promises";
+import path from "node:path";
+import { isFile } from "./fsx.ts";
+import { log } from "./log.ts";
+import { FETCH_WASM, IS_COMPILED, PKG_ROOT } from "./runtime.ts";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-/** server/ -> package root */
-const PKG_ROOT = path.resolve(HERE, '..');
+const WASM_FILES = ["ssh.wasm", "wasm_exec.js"];
 
-const WASM_FILES = ['ssh.wasm', 'wasm_exec.js'];
-
-async function isFile(p: string): Promise<boolean> {
-  try {
-    return (await stat(p)).isFile();
-  } catch {
-    return false;
-  }
-}
-
+/**
+ * Downloads the pair unconditionally.
+ *
+ * Deliberately without `--if-missing`: that flag answers "is the pair in
+ * public/ *or* in the package's own dist/web", and the only caller has already
+ * established that public/ does not have them. With a custom --web-root and a
+ * populated dist/web, the flag made the script exit successfully having copied
+ * nothing, and ensureWasm then reported the files as unfetchable on a machine
+ * that had them.
+ */
 function runFetchScript(): Promise<void> {
-  const script = path.join(PKG_ROOT, 'scripts', 'fetch-wasm.mjs');
+  const script = FETCH_WASM;
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, '--if-missing'], { stdio: 'inherit' });
-    child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`fetch-wasm exited ${code}`))));
+    const child = spawn(process.execPath, [script], {
+      stdio: "inherit",
+    });
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(`fetch-wasm exited ${code}`)),
+    );
   });
 }
 
@@ -48,14 +50,14 @@ export async function ensureWasm(webRoot: string): Promise<void> {
   }
   if (missing.length === 0) return;
 
-  const publicDir = path.join(PKG_ROOT, 'public');
+  const publicDir = path.join(PKG_ROOT, "public");
   const stillMissing = [];
   for (const name of missing) {
     if (!(await isFile(path.join(publicDir, name)))) stillMissing.push(name);
   }
 
   if (stillMissing.length > 0) {
-    log.info(`fetching ${stillMissing.join(' and ')}…`);
+    log.info(`fetching ${stillMissing.join(" and ")}…`);
     await runFetchScript();
   }
 
@@ -64,7 +66,9 @@ export async function ensureWasm(webRoot: string): Promise<void> {
     if (await isFile(from)) {
       await copyFile(from, path.join(webRoot, name));
     } else {
-      throw new Error(`${name} is missing from ${webRoot} and could not be fetched`);
+      throw new Error(
+        `${name} is missing from ${webRoot} and could not be fetched`,
+      );
     }
   }
 }
@@ -73,11 +77,11 @@ export async function ensureWebRoot(webRoot: string): Promise<void> {
   if (IS_COMPILED) return;
 
   try {
-    await access(path.join(webRoot, 'index.html'), constants.R_OK);
+    await access(path.join(webRoot, "index.html"), constants.R_OK);
   } catch {
     throw new Error(
       `no built web app at ${webRoot}\n` +
-        '  If you are running from a git checkout, build it first:  bun run build',
+        "  If you are running from a git checkout, build it first:  bun run build",
     );
   }
 }

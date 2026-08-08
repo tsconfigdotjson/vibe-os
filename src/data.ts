@@ -1,5 +1,15 @@
-import { useEffect } from 'react';
-import useSWR, { mutate as globalMutate } from 'swr';
+import { useEffect } from "react";
+import useSWR, { mutate as globalMutate } from "swr";
+import type {
+  AttachInfo,
+  Harness,
+  HarnessInfo,
+  McpServer,
+  Profile,
+  ProfileInput,
+} from "../shared/wire";
+import type { ServerConfig } from "./api";
+import { postOnce } from "./broadcast";
 
 /**
  * Server state.
@@ -12,6 +22,15 @@ import useSWR, { mutate as globalMutate } from 'swr';
  * the tab after doing something in another one.
  */
 export const POLL_MS = 60_000;
+
+/**
+ * What a caught `unknown` should say to a person. Mirrors `describeError` in
+ * `server/log.ts`; the two halves cannot share a module because this one has to
+ * survive into the browser bundle.
+ */
+export function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 export interface Project {
   id: string;
@@ -32,24 +51,6 @@ export interface Workspace {
   lastOpenedAt: number;
 }
 
-export type Harness = 'claude' | 'shell' | 'custom';
-
-/** A role a terminal can be opened as. Defined per project. */
-export interface Profile {
-  id: string;
-  projectId: string;
-  name: string;
-  /** Palette token; `--profile-<color>` in the stylesheet resolves it. */
-  color: string;
-  harness: Harness;
-  command: string | null;
-  /** argv tokens, already split and validated by the server. */
-  args: string[];
-  prompt: string;
-  position: number;
-  createdAt: number;
-}
-
 export interface WindowRow {
   id: string;
   workspaceId: string;
@@ -67,7 +68,7 @@ export interface WindowRow {
    * the desktop. Persisted, unlike a browser pop-out, because the point of it
    * is that you close the laptop and the terminal keeps running.
    */
-  handoff: 'ssh' | null;
+  handoff: "ssh" | null;
   handoffAt: number | null;
   /** A terminal has actually attached, so its departure is reaped at once. */
   handoffSeen: boolean;
@@ -75,48 +76,84 @@ export interface WindowRow {
 }
 
 /** Mirrors AttachInfo in server/attach.ts. */
-export interface AttachInfo {
-  ref: string;
-  session: string;
-  cwd: string;
-  workspace: string;
-  project: string;
-  role: string | null;
-  endpoint: { user: string; host: string; port: number };
-  /** The one command that gets you there. */
-  command: string;
-}
 
-async function fetcher<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => ({}) as { error?: string });
-    throw new Error(detail.error ?? `${url}: HTTP ${res.status}`);
-  }
-  return (await res.json()) as T;
-}
-
-async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
+/**
+ * One way to talk to the API.
+ *
+ * Every handler on the server answers a failure with `{ error }` and a status,
+ * so the only correct read of a response is: check `ok`, then unwrap `error`
+ * for the message. Anything that skips the `ok` check hands the caller an error
+ * object typed as the success shape — which is how a 401 once reached
+ * `WallpaperPanel` as a `Wallpaper[]` and blew up in `.map()`.
+ *
+ * `init` carries a raw body (a File upload) and its own headers; JSON callers
+ * pass `body` and get it serialised.
+ */
+export async function request<T>(
+  url: string,
+  options: {
+    method?: string;
+    body?: unknown;
+    raw?: BodyInit;
+    headers?: Record<string, string>;
+  } = {},
+): Promise<T> {
+  const { method = "GET", body, raw, headers } = options;
   const res = await fetch(url, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: {
+      accept: "application/json",
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...headers,
+    },
+    body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}) as { error?: string });
     throw new Error(detail.error ?? `${url}: HTTP ${res.status}`);
   }
+  // 204 and friends have no body; the callers that expect nothing pass `void`.
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+const fetcher = <T>(url: string): Promise<T> => request<T>(url);
+
+const send = <T>(url: string, method: string, body?: unknown): Promise<T> =>
+  request<T>(url, { method, body });
+
+/**
+ * The server config, fetched once.
+ *
+ * Three components did this by hand — the desktop, the pop-out and the handoff
+ * panel — each with its own `cancelled` flag and its own error state, nine
+ * lines apiece. Through SWR they share one cache entry, which also means a
+ * pop-out open beside the desktop does not fetch it twice.
+ */
+export function useServerConfig() {
+  const { data, error } = useSWR<ServerConfig>("/api/config", fetcher, {
+    // It describes the running server; it does not change while a page is open.
+    revalidateOnFocus: false,
+    revalidateIfStale: false,
+  });
+  return {
+    server: data ?? null,
+    error: error ? describeError(error) : null,
+  };
 }
 
 export function useProjects() {
-  const { data, error, isLoading, mutate } = useSWR<Project[]>('/api/projects', fetcher, {
-    refreshInterval: POLL_MS,
-  });
+  const { data, error, isLoading, mutate } = useSWR<Project[]>(
+    "/api/projects",
+    fetcher,
+    {
+      refreshInterval: POLL_MS,
+    },
+  );
 
   /** Walks the disk for repos. Only ever from the refresh button. */
   const rescan = async () => {
-    const projects = await send<Project[]>('/api/projects/scan', 'POST');
+    const projects = await send<Project[]>("/api/projects/scan", "POST");
     await mutate(projects, { revalidate: false });
     return projects;
   };
@@ -131,21 +168,36 @@ export function useWorkspaces(projectId: string | null) {
   });
 
   const create = async (name?: string) => {
-    if (!projectId) throw new Error('no project selected');
-    const created = await send<Workspace>(`/api/projects/${projectId}/workspaces`, 'POST', name ? { name } : {});
+    if (!projectId) throw new Error("no project selected");
+    const created = await send<Workspace>(
+      `/api/projects/${projectId}/workspaces`,
+      "POST",
+      name ? { name } : {},
+    );
     await mutate();
     return created;
   };
 
   const remove = async (id: string) => {
-    await send(`/api/workspaces/${id}`, 'DELETE');
+    await send(`/api/workspaces/${id}`, "DELETE");
     await mutate();
-    await globalMutate(`/api/workspaces/${id}/windows`, [], { revalidate: false });
+    await globalMutate(`/api/workspaces/${id}/windows`, [], {
+      revalidate: false,
+    });
   };
 
-  const touch = (id: string) => void send(`/api/workspaces/${id}`, 'POST').catch(() => {});
+  const touch = (id: string) =>
+    void send(`/api/workspaces/${id}`, "POST").catch(() => {});
 
-  return { workspaces: data ?? [], error, isLoading, create, remove, touch, mutate };
+  return {
+    workspaces: data ?? [],
+    error,
+    isLoading,
+    create,
+    remove,
+    touch,
+    mutate,
+  };
 }
 
 /**
@@ -162,35 +214,36 @@ export function useProfiles(projectId: string | null) {
   });
 
   const create = async (input: ProfileInput) => {
-    if (!projectId) throw new Error('no project selected');
-    const created = await send<Profile>(`/api/projects/${projectId}/profiles`, 'POST', input);
+    if (!projectId) throw new Error("no project selected");
+    const created = await send<Profile>(
+      `/api/projects/${projectId}/profiles`,
+      "POST",
+      input,
+    );
     await mutate();
     return created;
   };
 
   const update = async (id: string, input: ProfileInput) => {
-    const updated = await send<Profile>(`/api/profiles/${id}`, 'PATCH', input);
+    const updated = await send<Profile>(`/api/profiles/${id}`, "PATCH", input);
     await mutate();
     return updated;
   };
 
   const remove = async (id: string) => {
-    await send(`/api/profiles/${id}`, 'DELETE');
+    await send(`/api/profiles/${id}`, "DELETE");
     await mutate();
   };
 
-  return { profiles: data ?? [], error, isLoading, create, update, remove, mutate };
-}
-
-/** What the installed Claude CLI on the server accepts. */
-export interface HarnessInfo {
-  available: boolean;
-  version: string | null;
-  aliases: string[];
-  models: string[];
-  permissionModes: string[];
-  /** Values `--effort` accepts, weakest first — the order is the scale. */
-  effortLevels: string[];
+  return {
+    profiles: data ?? [],
+    error,
+    isLoading,
+    create,
+    update,
+    remove,
+    mutate,
+  };
 }
 
 /**
@@ -201,25 +254,11 @@ export interface HarnessInfo {
  * describes an installed binary, which does not change while the page is open.
  */
 export function useHarness() {
-  const { data } = useSWR<HarnessInfo>('/api/harness/claude', fetcher, {
+  const { data } = useSWR<HarnessInfo>("/api/harness/claude", fetcher, {
     revalidateOnFocus: false,
     refreshInterval: 0,
   });
   return data ?? null;
-}
-
-/** An MCP server configured on the box, as the profile editor sees it. */
-export interface McpServer {
-  name: string;
-  /** `user` is machine-wide, `project` is the repo's `.mcp.json`, `local` is one directory. */
-  scope: 'user' | 'project' | 'local';
-  /** The file or directory it was defined in. */
-  source: string;
-  transport: string;
-  /** URL, or the command it runs. */
-  detail: string;
-  /** The path a profile passes to `--mcp-config` for this one server. */
-  configPath: string;
 }
 
 /**
@@ -240,14 +279,6 @@ export function useMcpServers(projectId: string | null) {
 }
 
 /** What the editor sends. `args` is free text; the server tokenises it. */
-export interface ProfileInput {
-  name?: string;
-  color?: string;
-  harness?: Harness;
-  command?: string | null;
-  args?: string;
-  prompt?: string;
-}
 
 /**
  * Windows for a workspace.
@@ -271,7 +302,8 @@ export function useWindowRows(workspaceId: string | null) {
      * focus revalidation is what makes it immediate in the case that actually
      * happens: coming back to a tab you left.
      */
-    refreshInterval: (latest) => (latest?.some((r) => r.handoff === 'ssh') ? 5_000 : POLL_MS),
+    refreshInterval: (latest) =>
+      latest?.some((r) => r.handoff === "ssh") ? 5_000 : POLL_MS,
   });
 
   /*
@@ -283,7 +315,7 @@ export function useWindowRows(workspaceId: string | null) {
    * and a tab that misses it still catches up on its own poll.
    */
   useEffect(() => {
-    if (!workspaceId || typeof BroadcastChannel === 'undefined') return;
+    if (!workspaceId || typeof BroadcastChannel === "undefined") return;
     const bc = new BroadcastChannel(WINDOWS_CHANNEL);
     bc.onmessage = (event: MessageEvent<{ workspaceId: string }>) => {
       if (event.data?.workspaceId === workspaceId) void mutate();
@@ -294,34 +326,39 @@ export function useWindowRows(workspaceId: string | null) {
   return { rows: data, error, isLoading, mutate, key };
 }
 
-const WINDOWS_CHANNEL = 'vibe-os:windows:v1';
+const WINDOWS_CHANNEL = "vibe-os:windows:v1";
 
 /**
  * Tells other tabs a window's handoff changed, so they let go of its terminal.
- *
- * Sent on a channel of its own rather than a long-lived one, for the reason
- * usePopouts documents: a ref to a listening channel is null between an
- * effect's cleanup and its next run, and a send landing in that gap posts
- * nothing at all, silently.
+ * Its own channel, posted through `postOnce` — see there for why.
  */
 export function nudgeWindows(workspaceId: string): void {
-  if (typeof BroadcastChannel === 'undefined') return;
-  const bc = new BroadcastChannel(WINDOWS_CHANNEL);
-  bc.postMessage({ workspaceId });
-  bc.close();
+  postOnce(WINDOWS_CHANNEL, { workspaceId });
 }
 
 export const windowApi = {
   create: (workspaceId: string, profileId?: string | null) =>
-    send<WindowRow>(`/api/workspaces/${workspaceId}/windows`, 'POST', { profileId: profileId ?? null }),
+    send<WindowRow>(`/api/workspaces/${workspaceId}/windows`, "POST", {
+      profileId: profileId ?? null,
+    }),
   patch: (id: string, patch: Partial<WindowRow> & { raise?: boolean }) =>
-    send<WindowRow>(`/api/windows/${id}`, 'PATCH', patch),
-  remove: (id: string) => send<{ ok: true }>(`/api/windows/${id}`, 'DELETE'),
+    send<WindowRow>(`/api/windows/${id}`, "PATCH", patch),
+  remove: (id: string) => send<{ ok: true }>(`/api/windows/${id}`, "DELETE"),
   /** How to reach this window from a real terminal. Composes strings only. */
   attachInfo: (id: string) => fetcher<AttachInfo>(`/api/windows/${id}/attach`),
   /**
    * Hands the terminal to an ssh client, or takes it back — which detaches
    * whoever is attached, so the desktop never becomes a second client.
    */
-  handoff: (id: string, mode: 'ssh' | null) => send<WindowRow>(`/api/windows/${id}/handoff`, 'POST', { mode }),
+  handoff: (id: string, mode: "ssh" | null) =>
+    send<WindowRow>(`/api/windows/${id}/handoff`, "POST", { mode }),
+};
+
+export type {
+  AttachInfo,
+  Harness,
+  HarnessInfo,
+  McpServer,
+  Profile,
+  ProfileInput,
 };

@@ -1,19 +1,28 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchServerConfig, type ServerConfig } from './api';
-import { useHarness, useMcpServers, useProfiles, useProjects, useWorkspaces, type ProfileInput } from './data';
-import { useWindows, type Rect } from './desktop/useWindows';
-import { TermWindow } from './desktop/TermWindow';
-import { Dock } from './desktop/Dock';
-import { GridOverlay } from './desktop/GridOverlay';
-import { WallpaperPanel } from './desktop/WallpaperPanel';
-import { useWallpaper } from './desktop/useWallpaper';
-import { ProjectPicker } from './chrome/ProjectPicker';
-import { WorkspaceSidebar } from './chrome/WorkspaceSidebar';
-import { ProfileRail } from './chrome/ProfileRail';
-import { ProfilePanel } from './chrome/ProfilePanel';
-import { PopoutView } from './desktop/PopoutView';
-import { usePopoutHost, readPopoutTarget } from './desktop/usePopouts';
-import type { Viewport } from './desktop/geometry';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ProfilePanel } from "./chrome/ProfilePanel";
+import { ProfileRail } from "./chrome/ProfileRail";
+import { ProjectPicker } from "./chrome/ProjectPicker";
+import { WorkspaceSidebar } from "./chrome/WorkspaceSidebar";
+import {
+  describeError,
+  type ProfileInput,
+  useHarness,
+  useMcpServers,
+  useProfiles,
+  useProjects,
+  useServerConfig,
+  useWorkspaces,
+} from "./data";
+import { Boot, BootError } from "./desktop/Boot";
+import { Dock } from "./desktop/Dock";
+import { GridOverlay } from "./desktop/GridOverlay";
+import type { Viewport } from "./desktop/geometry";
+import { PopoutView } from "./desktop/PopoutView";
+import { TermWindow } from "./desktop/TermWindow";
+import { readPopoutTarget, usePopoutHost } from "./desktop/usePopouts";
+import { useWallpaper, wallpaperUrl } from "./desktop/useWallpaper";
+import { type Rect, useWindows } from "./desktop/useWindows";
+import { WallpaperPanel } from "./desktop/WallpaperPanel";
 
 /**
  * Window identity colours, drawn from the ANSI palette the terminals use.
@@ -21,9 +30,12 @@ import type { Viewport } from './desktop/geometry';
  * bar, its focus ring and its dock entry — which is what makes several windows
  * distinguishable at a glance without reading anything.
  */
-const HUES = ['#56cfe1', '#a78bfa', '#7ee081', '#f2c14e', '#ef6b73', '#63d4c0'];
+const HUES = ["#56cfe1", "#a78bfa", "#7ee081", "#f2c14e", "#ef6b73", "#63d4c0"];
 
-const SELECTION_KEY = 'vibe-os:selection:v1';
+const SELECTION_KEY = "vibe-os:selection:v1";
+
+/** Palette token a pop-out falls back to when its window has no profile. */
+const DEFAULT_HUE_TOKEN = "cyan";
 
 /**
  * Measures the window surface.
@@ -45,7 +57,11 @@ function useViewport(): [(node: HTMLElement | null) => void, Viewport] {
 
     const measure = (width: number, height: number) => {
       if (width > 0 && height > 0) {
-        setView((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+        setView((prev) =>
+          prev.width === width && prev.height === height
+            ? prev
+            : { width, height },
+        );
       }
     };
     const ro = new ResizeObserver(([entry]) => {
@@ -74,12 +90,11 @@ export default function App() {
 }
 
 function Desktop() {
-  const [server, setServer] = useState<ServerConfig | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { server, error } = useServerConfig();
   const [preview, setPreview] = useState<Rect | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   // null = closed, 'new' = creating, otherwise the id being edited.
-  const [editing, setEditing] = useState<string | 'new' | null>(null);
+  const [editing, setEditing] = useState<string | "new" | null>(null);
   const [scanning, setScanning] = useState(false);
   const [wsBusy, setWsBusy] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
@@ -93,7 +108,12 @@ function Desktop() {
   const [attachSurface, view] = useViewport();
   const { projects, rescan } = useProjects();
   const { workspaces, create, remove, touch } = useWorkspaces(projectId);
-  const { profiles, create: createProfile, update: updateProfile, remove: removeProfile } = useProfiles(projectId);
+  const {
+    profiles,
+    create: createProfile,
+    update: updateProfile,
+    remove: removeProfile,
+  } = useProfiles(projectId);
   const wallpaper = useWallpaper();
   const popouts = usePopoutHost();
   const harnessInfo = useHarness();
@@ -119,14 +139,11 @@ function Desktop() {
     setTitle,
   } = useWindows(workspaceId);
 
+  // Restoring the saved selection is its own concern; it used to share an
+  // effect with the config fetch for no reason beyond both running once.
   useEffect(() => {
-    let cancelled = false;
-    fetchServerConfig().then(
-      (config) => !cancelled && setServer(config),
-      (err: unknown) => !cancelled && setError(err instanceof Error ? err.message : String(err)),
-    );
     try {
-      const saved = JSON.parse(localStorage.getItem(SELECTION_KEY) ?? '{}') as {
+      const saved = JSON.parse(localStorage.getItem(SELECTION_KEY) ?? "{}") as {
         projectId?: string;
         workspaceId?: string;
       };
@@ -135,14 +152,14 @@ function Desktop() {
     } catch {
       // no saved selection — the effects below pick sensible defaults
     }
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
     try {
-      localStorage.setItem(SELECTION_KEY, JSON.stringify({ projectId, workspaceId }));
+      localStorage.setItem(
+        SELECTION_KEY,
+        JSON.stringify({ projectId, workspaceId }),
+      );
     } catch {
       // private mode — selection just resets next visit
     }
@@ -151,7 +168,8 @@ function Desktop() {
   // Fall back to the first project, and drop a selection that no longer exists.
   useEffect(() => {
     if (projects.length === 0) return;
-    if (!projectId || !projects.some((p) => p.id === projectId)) setProjectId(projects[0].id);
+    if (!projectId || !projects.some((p) => p.id === projectId))
+      setProjectId(projects[0].id);
   }, [projects, projectId]);
 
   // Same for workspaces — the list is ordered most-recently-opened first.
@@ -161,7 +179,8 @@ function Desktop() {
       setWorkspaceId(null);
       return;
     }
-    if (!workspaceId || !workspaces.some((w) => w.id === workspaceId)) setWorkspaceId(workspaces[0].id);
+    if (!workspaceId || !workspaces.some((w) => w.id === workspaceId))
+      setWorkspaceId(workspaces[0].id);
   }, [workspaces, workspaceId, projectId]);
 
   const touchRef = useRef(touch);
@@ -179,7 +198,10 @@ function Desktop() {
     [workspaces, workspaceId],
   );
 
-  const profileById = useMemo(() => new Map(profiles.map((p) => [p.id, p])), [profiles]);
+  const profileById = useMemo(
+    () => new Map(profiles.map((p) => [p.id, p])),
+    [profiles],
+  );
 
   /**
    * Window colours.
@@ -192,14 +214,23 @@ function Desktop() {
   const hues = useMemo(() => {
     const map: Record<string, string> = {};
     windows.forEach((win, index) => {
-      const profile = win.profileId ? profileById.get(win.profileId) : undefined;
-      map[win.id] = profile ? `var(--profile-${profile.color})` : HUES[index % HUES.length];
+      const profile = win.profileId
+        ? profileById.get(win.profileId)
+        : undefined;
+      map[win.id] = profile
+        ? `var(--profile-${profile.color})`
+        : HUES[index % HUES.length];
     });
     return map;
   }, [windows, profileById]);
 
   const runningProfiles = useMemo(
-    () => new Set(windows.map((w) => w.profileId).filter((id): id is string => id !== null)),
+    () =>
+      new Set(
+        windows
+          .map((w) => w.profileId)
+          .filter((id): id is string => id !== null),
+      ),
     [windows],
   );
 
@@ -213,7 +244,9 @@ function Desktop() {
   const labels = useMemo(() => {
     const map: Record<string, string> = {};
     for (const win of windows) {
-      const profile = win.profileId ? profileById.get(win.profileId) : undefined;
+      const profile = win.profileId
+        ? profileById.get(win.profileId)
+        : undefined;
       map[win.id] = profile
         ? profile.name
         : currentWorkspace
@@ -222,6 +255,33 @@ function Desktop() {
     }
     return map;
   }, [windows, profileById, currentWorkspace]);
+
+  /**
+   * The workspace-and-index name, which the title bar shows even when a profile
+   * has given the window a nicer one. Built here rather than inline in the JSX,
+   * where the same expression appeared a second time and rebuilt a prop object
+   * on every render.
+   */
+  const positional = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const win of windows) {
+      map[win.id] = currentWorkspace
+        ? `${currentWorkspace.name}-${win.idx}`
+        : `window ${win.idx}`;
+    }
+    return map;
+  }, [windows, currentWorkspace]);
+
+  const openPopout = useCallback(
+    (id: string) => {
+      const profileId = windows.find((w) => w.id === id)?.profileId;
+      const color = profileId
+        ? (profileById.get(profileId)?.color ?? DEFAULT_HUE_TOKEN)
+        : DEFAULT_HUE_TOKEN;
+      return popouts.open(id, labels[id], color);
+    },
+    [windows, profileById, labels, popouts],
+  );
 
   const focusedProfileId = useMemo(
     () => windows.find((w) => w.id === focused)?.profileId ?? null,
@@ -244,7 +304,7 @@ function Desktop() {
       const created = await create();
       setWorkspaceId(created.id);
     } catch (err) {
-      setWsError(err instanceof Error ? err.message : String(err));
+      setWsError(describeError(err));
     } finally {
       setWsBusy(false);
     }
@@ -257,7 +317,7 @@ function Desktop() {
         await remove(id);
         if (id === workspaceId) setWorkspaceId(null);
       } catch (err) {
-        setWsError(err instanceof Error ? err.message : String(err));
+        setWsError(describeError(err));
       }
     },
     [remove, workspaceId],
@@ -265,28 +325,17 @@ function Desktop() {
 
   if (error) {
     return (
-      <div className="boot boot-error">
-        <p className="boot-line">could not reach the vibe-os server</p>
-        <p className="boot-detail">{error}</p>
-        <button type="button" className="ghost" onClick={() => window.location.reload()}>
-          retry
-        </button>
-      </div>
+      <BootError message={error} onRetry={() => window.location.reload()} />
     );
   }
 
   if (!server) {
-    return (
-      <div className="boot">
-        <p className="boot-line">
-          vibe-os<span className="caret" aria-hidden="true" />
-        </p>
-        <p className="boot-detail">reading host configuration…</p>
-      </div>
-    );
+    return <Boot title="vibe-os" detail="reading host configuration…" />;
   }
 
-  const wallpaperUrl = wallpaper.prefs.wallpaper ? `/api/wallpapers/${wallpaper.prefs.wallpaper}` : null;
+  const backdrop = wallpaper.prefs.wallpaper
+    ? wallpaperUrl(wallpaper.prefs.wallpaper)
+    : null;
   const measured = view.width > 0 && view.height > 0;
 
   return (
@@ -294,20 +343,26 @@ function Desktop() {
       <div
         className="wallpaper"
         style={
-          wallpaperUrl
+          backdrop
             ? {
-                backgroundImage: `url(${wallpaperUrl})`,
-                backgroundSize: wallpaper.prefs.fit === 'tile' ? 'auto' : wallpaper.prefs.fit,
-                backgroundRepeat: wallpaper.prefs.fit === 'tile' ? 'repeat' : 'no-repeat',
+                backgroundImage: `url(${backdrop})`,
+                backgroundSize:
+                  wallpaper.prefs.fit === "tile" ? "auto" : wallpaper.prefs.fit,
+                backgroundRepeat:
+                  wallpaper.prefs.fit === "tile" ? "repeat" : "no-repeat",
               }
             : undefined
         }
       />
-      <div className="wallpaper-dim" style={{ opacity: wallpaperUrl ? wallpaper.prefs.dim : 0 }} />
+      <div
+        className="wallpaper-dim"
+        style={{ opacity: backdrop ? wallpaper.prefs.dim : 0 }}
+      />
 
       <header className="menubar glass">
         <span className="wordmark">
-          vibe-os<span className="caret" aria-hidden="true" />
+          vibe-os
+          <span className="caret" aria-hidden="true" />
         </span>
 
         <ProjectPicker
@@ -329,8 +384,8 @@ function Desktop() {
             {server.user}@{server.hostname}
           </span>
           <span className="sep">·</span>
-          <span title={server.hostKey ?? 'host key not pinned'}>
-            {server.hostKeyFingerprint ?? 'host key: prompt'}
+          <span title={server.hostKey ?? "host key not pinned"}>
+            {server.hostKeyFingerprint ?? "host key: prompt"}
           </span>
           <span className="sep">·</span>
           {/* This is a security state, so it says what it means rather than
@@ -339,11 +394,11 @@ function Desktop() {
             data-warn={!server.authRequired || undefined}
             title={
               server.authRequired
-                ? 'A token is required to reach this desktop.'
+                ? "A token is required to reach this desktop."
                 : `No gate: anyone who can reach this address gets a shell as ${server.user}. Restart with --token to require one.`
             }
           >
-            {server.authRequired ? 'token auth' : 'no auth'}
+            {server.authRequired ? "token auth" : "no auth"}
           </span>
         </span>
         <span className="menu-right">v{server.version}</span>
@@ -368,21 +423,26 @@ function Desktop() {
             ? ordered.map((win) => (
                 <TermWindow
                   key={win.id}
-                  win={{ ...win, label: currentWorkspace ? `${currentWorkspace.name}-${win.idx}` : `window ${win.idx}` }}
+                  win={win}
+                  label={positional[win.id]}
                   server={server}
                   hue={hues[win.id]}
-                  profile={win.profileId ? (profileById.get(win.profileId) ?? null) : null}
+                  profile={
+                    win.profileId
+                      ? (profileById.get(win.profileId) ?? null)
+                      : null
+                  }
                   // A browser pop-out is known from the channel the two
                   // documents gossip on; a terminal cannot join that, so its
                   // handoff is on the row. Either way the window lets go.
-                  poppedTo={popouts.popped.has(win.id) ? 'browser' : win.handoff === 'ssh' ? 'ssh' : null}
-                  onPopOut={(id) =>
-                    popouts.open(
-                      id,
-                      labels[id],
-                      win.profileId ? (profileById.get(win.profileId)?.color ?? 'cyan') : 'cyan',
-                    )
+                  poppedTo={
+                    popouts.popped.has(win.id)
+                      ? "browser"
+                      : win.handoff === "ssh"
+                        ? "ssh"
+                        : null
                   }
+                  onPopOut={openPopout}
                   onHandoff={handoff}
                   onReclaim={popouts.reclaim}
                   focused={win.id === focused}
@@ -404,26 +464,42 @@ function Desktop() {
           {measured && windows.length === 0 ? (
             <div className="empty">
               <div className="empty-card glass">
-              {!currentProject ? (
-                <>
-                  <p className="empty-line">No project selected.</p>
-                  <p className="empty-hint">Pick one from the menu bar, or press refresh to scan for repos.</p>
-                </>
-              ) : !currentWorkspace ? (
-                <>
-                  <p className="empty-line">No workspace in {currentProject.name}.</p>
-                  <button type="button" className="ghost" onClick={onCreateWorkspace} disabled={wsBusy}>
-                    Create a workspace
-                  </button>
-                </>
-              ) : (
-                <>
-                  <p className="empty-line">No windows in {currentWorkspace.name}.</p>
-                  <button type="button" className="ghost" onClick={() => void spawn()}>
-                    Open a terminal
-                  </button>
-                </>
-              )}
+                {!currentProject ? (
+                  <>
+                    <p className="empty-line">No project selected.</p>
+                    <p className="empty-hint">
+                      Pick one from the menu bar, or press refresh to scan for
+                      repos.
+                    </p>
+                  </>
+                ) : !currentWorkspace ? (
+                  <>
+                    <p className="empty-line">
+                      No workspace in {currentProject.name}.
+                    </p>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={onCreateWorkspace}
+                      disabled={wsBusy}
+                    >
+                      Create a workspace
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="empty-line">
+                      No windows in {currentWorkspace.name}.
+                    </p>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void spawn()}
+                    >
+                      Open a terminal
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ) : null}
@@ -442,7 +518,7 @@ function Desktop() {
           canOpen={Boolean(workspaceId)}
           onOpen={(id, opts) => void openProfile(id, opts)}
           onEdit={setEditing}
-          onCreate={() => setEditing('new')}
+          onCreate={() => setEditing("new")}
         />
       </div>
 
@@ -466,14 +542,18 @@ function Desktop() {
           // Remounts between profiles so the form state is rebuilt from the
           // one being edited rather than kept from the last one.
           key={editing}
-          profile={editing === 'new' ? null : (profileById.get(editing) ?? null)}
+          profile={
+            editing === "new" ? null : (profileById.get(editing) ?? null)
+          }
           palette={server.palette}
           harnessInfo={harnessInfo}
           mcpServers={mcpServers}
           onSave={(input: ProfileInput) =>
-            editing === 'new' ? createProfile(input) : updateProfile(editing, input)
+            editing === "new"
+              ? createProfile(input)
+              : updateProfile(editing, input)
           }
-          onDelete={editing === 'new' ? null : () => removeProfile(editing)}
+          onDelete={editing === "new" ? null : () => removeProfile(editing)}
           onClose={() => setEditing(null)}
         />
       ) : null}

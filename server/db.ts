@@ -6,38 +6,39 @@
 // `bun build --compile` binary has no directory to read .sql from. Verified to
 // behave identically under `bun run` and compiled.
 
-import { Database } from 'bun:sqlite';
-import { drizzle, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
-import path from 'node:path';
-import { log } from './log.ts';
+import { Database } from "bun:sqlite";
+import path from "node:path";
+import { getTableColumns } from "drizzle-orm";
+import { type BunSQLiteDatabase, drizzle } from "drizzle-orm/bun-sqlite";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { log } from "./log.ts";
 
 /** A git repository checked out on this machine. */
-export const projects = sqliteTable('projects', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  path: text('path').notNull().unique(),
+export const projects = sqliteTable("projects", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  path: text("path").notNull().unique(),
   /** Branch the repo's main checkout is on, refreshed on scan. */
-  branch: text('branch'),
+  branch: text("branch"),
   /** origin remote, when it has one — usually the GitHub URL. */
-  remote: text('remote'),
-  createdAt: integer('created_at').notNull(),
+  remote: text("remote"),
+  createdAt: integer("created_at").notNull(),
 });
 
 /** A git worktree of a project — what the UI calls a workspace. */
 export const workspaces = sqliteTable(
-  'workspaces',
+  "workspaces",
   {
-    id: text('id').primaryKey(),
-    projectId: text('project_id').notNull(),
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
     /** Three words, kebab-case. Doubles as the branch and the dtach prefix. */
-    name: text('name').notNull(),
-    branch: text('branch').notNull(),
-    path: text('path').notNull(),
-    createdAt: integer('created_at').notNull(),
-    lastOpenedAt: integer('last_opened_at').notNull(),
+    name: text("name").notNull(),
+    branch: text("branch").notNull(),
+    path: text("path").notNull(),
+    createdAt: integer("created_at").notNull(),
+    lastOpenedAt: integer("last_opened_at").notNull(),
   },
-  (t) => [index('workspaces_project_idx').on(t.projectId)],
+  (t) => [index("workspaces_project_idx").on(t.projectId)],
 );
 
 /**
@@ -47,59 +48,59 @@ export const workspaces = sqliteTable(
  * the codebase, and workspaces are throwaway worktrees of it.
  */
 export const profiles = sqliteTable(
-  'profiles',
+  "profiles",
   {
-    id: text('id').primaryKey(),
-    projectId: text('project_id').notNull(),
-    name: text('name').notNull(),
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    name: text("name").notNull(),
     /** Palette token, not a hex value — the CSS owns what the colours are. */
-    color: text('color').notNull(),
+    color: text("color").notNull(),
     /** 'claude' | 'shell' | 'custom' */
-    harness: text('harness').notNull(),
+    harness: text("harness").notNull(),
     /** Executable for the custom harness; unused by the other two. */
-    command: text('command'),
+    command: text("command"),
     /** JSON array of argv tokens, so each can be quoted on its own. */
-    args: text('args').notNull().default('[]'),
-    prompt: text('prompt').notNull().default(''),
+    args: text("args").notNull().default("[]"),
+    prompt: text("prompt").notNull().default(""),
     /** Order in the rail. */
-    position: integer('position').notNull(),
-    createdAt: integer('created_at').notNull(),
+    position: integer("position").notNull(),
+    createdAt: integer("created_at").notNull(),
   },
-  (t) => [index('profiles_project_idx').on(t.projectId)],
+  (t) => [index("profiles_project_idx").on(t.projectId)],
 );
 
 /** One terminal window, with its place on the grid. */
 export const windows = sqliteTable(
-  'windows',
+  "windows",
   {
-    id: text('id').primaryKey(),
-    workspaceId: text('workspace_id').notNull(),
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
     /** Per-workspace counter; forms the session name with the workspace. */
-    idx: integer('idx').notNull(),
-    col: integer('col').notNull(),
-    row: integer('row').notNull(),
-    colSpan: integer('col_span').notNull(),
-    rowSpan: integer('row_span').notNull(),
-    z: integer('z').notNull(),
-    minimized: integer('minimized').notNull().default(0),
+    idx: integer("idx").notNull(),
+    col: integer("col").notNull(),
+    row: integer("row").notNull(),
+    colSpan: integer("col_span").notNull(),
+    rowSpan: integer("row_span").notNull(),
+    z: integer("z").notNull(),
+    minimized: integer("minimized").notNull().default(0),
     /** The profile this window was opened as, or null for a plain terminal. */
-    profileId: text('profile_id'),
+    profileId: text("profile_id"),
     /** The prompt band has been handed off and should stay closed. */
-    promptDone: integer('prompt_done').notNull().default(0),
+    promptDone: integer("prompt_done").notNull().default(0),
     /**
      * 'ssh' while this window's terminal belongs to an ssh client instead of
      * the desktop, or null. A browser pop-out is not recorded here: those two
      * documents share an origin and settle it over a BroadcastChannel, and a
      * flag that outlived a closed pop-up would strand the window.
      */
-    handoff: text('handoff'),
+    handoff: text("handoff"),
     /** When the handoff was made, so one that never got used can be reaped. */
-    handoffAt: integer('handoff_at'),
+    handoffAt: integer("handoff_at"),
     /** Set once a terminal has actually attached to this window's session. */
-    handoffSeen: integer('handoff_seen').notNull().default(0),
-    createdAt: integer('created_at').notNull(),
+    handoffSeen: integer("handoff_seen").notNull().default(0),
+    createdAt: integer("created_at").notNull(),
   },
-  (t) => [index('windows_workspace_idx').on(t.workspaceId)],
+  (t) => [index("windows_workspace_idx").on(t.workspaceId)],
 );
 
 const DDL = [
@@ -162,16 +163,27 @@ const DDL = [
  * or it only ever appears for people starting from scratch. ADD COLUMN is the
  * one schema change SQLite does cheaply and in place.
  */
+// Every value here is a compile-time literal, which is what makes the string
+// concatenation in `ensureColumn` safe — SQLite cannot parameterise identifiers
+// or DDL, so there is no bound-parameter form of ALTER TABLE. Nothing from a
+// request may ever reach this list.
 const ADDED_COLUMNS: [table: string, column: string, decl: string][] = [
-  ['windows', 'profile_id', 'TEXT'],
-  ['windows', 'prompt_done', 'INTEGER NOT NULL DEFAULT 0'],
-  ['windows', 'handoff', 'TEXT'],
-  ['windows', 'handoff_at', 'INTEGER'],
-  ['windows', 'handoff_seen', 'INTEGER NOT NULL DEFAULT 0'],
+  ["windows", "profile_id", "TEXT"],
+  ["windows", "prompt_done", "INTEGER NOT NULL DEFAULT 0"],
+  ["windows", "handoff", "TEXT"],
+  ["windows", "handoff_at", "INTEGER"],
+  ["windows", "handoff_seen", "INTEGER NOT NULL DEFAULT 0"],
 ];
 
-function ensureColumn(sqlite: Database, table: string, column: string, decl: string): void {
-  const existing = sqlite.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+function ensureColumn(
+  sqlite: Database,
+  table: string,
+  column: string,
+  decl: string,
+): void {
+  const existing = sqlite.query(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
   if (existing.some((c) => c.name === column)) return;
   sqlite.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
   log.info(`migrated ${table}: added ${column}`);
@@ -185,17 +197,66 @@ export type Db = BunSQLiteDatabase<{
 }>;
 
 export function openDb(stateDir: string): Db {
-  const file = path.join(stateDir, 'vibe-os.db');
+  const file = path.join(stateDir, "vibe-os.db");
   const sqlite = new Database(file, { create: true });
 
   // WAL keeps reads from blocking the writes the UI makes on every drag.
-  sqlite.run('PRAGMA journal_mode = WAL');
-  sqlite.run('PRAGMA foreign_keys = ON');
+  sqlite.run("PRAGMA journal_mode = WAL");
+  // On for anything added later. No table declares a REFERENCES clause today,
+  // so this currently enforces nothing: the cascades are done by hand, in
+  // projects.ts and profiles.ts. Do not read it as a guarantee.
+  sqlite.run("PRAGMA foreign_keys = ON");
   for (const statement of DDL) sqlite.run(statement);
-  for (const [table, column, decl] of ADDED_COLUMNS) ensureColumn(sqlite, table, column, decl);
+  for (const [table, column, decl] of ADDED_COLUMNS)
+    ensureColumn(sqlite, table, column, decl);
+
+  assertSchemaMatches(sqlite);
 
   log.debug(`opened database at ${file}`);
-  return drizzle(sqlite, { schema: { projects, workspaces, profiles, windows } });
+  return drizzle(sqlite, {
+    schema: { projects, workspaces, profiles, windows },
+  });
+}
+
+/**
+ * Fails loudly if the live tables do not have every column the code reads.
+ *
+ * Each migrated column is declared three times — in the drizzle schema, in the
+ * CREATE TABLE DDL, and in ADDED_COLUMNS — and nothing forces those to agree. A
+ * column added to the DDL and forgotten in ADDED_COLUMNS works perfectly on a
+ * fresh install and breaks only on upgrade, which is the failure the comment on
+ * ADDED_COLUMNS exists to prevent and could not actually catch. Checking what
+ * the code expects against what the file has turns that into a startup error
+ * with the column name in it.
+ */
+function assertSchemaMatches(sqlite: Database): void {
+  const tables = { projects, workspaces, profiles, windows };
+  const missing: string[] = [];
+  for (const [name, table] of Object.entries(tables)) {
+    const live = new Set(
+      (
+        sqlite.query(`PRAGMA table_info(${name})`).all() as { name: string }[]
+      ).map((c) => c.name),
+    );
+    for (const column of Object.values(getTableColumns(table))) {
+      if (!live.has(column.name)) missing.push(`${name}.${column.name}`);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `database is missing column(s) the code expects: ${missing.join(", ")}. ` +
+        "A column was added to the schema without a matching ADDED_COLUMNS entry.",
+    );
+  }
 }
 
 export const newId = () => crypto.randomUUID();
+
+/**
+ * What a valid id looks like coming back over HTTP.
+ *
+ * Lives here beside `newId` because it has to accept what that produces. It was
+ * declared once in `api.ts` as `ID` and again in `attach.ts` as `WINDOW_ID`,
+ * byte-identical, and both validate the same values.
+ */
+export const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;

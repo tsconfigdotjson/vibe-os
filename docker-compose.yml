@@ -18,15 +18,28 @@ services:
         WITH_CLAUDE: 1
     container_name: vibe-os
     ports:
-      # Host 8080 -> container 80. Use "80:80" if you want the real thing and
-      # your host lets you bind it.
-      - "8080:80"
+      # Loopback only, deliberately. With no `--token` below there is no gate in
+      # front of this, and `vibe-os doctor` names that exact combination as the
+      # worst case: "no token, bound to every interface — anyone who can reach
+      # this port gets a shell." Binding to 127.0.0.1 makes the default safe on
+      # a laptop and on a VPS alike.
+      #
+      # To reach it from another machine, pick one:
+      #   - keep this, and use an SSH tunnel:  ssh -L 8080:localhost:8080 box
+      #   - put it on a tailnet address:       "100.x.y.z:8080:80"
+      #   - open it and turn the gate on:      "8080:80" plus command: ["--token"]
+      - "127.0.0.1:8080:80"
     volumes:
       # Keeps the SSH certificate authority, the cert-authority line, and any
       # work in the home directory across `docker compose down`.
       - vibe-home:/home/vibe
       # Keeps the container's SSH host keys stable, so the browser does not see
       # the host key change after a rebuild.
+      #
+      # This covers all of /etc/ssh, and a named volume is seeded from the image
+      # only when it is first created — so nothing the image puts here after the
+      # first `up` would ever be seen. The sshd drop-in is therefore installed
+      # by the entrypoint on every boot rather than baked into this path.
       - vibe-sshd:/etc/ssh
     # Anything here is passed straight to `vibe-os start`.
     # command: ["--token"]

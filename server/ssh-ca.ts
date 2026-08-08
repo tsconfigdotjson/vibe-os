@@ -16,14 +16,22 @@
 // caller). sshd allocates the PTY because the client asks for a shell, then
 // runs the forced command inside it — so resize and job control behave.
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { chmod, mkdir, mkdtemp, readFile, writeFile, appendFile, access, rm } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { createHash } from 'node:crypto';
-import path from 'node:path';
-import os from 'node:os';
-import { log } from './log.ts';
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { pathExists } from "./fsx.ts";
+import { log } from "./log.ts";
 
 const run = promisify(execFile);
 
@@ -31,7 +39,12 @@ const run = promisify(execFile);
 const SIGNABLE_KEY_TYPE =
   /^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)$/;
 
-const MAX_PUBKEY_BYTES = 8 * 1024;
+/**
+ * Ceiling on a posted public key. Exported because `server/api.ts` pre-checks
+ * `content-length` against it: two constants meant one limit rejected at the
+ * HTTP edge and a different, smaller one rejected here with the same message.
+ */
+export const MAX_PUBKEY_BYTES = 8 * 1024;
 
 export interface SignOptions {
   /** Public key in authorized_keys form, as posted by the browser. */
@@ -46,15 +59,6 @@ export interface SignOptions {
   ttlSeconds: number;
 }
 
-async function exists(p: string): Promise<boolean> {
-  try {
-    await access(p, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Confirms ssh-keygen is on PATH.
  *
@@ -65,10 +69,14 @@ async function exists(p: string): Promise<boolean> {
  */
 export async function requireSshKeygen(): Promise<void> {
   try {
-    await run('ssh-keygen', ['-l', '-f', '/nonexistent/vibe-os-probe'], { timeout: 5_000 });
+    await run("ssh-keygen", ["-l", "-f", "/nonexistent/vibe-os-probe"], {
+      timeout: 5_000,
+    });
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-      throw new Error('ssh-keygen was not found on PATH — install openssh-client');
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      throw new Error(
+        "ssh-keygen was not found on PATH — install openssh-client",
+      );
     }
   }
 }
@@ -76,24 +84,19 @@ export async function requireSshKeygen(): Promise<void> {
 export class SshCa {
   readonly keyPath: string;
   readonly pubPath: string;
-  private publicKeyLine = '';
+  private publicKeyLine = "";
   private serialCounter = 0n;
 
   constructor(stateDir: string) {
-    this.keyPath = path.join(stateDir, 'ca');
-    this.pubPath = path.join(stateDir, 'ca.pub');
+    this.keyPath = path.join(stateDir, "ca");
+    this.pubPath = path.join(stateDir, "ca.pub");
   }
 
   /** The CA's public key in authorized_keys form, without the trailing newline. */
   get publicKey(): string {
-    if (!this.publicKeyLine) throw new Error('CA not initialised — call ensure() first');
+    if (!this.publicKeyLine)
+      throw new Error("CA not initialised — call ensure() first");
     return this.publicKeyLine;
-  }
-
-  get fingerprintPromise(): Promise<string> {
-    return run('ssh-keygen', ['-l', '-f', this.pubPath])
-      .then(({ stdout }) => stdout.trim())
-      .catch(() => 'unknown');
   }
 
   /** Creates the CA keypair if it does not exist yet. Idempotent. */
@@ -101,22 +104,32 @@ export class SshCa {
     await mkdir(path.dirname(this.keyPath), { recursive: true, mode: 0o700 });
     await chmod(path.dirname(this.keyPath), 0o700).catch(() => {});
 
-    if (!(await exists(this.keyPath))) {
+    if (!(await pathExists(this.keyPath))) {
       // ssh-keygen refuses to overwrite without prompting, so a stale .pub with
       // no private half has to go first.
       await rm(this.pubPath, { force: true });
-      await run('ssh-keygen', [
-        '-q',
-        '-t', 'ed25519',
-        '-f', this.keyPath,
-        '-N', '',
-        '-C', `vibe-os-ca@${os.hostname()}`,
+      await run("ssh-keygen", [
+        "-q",
+        "-t",
+        "ed25519",
+        "-f",
+        this.keyPath,
+        "-N",
+        "",
+        "-C",
+        `vibe-os-ca@${os.hostname()}`,
       ]);
-      await chmod(this.keyPath, 0o600).catch(() => {});
       log.ok(`generated SSH certificate authority at ${this.keyPath}`);
     }
 
-    this.publicKeyLine = (await readFile(this.pubPath, 'utf8')).trim();
+    // Outside the branch above on purpose. A key restored from a backup, copied
+    // from another box, or written by an older version under a loose umask
+    // would otherwise keep whatever mode it arrived with — and ssh-keygen signs
+    // with a world-readable CA without complaining. This is the one key whose
+    // disclosure mints certificates for any principal.
+    await chmod(this.keyPath, 0o600).catch(() => {});
+
+    this.publicKeyLine = (await readFile(this.pubPath, "utf8")).trim();
     if (!this.publicKeyLine) throw new Error(`${this.pubPath} is empty`);
   }
 
@@ -125,28 +138,28 @@ export class SshCa {
    * certificate this CA signs. Idempotent — matches on the key blob, so a
    * hand-edited comment or extra options on the line are left alone.
    */
-  async trustInAuthorizedKeys(homeDir: string): Promise<'added' | 'present'> {
-    const sshDir = path.join(homeDir, '.ssh');
-    const file = path.join(sshDir, 'authorized_keys');
+  async trustInAuthorizedKeys(homeDir: string): Promise<"added" | "present"> {
+    const sshDir = path.join(homeDir, ".ssh");
+    const file = path.join(sshDir, "authorized_keys");
 
     await mkdir(sshDir, { recursive: true, mode: 0o700 });
     await chmod(sshDir, 0o700).catch(() => {});
 
     const blob = this.publicKey.split(/\s+/)[1];
-    if (!blob) throw new Error('malformed CA public key');
+    if (!blob) throw new Error("malformed CA public key");
 
-    let current = '';
-    if (await exists(file)) current = await readFile(file, 'utf8');
-    if (current.includes(blob)) return 'present';
+    let current = "";
+    if (await pathExists(file)) current = await readFile(file, "utf8");
+    if (current.includes(blob)) return "present";
 
-    const prefix = current.length === 0 || current.endsWith('\n') ? '' : '\n';
+    const prefix = current.length === 0 || current.endsWith("\n") ? "" : "\n";
     await appendFile(
       file,
       `${prefix}# added by vibe-os — trusts browser-held keys certified by this host\ncert-authority ${this.publicKey}\n`,
       { mode: 0o600 },
     );
     await chmod(file, 0o600).catch(() => {});
-    return 'added';
+    return "added";
   }
 
   /**
@@ -165,30 +178,36 @@ export class SshCa {
     // atomically with an unpredictable suffix, so nothing in a world-writable
     // /tmp can pre-create the path (or a symlink at it) and have us write key
     // material somewhere else.
-    const tmp = await mkdtemp(path.join(os.tmpdir(), 'vibe-os-sign-'));
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "vibe-os-sign-"));
     await chmod(tmp, 0o700).catch(() => {});
-    const keyFile = path.join(tmp, 'id.pub');
-    const certFile = path.join(tmp, 'id-cert.pub');
+    const keyFile = path.join(tmp, "id.pub");
+    const certFile = path.join(tmp, "id-cert.pub");
 
     try {
       await writeFile(keyFile, `${publicKey}\n`, { mode: 0o600 });
 
       const args = [
-        '-q',
-        '-s', this.keyPath,
-        '-I', opts.identity,
-        '-n', opts.principal,
+        "-q",
+        "-s",
+        this.keyPath,
+        "-I",
+        opts.identity,
+        "-n",
+        opts.principal,
         // A little slack on the lower bound: the browser's clock is not ours.
-        '-V', `-5m:+${Math.max(1, Math.round(opts.ttlSeconds / 60))}m`,
-        '-z', String(this.nextSerial()),
+        "-V",
+        `-5m:+${Math.max(1, Math.round(opts.ttlSeconds / 60))}m`,
+        "-z",
+        String(this.nextSerial()),
       ];
-      if (opts.forceCommand) args.push('-O', `force-command=${opts.forceCommand}`);
+      if (opts.forceCommand)
+        args.push("-O", `force-command=${opts.forceCommand}`);
       args.push(keyFile);
 
-      await run('ssh-keygen', args, { timeout: 15_000 });
-      const cert = await readFile(certFile, 'utf8');
-      if (!cert.includes('-cert-v01@openssh.com')) {
-        throw new Error('ssh-keygen did not produce a certificate');
+      await run("ssh-keygen", args, { timeout: 15_000 });
+      const cert = await readFile(certFile, "utf8");
+      if (!cert.includes("-cert-v01@openssh.com")) {
+        throw new Error("ssh-keygen did not produce a certificate");
       }
       return cert;
     } finally {
@@ -204,26 +223,32 @@ export class SshCa {
 
 /** Validates and trims a public key posted by the browser. Throws on anything suspect. */
 export function normalisePublicKey(raw: string): string {
-  if (raw.length > MAX_PUBKEY_BYTES) throw new Error('public key too large');
+  if (raw.length > MAX_PUBKEY_BYTES) throw new Error("public key too large");
 
   const line = raw.trim();
-  if (line.includes('\n') || line.includes('\r')) throw new Error('public key must be a single line');
+  if (line.includes("\n") || line.includes("\r"))
+    throw new Error("public key must be a single line");
 
   const [type, blob] = line.split(/\s+/, 2);
-  if (!type || !blob) throw new Error('malformed public key');
-  if (type.includes('-cert-v01@openssh.com')) throw new Error('refusing to certify a certificate');
-  if (!SIGNABLE_KEY_TYPE.test(type)) throw new Error(`unsupported key type: ${type}`);
-  if (!/^[A-Za-z0-9+/]+={0,3}$/.test(blob)) throw new Error('malformed public key body');
+  if (!type || !blob) throw new Error("malformed public key");
+  if (type.includes("-cert-v01@openssh.com"))
+    throw new Error("refusing to certify a certificate");
+  if (!SIGNABLE_KEY_TYPE.test(type))
+    throw new Error(`unsupported key type: ${type}`);
+  if (!/^[A-Za-z0-9+/]+={0,3}$/.test(blob))
+    throw new Error("malformed public key body");
 
   // The base64 blob must decode to a key whose embedded type matches the
   // declared one — otherwise a caller could mislabel a key to slip past the
   // type check above.
-  const decoded = Buffer.from(blob, 'base64');
-  if (decoded.length < 4) throw new Error('malformed public key body');
+  const decoded = Buffer.from(blob, "base64");
+  if (decoded.length < 4) throw new Error("malformed public key body");
   const nameLength = decoded.readUInt32BE(0);
-  if (nameLength > 64 || decoded.length < 4 + nameLength) throw new Error('malformed public key body');
-  const embedded = decoded.subarray(4, 4 + nameLength).toString('ascii');
-  if (embedded !== type) throw new Error('public key type does not match its body');
+  if (nameLength > 64 || decoded.length < 4 + nameLength)
+    throw new Error("malformed public key body");
+  const embedded = decoded.subarray(4, 4 + nameLength).toString("ascii");
+  if (embedded !== type)
+    throw new Error("public key type does not match its body");
 
   // Re-emit without any client-supplied comment.
   return `${type} ${blob}`;
@@ -248,8 +273,10 @@ export function fingerprint(publicKeyLine: string): string | null {
   const blob = publicKeyLine.trim().split(/\s+/)[1];
   if (!blob) return null;
   try {
-    const digest = createHash('sha256').update(Buffer.from(blob, 'base64')).digest('base64');
-    return `SHA256:${digest.replace(/=+$/, '')}`;
+    const digest = createHash("sha256")
+      .update(Buffer.from(blob, "base64"))
+      .digest("base64");
+    return `SHA256:${digest.replace(/=+$/, "")}`;
   } catch {
     return null;
   }
@@ -264,7 +291,7 @@ export function fingerprint(publicKeyLine: string): string | null {
  * server holds but does not present makes every pane report the host key as
  * *changed*, which reads like an attack rather than a misconfiguration.
  */
-const HOST_KEY_TYPES = ['ecdsa', 'rsa', 'ed25519'] as const;
+const HOST_KEY_TYPES = ["ecdsa", "rsa", "ed25519"] as const;
 
 /**
  * Finds the host key the SSH target will actually present, so the browser can
@@ -279,15 +306,24 @@ const HOST_KEY_TYPES = ['ecdsa', 'rsa', 'ed25519'] as const;
  * negotiation, not merely one the server happens to hold. Returns null if
  * nothing is discoverable, and the browser prompts once instead.
  */
-export async function discoverHostKey(host: string, port: number): Promise<string | null> {
+export async function discoverHostKey(
+  host: string,
+  port: number,
+): Promise<string | null> {
   for (const type of HOST_KEY_TYPES) {
     try {
-      const { stdout } = await run('ssh-keyscan', ['-t', type, '-p', String(port), '-T', '5', host], {
-        timeout: 10_000,
-      });
+      const { stdout } = await run(
+        "ssh-keyscan",
+        ["-t", type, "-p", String(port), "-T", "5", host],
+        {
+          timeout: 10_000,
+        },
+      );
       // Output is "<host> <type> <base64>". The leading host field is not part
       // of the key, and sshterm keys its known-hosts entry by endpoint name.
-      const line = stdout.split('\n').find((l) => l.trim() && !l.startsWith('#'));
+      const line = stdout
+        .split("\n")
+        .find((l) => l.trim() && !l.startsWith("#"));
       const parts = line?.trim().split(/\s+/);
       if (parts && parts.length >= 3) return `${parts[1]} ${parts[2]}`;
     } catch {
@@ -295,13 +331,38 @@ export async function discoverHostKey(host: string, port: number): Promise<strin
     }
   }
 
+  // Reading this box's own host keys only answers the question when the bridge
+  // points at this box. With --ssh-host aimed elsewhere it would pin the wrong
+  // machine's key, and every pane would then report the host key as changed —
+  // which reads as an attack rather than the misconfiguration it is.
+  if (!isLocalHost(host)) return null;
+
   for (const type of HOST_KEY_TYPES) {
     try {
-      const line = (await readFile(`/etc/ssh/ssh_host_${type}_key.pub`, 'utf8')).trim().split('\n')[0]?.trim();
+      const line = (await readFile(`/etc/ssh/ssh_host_${type}_key.pub`, "utf8"))
+        .trim()
+        .split("\n")[0]
+        ?.trim();
       if (line) return line;
     } catch {
       // unreadable or absent — try the next
     }
   }
   return null;
+}
+
+/** Does this name refer to the machine we are running on? */
+function isLocalHost(host: string): boolean {
+  const h = host
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  return (
+    h === "localhost" ||
+    h === "127.0.0.1" ||
+    h === "::1" ||
+    h === "0.0.0.0" ||
+    h === "" ||
+    h === os.hostname().toLowerCase()
+  );
 }

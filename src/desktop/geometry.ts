@@ -1,4 +1,10 @@
-import { GRID_COLS, GRID_ROWS, MIN_WINDOW_COLS, MIN_WINDOW_ROWS, type Rect } from './useWindows';
+import {
+  GRID_COLS,
+  GRID_ROWS,
+  MIN_WINDOW_COLS,
+  MIN_WINDOW_ROWS,
+} from "../../shared/grid";
+import type { Rect } from "./useWindows";
 
 export interface Viewport {
   width: number;
@@ -44,8 +50,6 @@ export function pixelsToRect(
   };
 }
 
-export { GRID_COLS, GRID_ROWS };
-
 /** Smallest a window may be, in pixels — mirrors the grid minimum exactly. */
 export function minPixels(view: Viewport) {
   const { cellW, cellH } = cellSize(view);
@@ -69,15 +73,16 @@ export function minPixels(view: Viewport) {
  */
 export function clampBox(
   box: { left: number; top: number; width: number; height: number },
-  mode: 'move' | Handle,
+  mode: "move" | Handle,
   view: Viewport,
 ) {
   const min = minPixels(view);
   const maxW = Math.max(min.width, view.width - GUTTER * 2);
   const maxH = Math.max(min.height, view.height - GUTTER * 2);
-  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const clamp = (v: number, lo: number, hi: number) =>
+    Math.max(lo, Math.min(hi, v));
 
-  if (mode === 'move') {
+  if (mode === "move") {
     const width = Math.min(box.width, maxW);
     const height = Math.min(box.height, maxH);
     return {
@@ -89,23 +94,30 @@ export function clampBox(
   }
 
   let { left, top, width, height } = box;
-  if (mode.includes('w')) {
+  if (mode.includes("w")) {
     const right = box.left + box.width;
     left = clamp(box.left, GUTTER, right - min.width);
     width = right - left;
   }
-  if (mode.includes('e')) {
+  if (mode.includes("e")) {
     width = clamp(box.width, min.width, view.width - GUTTER - left);
   }
-  if (mode.includes('n')) {
+  if (mode.includes("n")) {
     const bottom = box.top + box.height;
     top = clamp(box.top, GUTTER, bottom - min.height);
     height = bottom - top;
   }
-  if (mode.includes('s')) {
+  if (mode.includes("s")) {
     height = clamp(box.height, min.height, view.height - GUTTER - top);
   }
   return { left, top, width, height };
 }
 
-export type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+/**
+ * The eight resize grips, and the union derived from them.
+ *
+ * TermWindow had its own copy of both. They were structurally identical, so
+ * adding a ninth grip on one side type-checked cleanly against the other.
+ */
+export const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
+export type Handle = (typeof HANDLES)[number];

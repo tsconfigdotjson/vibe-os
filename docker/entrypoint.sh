@@ -8,6 +8,11 @@ set -e
 # browser's pinned host key to survive a rebuild.
 ssh-keygen -A >/dev/null
 
+# Reinstalled every boot: /etc/ssh is a volume in compose, so a copy baked into
+# the image would be masked by whatever the volume held from the first run.
+mkdir -p /etc/ssh/sshd_config.d
+cp /usr/local/share/vibe-os/sshd-vibe-os.conf /etc/ssh/sshd_config.d/vibe-os.conf
+
 /usr/sbin/sshd
 
 # Wait for sshd rather than racing it: vibe-os probes the target's host key at
@@ -22,6 +27,12 @@ while [ "$i" -lt 50 ]; do
   i=$((i + 1))
   sleep 0.2
 done
+
+if [ "$i" -ge 50 ]; then
+  # Falling through is survivable but worth saying: the host key will not be
+  # discoverable yet, so the browser gets a trust-on-first-use prompt instead.
+  echo "vibe-os: sshd did not answer within 10s — continuing without a pinned host key" >&2
+fi
 
 # exec so vibe-os becomes PID 1's child and receives docker stop signals.
 exec setpriv --reuid vibe --regid vibe --init-groups \

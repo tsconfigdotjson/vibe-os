@@ -1,31 +1,23 @@
-import type { SshTermConfig } from './sshterm';
+import type { ClientConfig } from "../shared/wire";
+import { request } from "./data";
+import type { SshTermConfig } from "./sshterm";
 
-/** Mirrors ClientConfig in server/api.ts. */
-export interface ServerConfig {
-  version: string;
-  hostname: string;
-  user: string;
-  workspaceRoot: string;
-  /** Windows are dtach-backed and survive a reload. */
-  sessions: boolean;
-  authRequired: boolean;
-  endpoint: { name: string; url: string };
-  hostKey: string | null;
-  /**
-   * Computed server-side on purpose: the browser cannot do it on plain HTTP,
-   * where `crypto.subtle` is unavailable because the origin is not secure.
-   */
-  hostKeyFingerprint: string | null;
-  certificateEndpoint: string;
-  maxWallpaperBytes: number;
-  /** Colour tokens a profile may use; `--profile-<token>` resolves each one. */
-  palette: readonly string[];
-}
+const CONFIG_ROUTE = "/api/config";
 
-export async function fetchServerConfig(): Promise<ServerConfig> {
-  const res = await fetch('/api/config', { headers: { accept: 'application/json' } });
-  if (!res.ok) throw new Error(`GET /api/config failed: HTTP ${res.status}`);
-  return (await res.json()) as ServerConfig;
+/**
+ * The `/api/config` body. Named for the client's point of view; it is the same
+ * declaration the server builds against.
+ */
+export type ServerConfig = ClientConfig;
+
+/**
+ * Through the shared helper, so a failure here reads like a failure anywhere
+ * else. Its own fetch discarded the server's `{ error }` body, which meant a
+ * config failure showed "HTTP 500" where the same failure on any other route
+ * showed the actual reason.
+ */
+export function fetchServerConfig(): Promise<ServerConfig> {
+  return request<ServerConfig>(CONFIG_ROUTE);
 }
 
 /**
@@ -43,7 +35,10 @@ export async function fetchServerConfig(): Promise<ServerConfig> {
  * travels in the certificate's force-command instead, so sshd runs it inside
  * the PTY it already allocated for the shell request.
  */
-export function windowSshConfig(server: ServerConfig, windowId: string): SshTermConfig {
+export function windowSshConfig(
+  server: ServerConfig,
+  windowId: string,
+): SshTermConfig {
   // Only the window id goes over the wire. The server looks up which workspace
   // it belongs to and starts the session in that worktree, so a browser cannot ask for
   // a session in a directory of its choosing.
@@ -54,15 +49,17 @@ export function windowSshConfig(server: ServerConfig, windowId: string): SshTerm
 
   return {
     // One database for the app, one key per pane inside it.
-    dbName: 'vibe-os',
+    dbName: "vibe-os",
     persist: true,
-    theme: 'dark',
+    theme: "dark",
     endpoints: [server.endpoint],
-    hosts: server.hostKey ? [{ name: server.endpoint.name, key: server.hostKey }] : [],
+    hosts: server.hostKey
+      ? [{ name: server.endpoint.name, key: server.hostKey }]
+      : [],
     generateKeys: [
       {
         name: `vibe-${windowId}`,
-        type: 'ed25519',
+        type: "ed25519",
         identityProvider,
       },
     ],

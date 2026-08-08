@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Project } from '../data';
+import { useCallback, useRef, useState } from "react";
+import type { Project } from "../data";
+import { useDismiss } from "../desktop/useDismiss";
 
 export interface ProjectPickerProps {
   projects: Project[];
@@ -16,27 +17,20 @@ function shortRemote(remote: string | null): string | null {
   return match ? match[1] : null;
 }
 
-export function ProjectPicker({ projects, current, scanning, onSelect, onRescan }: ProjectPickerProps) {
+export function ProjectPicker({
+  projects,
+  current,
+  scanning,
+  onSelect,
+  onRescan,
+}: ProjectPickerProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const closePicker = useCallback(() => setOpen(false), []);
 
   // Close on an outside click or Escape — a dropdown that traps you is worse
   // than no dropdown.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    window.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('keydown', onKey, true);
-    return () => {
-      window.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('keydown', onKey, true);
-    };
-  }, [open]);
+  useDismiss(open, root, closePicker);
 
   return (
     <div className="picker" ref={root}>
@@ -46,11 +40,13 @@ export function ProjectPicker({ projects, current, scanning, onSelect, onRescan 
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="listbox"
-        title={current?.path ?? 'Choose a project'}
+        title={current?.path ?? "Choose a project"}
       >
         <span className="picker-mark" aria-hidden="true" />
-        <span className="picker-label">{current?.name ?? 'No project'}</span>
-        {current?.branch ? <span className="picker-branch">{current.branch}</span> : null}
+        <span className="picker-label">{current?.name ?? "No project"}</span>
+        {current?.branch ? (
+          <span className="picker-branch">{current.branch}</span>
+        ) : null}
         <span className="picker-caret" aria-hidden="true">
           ▾
         </span>
@@ -67,7 +63,7 @@ export function ProjectPicker({ projects, current, scanning, onSelect, onRescan 
               disabled={scanning}
               title="Scan the machine for git repositories"
             >
-              {scanning ? 'scanning…' : 'refresh'}
+              {scanning ? "scanning…" : "refresh"}
             </button>
           </div>
 
@@ -93,8 +89,12 @@ export function ProjectPicker({ projects, current, scanning, onSelect, onRescan 
                       title={project.path}
                     >
                       <span className="picker-name">{project.name}</span>
-                      <span className="picker-meta">{remote ?? project.path}</span>
-                      {project.branch ? <span className="picker-tag">{project.branch}</span> : null}
+                      <span className="picker-meta">
+                        {remote ?? project.path}
+                      </span>
+                      {project.branch ? (
+                        <span className="picker-tag">{project.branch}</span>
+                      ) : null}
                     </button>
                   </li>
                 );

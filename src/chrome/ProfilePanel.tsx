@@ -1,16 +1,23 @@
-import { useMemo, useRef, useState } from 'react';
-import type { Harness, HarnessInfo, McpServer, Profile, ProfileInput } from '../data';
-import { countBlanks } from '../desktop/blanks';
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  Harness,
+  HarnessInfo,
+  McpServer,
+  Profile,
+  ProfileInput,
+} from "../data";
+import { describeError } from "../data";
+import { countBlanks } from "../desktop/blanks";
 import {
-  TOGGLES,
   buildArgs,
+  type ClaudeSettings,
   detokenize,
   effortLabel,
+  type McpMode,
   modeLabel,
   parseSettings,
-  type ClaudeSettings,
-  type McpMode,
-} from './claudeFlags';
+  TOGGLES,
+} from "./claudeFlags";
 
 export interface ProfilePanelProps {
   /** The profile being edited, or null when creating a new one. */
@@ -26,22 +33,22 @@ export interface ProfilePanelProps {
 }
 
 const HARNESSES: { value: Harness; label: string; hint: string }[] = [
-  { value: 'claude', label: 'Claude', hint: 'runs `claude` in the worktree' },
-  { value: 'shell', label: 'Shell', hint: 'a plain shell, tinted and named' },
-  { value: 'custom', label: 'Custom', hint: 'any command on the box' },
+  { value: "claude", label: "Claude", hint: "runs `claude` in the worktree" },
+  { value: "shell", label: "Shell", hint: "a plain shell, tinted and named" },
+  { value: "custom", label: "Custom", hint: "any command on the box" },
 ];
 
 const MCP_MODES: { value: McpMode; label: string }[] = [
-  { value: 'all', label: 'Everything configured on this box' },
-  { value: 'pick', label: 'Only the ones I pick' },
-  { value: 'none', label: 'None — no MCP servers at all' },
+  { value: "all", label: "Everything configured on this box" },
+  { value: "pick", label: "Only the ones I pick" },
+  { value: "none", label: "None — no MCP servers at all" },
 ];
 
 /** Where a server is defined, said in a couple of words under its name. */
-const SCOPE_NOTE: Record<McpServer['scope'], string> = {
-  user: 'this box',
-  project: 'the repo',
-  local: 'one directory',
+const SCOPE_NOTE: Record<McpServer["scope"], string> = {
+  user: "this box",
+  project: "the repo",
+  local: "one directory",
 };
 
 export function ProfilePanel({
@@ -53,20 +60,31 @@ export function ProfilePanel({
   onDelete,
   onClose,
 }: ProfilePanelProps) {
-  const [name, setName] = useState(profile?.name ?? '');
-  const [color, setColor] = useState(profile?.color ?? palette[0] ?? 'cyan');
-  const [harness, setHarness] = useState<Harness>(profile?.harness ?? 'claude');
-  const [command, setCommand] = useState(profile?.command ?? '');
-  const [prompt, setPrompt] = useState(profile?.prompt ?? '');
+  const [name, setName] = useState(profile?.name ?? "");
+  const [color, setColor] = useState(profile?.color ?? palette[0] ?? "cyan");
+  const [harness, setHarness] = useState<Harness>(profile?.harness ?? "claude");
+  const [command, setCommand] = useState(profile?.command ?? "");
+  const [prompt, setPrompt] = useState(profile?.prompt ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  /**
+   * Focus the name field when the dialog opens. `autoFocus` as an attribute is
+   * discouraged because on a page load it moves focus out from under the
+   * reader; inside a dialog that has just been opened deliberately, putting the
+   * caret in the first field is the expected behaviour, so it is done here
+   * where it only ever runs on open.
+   */
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
 
   // The dropdowns and the advanced field are two views of one argv list. State
   // is held in the structured shape and flattened on save, so the raw text can
   // never drift out of step with the controls above it.
   const [settings, setSettings] = useState<ClaudeSettings>(() =>
-    parseSettings(profile?.args ?? ['--dangerously-skip-permissions']),
+    parseSettings(profile?.args ?? ["--dangerously-skip-permissions"]),
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -84,7 +102,7 @@ export function ProfilePanel({
     if (!field) return;
     const { selectionStart: from, selectionEnd: to, value } = field;
     const selected = value.slice(from, to).trim();
-    const label = selected || 'what to fill in';
+    const label = selected || "what to fill in";
     const next = `${value.slice(0, from)}{{${label}}}${value.slice(to)}`;
     setPrompt(next);
     // Select the label so it can be typed straight over.
@@ -94,7 +112,8 @@ export function ProfilePanel({
       field.setSelectionRange(caret, caret + label.length);
     });
   };
-  const patch = (next: Partial<ClaudeSettings>) => setSettings((s) => ({ ...s, ...next }));
+  const patch = (next: Partial<ClaudeSettings>) =>
+    setSettings((s) => ({ ...s, ...next }));
 
   /**
    * Selections whose server is not on the box.
@@ -105,7 +124,10 @@ export function ProfilePanel({
    * dropping it silently would change what the profile does without saying so.
    */
   const strays = useMemo(
-    () => settings.mcpConfigs.filter((p) => !mcpServers.some((s) => s.configPath === p)),
+    () =>
+      settings.mcpConfigs.filter(
+        (p) => !mcpServers.some((s) => s.configPath === p),
+      ),
     [settings.mcpConfigs, mcpServers],
   );
 
@@ -114,7 +136,11 @@ export function ProfilePanel({
       // Rebuilt from the discovered order rather than appended to, so the
       // command line does not depend on the order boxes were clicked in.
       mcpConfigs: [
-        ...mcpServers.map((s) => s.configPath).filter((p) => (p === configPath ? on : settings.mcpConfigs.includes(p))),
+        ...mcpServers
+          .map((s) => s.configPath)
+          .filter((p) =>
+            p === configPath ? on : settings.mcpConfigs.includes(p),
+          ),
         ...strays.filter((p) => p !== configPath || on),
       ],
     });
@@ -134,29 +160,59 @@ export function ProfilePanel({
         name,
         color,
         harness,
-        command: harness === 'custom' ? command : null,
-        args: harness === 'claude' ? composed : harness === 'custom' ? customArgs : '',
+        command: harness === "custom" ? command : null,
+        args:
+          harness === "claude"
+            ? composed
+            : harness === "custom"
+              ? customArgs
+              : "",
         prompt,
       });
+      // onClose unmounts this panel, so clearing `busy` afterwards would write
+      // state to a component that is gone. Only the failure path stays mounted.
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
+      setError(describeError(err));
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Deleting went straight through with no catch, so a failure left the panel
+   * open, showed nothing in the error slot, and surfaced only as an unhandled
+   * rejection in the console. Same shape as submit above.
+   */
+  const remove = async () => {
+    if (!onDelete) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onDelete();
+      onClose();
+    } catch (err) {
+      setError(describeError(err));
+      setConfirming(false);
       setBusy(false);
     }
   };
 
   return (
     <>
-      <div className="scrim" onClick={onClose} />
+      <button
+        type="button"
+        className="scrim"
+        aria-label="Close"
+        onClick={onClose}
+      />
       <aside
         className="panel glass-solid panel-wide"
         role="dialog"
-        aria-label={profile ? `Edit ${profile.name}` : 'New profile'}
-        style={{ ['--win-color' as string]: `var(--profile-${color})` }}
+        aria-label={profile ? `Edit ${profile.name}` : "New profile"}
+        style={{ ["--win-color" as string]: `var(--profile-${color})` }}
       >
         <header className="panel-head">
-          <h2>{profile ? profile.name : 'New profile'}</h2>
+          <h2>{profile ? profile.name : "New profile"}</h2>
           <button type="button" onClick={onClose} title="Close">
             ✕
           </button>
@@ -172,13 +228,13 @@ export function ProfilePanel({
             value={name}
             maxLength={40}
             placeholder="Backend Manager"
-            autoFocus
+            ref={nameRef}
             onChange={(event) => setName(event.target.value)}
           />
         </div>
 
-        <div className="field">
-          <label>Colour</label>
+        <fieldset className="field">
+          <legend className="field-label">Colour</legend>
           {/* The same colour tints the window, its title bar and its rail entry,
               which is what makes three roles distinguishable without reading. */}
           <div className="swatches">
@@ -195,10 +251,10 @@ export function ProfilePanel({
               />
             ))}
           </div>
-        </div>
+        </fieldset>
 
-        <div className="field">
-          <label>Harness</label>
+        <fieldset className="field">
+          <legend className="field-label">Harness</legend>
           <div className="segmented">
             {HARNESSES.map((option) => (
               <button
@@ -212,9 +268,9 @@ export function ProfilePanel({
               </button>
             ))}
           </div>
-        </div>
+        </fieldset>
 
-        {harness === 'custom' ? (
+        {harness === "custom" ? (
           <div className="field">
             <label htmlFor="profile-command">Command</label>
             <input
@@ -227,7 +283,7 @@ export function ProfilePanel({
           </div>
         ) : null}
 
-        {harness === 'claude' ? (
+        {harness === "claude" ? (
           <>
             <div className="field">
               <label htmlFor="profile-model">Model</label>
@@ -244,11 +300,13 @@ export function ProfilePanel({
                       tier, so a role written today does not quietly get worse
                       as better models ship. */}
                   <optgroup label="Latest of its tier">
-                    {(harnessInfo?.aliases ?? []).filter((a) => a !== 'default').map((alias) => (
-                      <option key={alias} value={alias}>
-                        {alias[0].toUpperCase() + alias.slice(1)}
-                      </option>
-                    ))}
+                    {(harnessInfo?.aliases ?? [])
+                      .filter((a) => a !== "default")
+                      .map((alias) => (
+                        <option key={alias} value={alias}>
+                          {alias[0].toUpperCase() + alias.slice(1)}
+                        </option>
+                      ))}
                   </optgroup>
                   {harnessInfo && harnessInfo.models.length > 0 ? (
                     <optgroup label="Pinned to one version">
@@ -267,12 +325,17 @@ export function ProfilePanel({
                     <option value={settings.model}>{settings.model}</option>
                   ) : null}
                 </select>
-                <label className="check" title="Ask for the million-token context window">
+                <label
+                  className="check"
+                  title="Ask for the million-token context window"
+                >
                   <input
                     type="checkbox"
                     checked={settings.longContext}
                     disabled={!settings.model}
-                    onChange={(event) => patch({ longContext: event.target.checked })}
+                    onChange={(event) =>
+                      patch({ longContext: event.target.checked })
+                    }
                   />
                   1M context
                 </label>
@@ -295,13 +358,15 @@ export function ProfilePanel({
                 ))}
                 {/* Same round-trip guarantee the model dropdown makes: a level
                     this build has not heard of is offered back, not reset. */}
-                {settings.effort && !(harnessInfo?.effortLevels ?? []).includes(settings.effort) ? (
+                {settings.effort &&
+                !(harnessInfo?.effortLevels ?? []).includes(settings.effort) ? (
                   <option value={settings.effort}>{settings.effort}</option>
                 ) : null}
               </select>
               <p className="field-hint">
-                How long the session reasons before it acts. Higher is slower and costs more tokens;
-                it is worth it for work where being wrong is expensive.
+                How long the session reasons before it acts. Higher is slower
+                and costs more tokens; it is worth it for work where being wrong
+                is expensive.
               </p>
             </div>
 
@@ -310,7 +375,7 @@ export function ProfilePanel({
               <select
                 id="profile-permission"
                 className="text-input select"
-                data-warn={settings.permission === 'skip' || undefined}
+                data-warn={settings.permission === "skip" || undefined}
                 value={settings.permission}
                 onChange={(event) => patch({ permission: event.target.value })}
               >
@@ -320,12 +385,15 @@ export function ProfilePanel({
                     {modeLabel(mode)}
                   </option>
                 ))}
-                <option value="skip">Skip every check — no prompts at all</option>
+                <option value="skip">
+                  Skip every check — no prompts at all
+                </option>
               </select>
-              {settings.permission === 'skip' ? (
+              {settings.permission === "skip" ? (
                 <p className="field-hint field-warn">
-                  This session will not ask before editing, running or deleting anything. Reasonable on a box
-                  that is already a sandbox; think twice anywhere else.
+                  This session will not ask before editing, running or deleting
+                  anything. Reasonable on a box that is already a sandbox; think
+                  twice anywhere else.
                 </p>
               ) : null}
             </div>
@@ -336,7 +404,9 @@ export function ProfilePanel({
                 id="profile-mcp"
                 className="text-input select"
                 value={settings.mcp}
-                onChange={(event) => patch({ mcp: event.target.value as McpMode })}
+                onChange={(event) =>
+                  patch({ mcp: event.target.value as McpMode })
+                }
               >
                 {MCP_MODES.map((mode) => (
                   <option key={mode.value} value={mode.value}>
@@ -345,7 +415,7 @@ export function ProfilePanel({
                 ))}
               </select>
 
-              {settings.mcp === 'pick' ? (
+              {settings.mcp === "pick" ? (
                 mcpServers.length > 0 || strays.length > 0 ? (
                   <div className="mcp-list">
                     {mcpServers.map((server) => (
@@ -355,12 +425,18 @@ export function ProfilePanel({
                         // The row shows what a name cannot: two servers called
                         // the same thing are told apart by where they point and
                         // which file says so.
-                        title={[server.detail, `defined in ${server.source}`].filter(Boolean).join('\n')}
+                        title={[server.detail, `defined in ${server.source}`]
+                          .filter(Boolean)
+                          .join("\n")}
                       >
                         <input
                           type="checkbox"
-                          checked={settings.mcpConfigs.includes(server.configPath)}
-                          onChange={(event) => toggleMcp(server.configPath, event.target.checked)}
+                          checked={settings.mcpConfigs.includes(
+                            server.configPath,
+                          )}
+                          onChange={(event) =>
+                            toggleMcp(server.configPath, event.target.checked)
+                          }
                         />
                         <span className="mcp-name">{server.name}</span>
                         <span className="mcp-meta">
@@ -369,51 +445,77 @@ export function ProfilePanel({
                       </label>
                     ))}
                     {strays.map((configPath) => (
-                      <label key={configPath} className="check mcp-item" title={configPath}>
-                        <input type="checkbox" checked onChange={() => toggleMcp(configPath, false)} />
-                        <span className="mcp-name mcp-stray">{configPath.split('/').pop()}</span>
-                        <span className="mcp-meta field-warn">not on this box</span>
+                      <label
+                        key={configPath}
+                        className="check mcp-item"
+                        title={configPath}
+                      >
+                        <input
+                          type="checkbox"
+                          checked
+                          onChange={() => toggleMcp(configPath, false)}
+                        />
+                        <span className="mcp-name mcp-stray">
+                          {configPath.split("/").pop()}
+                        </span>
+                        <span className="mcp-meta field-warn">
+                          not on this box
+                        </span>
                       </label>
                     ))}
                   </div>
                 ) : (
                   <p className="field-hint">
-                    Nothing configured yet. Add one on the box with{' '}
-                    <code>claude mcp add --scope user …</code> and it appears here. The scope matters:
-                    without it Claude files the server under whichever directory you ran the command in,
-                    and in a workspace that goes when the worktree does.
+                    Nothing configured yet. Add one on the box with{" "}
+                    <code>claude mcp add --scope user …</code> and it appears
+                    here. The scope matters: without it Claude files the server
+                    under whichever directory you ran the command in, and in a
+                    workspace that goes when the worktree does.
                   </p>
                 )
               ) : null}
 
-              {settings.mcp === 'pick' && settings.mcpConfigs.length === 0 && mcpServers.length > 0 ? (
-                <p className="field-hint">Nothing picked, so this profile gets no MCP servers at all.</p>
-              ) : null}
-              {settings.mcp === 'none' ? (
+              {settings.mcp === "pick" &&
+              settings.mcpConfigs.length === 0 &&
+              mcpServers.length > 0 ? (
                 <p className="field-hint">
-                  Fewer tools to choose between, and a shorter prompt. Worth it for a role that only reads
-                  and writes code.
+                  Nothing picked, so this profile gets no MCP servers at all.
+                </p>
+              ) : null}
+              {settings.mcp === "none" ? (
+                <p className="field-hint">
+                  Fewer tools to choose between, and a shorter prompt. Worth it
+                  for a role that only reads and writes code.
                 </p>
               ) : null}
             </div>
 
-            <div className="field">
-              <label>Options</label>
+            <fieldset className="field">
+              <legend className="field-label">Options</legend>
               <div className="switches">
                 {TOGGLES.map((toggle) => (
-                  <label key={toggle.flag} className="check" title={toggle.hint}>
+                  <label
+                    key={toggle.flag}
+                    className="check"
+                    title={toggle.hint}
+                  >
                     <input
                       type="checkbox"
                       checked={Boolean(settings.toggles[toggle.flag])}
                       onChange={(event) =>
-                        patch({ toggles: { ...settings.toggles, [toggle.flag]: event.target.checked } })
+                        patch({
+                          toggles: {
+                            ...settings.toggles,
+                            [toggle.flag]: event.target.checked,
+                          },
+                        })
                       }
                     />
                     {toggle.label}
                   </label>
                 ))}
               </div>
-            </div>
+            </fieldset>
 
             <div className="field">
               <button
@@ -423,7 +525,7 @@ export function ProfilePanel({
                 onClick={() => setShowAdvanced((open) => !open)}
               >
                 <span className="disclosure-caret" aria-hidden="true">
-                  {showAdvanced ? '\u25be' : '\u25b8'}
+                  {showAdvanced ? "\u25be" : "\u25b8"}
                 </span>
                 Advanced
               </button>
@@ -436,17 +538,19 @@ export function ProfilePanel({
                     onChange={(event) => patch({ extra: event.target.value })}
                   />
                   <p className="field-hint">
-                    Anything else to pass through. The controls above own their own flags; whatever you put
-                    here is kept exactly as typed.
+                    Anything else to pass through. The controls above own their
+                    own flags; whatever you put here is kept exactly as typed.
                   </p>
-                  <p className="field-hint mono command-preview">claude {composed || '(no arguments)'}</p>
+                  <p className="field-hint mono command-preview">
+                    claude {composed || "(no arguments)"}
+                  </p>
                 </>
               ) : null}
             </div>
           </>
         ) : null}
 
-        {harness === 'custom' ? (
+        {harness === "custom" ? (
           <div className="field">
             <label htmlFor="profile-args">Arguments</label>
             <input
@@ -457,8 +561,8 @@ export function ProfilePanel({
               onChange={(event) => setCustomArgs(event.target.value)}
             />
             <p className="field-hint">
-              Split like a shell would, quotes included — but run as a list, so a <code>;</code> inside an
-              argument stays part of that argument.
+              Split like a shell would, quotes included — but run as a list, so
+              a <code>;</code> inside an argument stays part of that argument.
             </p>
           </div>
         ) : null}
@@ -466,7 +570,11 @@ export function ProfilePanel({
         <div className="field">
           <label htmlFor="profile-prompt">
             Prompt
-            <button type="button" className="inline-action" onClick={insertBlank}>
+            <button
+              type="button"
+              className="inline-action"
+              onClick={insertBlank}
+            >
               + blank
             </button>
           </label>
@@ -483,11 +591,16 @@ export function ProfilePanel({
             Offered above the terminal each time you open this profile.
             {blanks > 0 ? (
               <>
-                {' '}
-                It has <strong>{blanks}</strong> blank{blanks === 1 ? '' : 's'} to fill in each time.
+                {" "}
+                It has <strong>{blanks}</strong> blank{blanks === 1 ? "" : "s"}{" "}
+                to fill in each time.
               </>
             ) : (
-              <> Select a word and press <strong>+ blank</strong> to make it a field you fill in each time.</>
+              <>
+                {" "}
+                Select a word and press <strong>+ blank</strong> to make it a
+                field you fill in each time.
+              </>
             )}
           </p>
         </div>
@@ -497,34 +610,49 @@ export function ProfilePanel({
             confirming ? (
               <>
                 <span className="panel-ask">Delete this profile?</span>
-                <button type="button" className="btn btn-quiet" onClick={() => setConfirming(false)}>
+                <button
+                  type="button"
+                  className="btn btn-quiet"
+                  onClick={() => setConfirming(false)}
+                >
                   Cancel
                 </button>
                 <button
                   type="button"
                   className="btn btn-danger"
-                  onClick={() => void onDelete().then(onClose)}
+                  disabled={busy}
+                  onClick={() => void remove()}
                 >
                   Delete
                 </button>
               </>
             ) : (
-              <button type="button" className="btn btn-quiet panel-delete" onClick={() => setConfirming(true)}>
+              <button
+                type="button"
+                className="btn btn-quiet panel-delete"
+                onClick={() => setConfirming(true)}
+              >
                 Delete
               </button>
             )
           ) : null}
 
           {!confirming ? (
-            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void submit()}>
-              {busy ? 'saving…' : profile ? 'Save' : 'Create'}
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => void submit()}
+            >
+              {busy ? "saving…" : profile ? "Save" : "Create"}
             </button>
           ) : null}
         </div>
 
         {onDelete ? (
           <p className="field-hint panel-foot">
-            Deleting keeps any window already running this profile — it just becomes an ordinary terminal.
+            Deleting keeps any window already running this profile — it just
+            becomes an ordinary terminal.
           </p>
         ) : null}
       </aside>

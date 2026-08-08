@@ -14,12 +14,17 @@
 // installed binary rather than hardcoded. Change a server with `claude mcp add`
 // and every profile using it follows.
 
-import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdir, writeFile, unlink, stat } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { log } from './log.ts';
-
+import { createHash } from "node:crypto";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 /**
  * Where Claude keeps a server definition, which decides how long it lives.
  *
@@ -32,21 +37,10 @@ import { log } from './log.ts';
  *   labelled with that directory, because otherwise the answer to "I added it,
  *   where is it?" is nowhere.
  */
-export type McpScope = 'user' | 'project' | 'local';
+import type { McpScope, McpServer } from "../shared/wire.ts";
+import { log } from "./log.ts";
 
-export interface McpServer {
-  /** The name Claude knows it by, and the key inside the generated file. */
-  name: string;
-  scope: McpScope;
-  /** The file or directory the definition came from, for the label. */
-  source: string;
-  /** `stdio`, `sse` or `http`. */
-  transport: string;
-  /** The URL, or the command it runs — enough to tell two servers apart. */
-  detail: string;
-  /** What a profile passes to `--mcp-config` to get exactly this one server. */
-  configPath: string;
-}
+export type { McpScope, McpServer };
 
 /** Directories to look in. Kept separate because they mean different things. */
 export interface McpScan {
@@ -73,10 +67,12 @@ interface Definition {
  * sessions are the same user, which is what the deployment instructions set up
  * and what `harness.ts` already assumes when it looks for the binary.
  */
-const claudeConfigPath = (): string => path.join(process.env.HOME || os.homedir(), '.claude.json');
+const claudeConfigPath = (): string =>
+  path.join(process.env.HOME || os.homedir(), ".claude.json");
 
 /** Where the generated single-server files live. Under the state dir, 0700. */
-export const mirrorDir = (stateDir: string): string => path.join(stateDir, 'mcp');
+export const mirrorDir = (stateDir: string): string =>
+  path.join(stateDir, "mcp");
 
 /**
  * A stable filename for one server.
@@ -88,25 +84,34 @@ export const mirrorDir = (stateDir: string): string => path.join(stateDir, 'mcp'
  * everything else is disambiguated by a hash of what identifies it.
  */
 function mirrorName(scope: McpScope, source: string, name: string): string {
-  if (scope === 'user' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(name)) return `${name}.json`;
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'server';
-  const hash = createHash('sha256').update(`${scope}\0${source}\0${name}`).digest('hex').slice(0, 8);
+  if (scope === "user" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(name))
+    return `${name}.json`;
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 32) || "server";
+  const hash = createHash("sha256")
+    .update(`${scope}\0${source}\0${name}`)
+    .digest("hex")
+    .slice(0, 8);
   return `${slug}-${hash}.json`;
 }
 
 /** `http`/`sse` when there is a URL, `stdio` otherwise. Claude's own default. */
 function transportOf(def: Definition): string {
-  return def.type ?? def.transport ?? (def.url ? 'http' : 'stdio');
+  return def.type ?? def.transport ?? (def.url ? "http" : "stdio");
 }
 
 function detailOf(def: Definition): string {
   if (def.url) return def.url;
-  return [def.command ?? '', ...(def.args ?? [])].join(' ').trim();
+  return [def.command ?? "", ...(def.args ?? [])].join(" ").trim();
 }
 
 async function readJson(file: string): Promise<Record<string, unknown> | null> {
   try {
-    return JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    return JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
   } catch {
     // Absent is the common case and not worth a line; malformed is the box's
     // problem to fix and would be reported by Claude itself.
@@ -115,7 +120,9 @@ async function readJson(file: string): Promise<Record<string, unknown> | null> {
 }
 
 const asServers = (value: unknown): Record<string, Definition> =>
-  value && typeof value === 'object' ? (value as Record<string, Definition>) : {};
+  value && typeof value === "object"
+    ? (value as Record<string, Definition>)
+    : {};
 
 /**
  * `~/.claude.json`, parsed at most once per change.
@@ -128,7 +135,7 @@ let cache: { key: string; data: Record<string, unknown> | null } | null = null;
 
 async function claudeConfig(): Promise<Record<string, unknown> | null> {
   const file = claudeConfigPath();
-  let key = 'missing';
+  let key = "missing";
   try {
     const info = await stat(file);
     key = `${info.size}:${info.mtimeMs}`;
@@ -136,7 +143,7 @@ async function claudeConfig(): Promise<Record<string, unknown> | null> {
     // fall through with the sentinel; a missing file still caches as "nothing"
   }
   if (cache?.key === key) return cache.data;
-  const data = key === 'missing' ? null : await readJson(file);
+  const data = key === "missing" ? null : await readJson(file);
   cache = { key, data };
   return data;
 }
@@ -147,40 +154,80 @@ async function claudeConfig(): Promise<Record<string, unknown> | null> {
  * Project scope reads only the roots: a worktree is a copy of the repo, so
  * scanning worktrees too would list the same `.mcp.json` once per workspace.
  */
-export async function discoverMcp(stateDir: string, scan: McpScan): Promise<McpServer[]> {
-  const found: McpServer[] = [];
-  const add = (scope: McpScope, source: string, name: string, def: Definition) => {
+/**
+ * A discovered server together with the definition it was parsed from.
+ *
+ * The definition carries API keys and bearer tokens, so it deliberately does
+ * not travel on `McpServer`, which is a wire type the browser receives.
+ */
+export interface DiscoveredMcp {
+  server: McpServer;
+  def: Definition;
+}
+
+/** Discovery that keeps the parsed definitions, for the mirror writer. */
+export async function discoverMcpWithDefs(
+  stateDir: string,
+  scan: McpScan,
+): Promise<DiscoveredMcp[]> {
+  const found: DiscoveredMcp[] = [];
+  const add = (
+    scope: McpScope,
+    source: string,
+    name: string,
+    def: Definition,
+  ) => {
     found.push({
-      name,
-      scope,
-      source,
-      transport: transportOf(def),
-      detail: detailOf(def),
-      configPath: path.join(mirrorDir(stateDir), mirrorName(scope, source, name)),
+      def,
+      server: {
+        name,
+        scope,
+        source,
+        transport: transportOf(def),
+        detail: detailOf(def),
+        configPath: path.join(
+          mirrorDir(stateDir),
+          mirrorName(scope, source, name),
+        ),
+      },
     });
   };
 
   const config = await claudeConfig();
   if (config) {
     for (const [name, def] of Object.entries(asServers(config.mcpServers))) {
-      add('user', claudeConfigPath(), name, def);
+      add("user", claudeConfigPath(), name, def);
     }
-    const projects = asServers(config.projects) as unknown as Record<string, { mcpServers?: unknown }>;
+    const projects = asServers(config.projects) as unknown as Record<
+      string,
+      { mcpServers?: unknown }
+    >;
     for (const dir of new Set(scan.dirs)) {
-      for (const [name, def] of Object.entries(asServers(projects[dir]?.mcpServers))) {
-        add('local', dir, name, def);
+      for (const [name, def] of Object.entries(
+        asServers(projects[dir]?.mcpServers),
+      )) {
+        add("local", dir, name, def);
       }
     }
   }
 
   for (const root of new Set(scan.roots)) {
-    const file = path.join(root, '.mcp.json');
+    const file = path.join(root, ".mcp.json");
     const data = await readJson(file);
     if (!data) continue;
-    for (const [name, def] of Object.entries(asServers(data.mcpServers))) add('project', file, name, def);
+    for (const [name, def] of Object.entries(asServers(data.mcpServers)))
+      add("project", file, name, def);
   }
 
   return found;
+}
+
+/** Just the wire shape, for the API and the profile editor. */
+export async function discoverMcp(
+  stateDir: string,
+  scan: McpScan,
+): Promise<McpServer[]> {
+  return (await discoverMcpWithDefs(stateDir, scan)).map((d) => d.server);
 }
 
 const NOTE = `Generated by vibe-os. One file per MCP server on this box, each holding just
@@ -197,38 +244,44 @@ whenever the list is read or a window starts, so edit those, not these.
  * Files are only rewritten when the contents actually differ, so this stays
  * cheap enough to run on every window attach.
  */
-export async function syncMcpMirrors(stateDir: string, servers: McpServer[]): Promise<void> {
+/**
+ * Writes one file per MCP server, so a profile can point `--mcp-config` at
+ * exactly the ones it wants.
+ *
+ * Takes the definitions discovery already parsed rather than looking each one
+ * up again: the previous version re-read and re-parsed the source file once per
+ * server, so a project with five servers in one `.mcp.json` read that file five
+ * times — on every certificate request.
+ */
+export async function syncMcpMirrors(
+  stateDir: string,
+  discovered: DiscoveredMcp[],
+): Promise<void> {
   const dir = mirrorDir(stateDir);
-  const config = await claudeConfig();
-  const local = asServers(config?.projects) as unknown as Record<string, { mcpServers?: unknown }>;
-
-  /** The definition as the box has it, looked up again by scope and source. */
-  const define = async (server: McpServer): Promise<Definition | undefined> => {
-    if (server.scope === 'user') return asServers(config?.mcpServers)[server.name];
-    if (server.scope === 'local') return asServers(local[server.source]?.mcpServers)[server.name];
-    return asServers((await readJson(server.source))?.mcpServers)[server.name];
-  };
 
   await mkdir(dir, { recursive: true, mode: 0o700 });
 
   const wanted = new Set<string>();
-  for (const server of servers) {
-    const def = await define(server);
+  for (const { server, def } of discovered) {
     if (!def) continue;
     wanted.add(path.basename(server.configPath));
     const body = `${JSON.stringify({ mcpServers: { [server.name]: def } }, null, 2)}\n`;
     // Definitions carry API keys and bearer tokens, so 0600 and never anywhere
     // the web root can reach.
-    if ((await readFile(server.configPath, 'utf8').catch(() => null)) !== body) {
+    if (
+      (await readFile(server.configPath, "utf8").catch(() => null)) !== body
+    ) {
       await writeFile(server.configPath, body, { mode: 0o600 });
       log.debug(`wrote mcp config for ${server.name} (${server.scope})`);
     }
   }
 
-  await writeFile(path.join(dir, 'README'), NOTE, { mode: 0o600 }).catch(() => {});
+  await writeFile(path.join(dir, "README"), NOTE, { mode: 0o600 }).catch(
+    () => {},
+  );
 
   for (const entry of await readdir(dir).catch(() => [] as string[])) {
-    if (!entry.endsWith('.json') || wanted.has(entry)) continue;
+    if (!entry.endsWith(".json") || wanted.has(entry)) continue;
     await unlink(path.join(dir, entry)).catch(() => {});
     log.debug(`removed stale mcp config ${entry}`);
   }

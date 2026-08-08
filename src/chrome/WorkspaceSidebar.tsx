@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { Workspace } from '../data';
+import { useState } from "react";
+import type { Workspace } from "../data";
 
 export interface WorkspaceSidebarProps {
   workspaces: Workspace[];
@@ -12,9 +12,18 @@ export interface WorkspaceSidebarProps {
   onRemove: (id: string) => void;
 }
 
+/**
+ * Evaluated during render, so it is only as fresh as the last one.
+ *
+ * Workspaces poll on POLL_MS, which re-renders this list roughly every minute
+ * and keeps the numbers honest in practice. A sidebar that stops re-rendering
+ * — the tab left in the background with polling paused — will show a stale
+ * value until something else wakes it. That is accepted rather than driving a
+ * second interval purely to retick a caption.
+ */
 function ago(then: number): string {
   const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (seconds < 60) return 'just now';
+  if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
@@ -52,7 +61,7 @@ export function WorkspaceSidebar({
           disabled={busy || !projectName}
           title="Create a git worktree on a new branch"
         >
-          {busy ? '…' : '+'}
+          {busy ? "…" : "+"}
         </button>
       </header>
 
@@ -62,16 +71,16 @@ export function WorkspaceSidebar({
         <p className="sidebar-empty">Choose a project to see its workspaces.</p>
       ) : workspaces.length === 0 ? (
         <p className="sidebar-empty">
-          No workspaces yet.{' '}
+          No workspaces yet.{" "}
           <button type="button" className="linkish" onClick={onCreate}>
             Create one
-          </button>{' '}
+          </button>{" "}
           to get a worktree and a branch.
         </p>
       ) : (
         <ul className="sidebar-list">
           {workspaces.map((ws) => (
-            <li key={ws.id} data-active={ws.id === current || undefined}>
+            <li key={ws.id}>
               {confirming === ws.id ? (
                 // Deliberately built on the same `.ws` shape as a normal row, so
                 // the name does not move and the block keeps the list's padding,
@@ -79,9 +88,15 @@ export function WorkspaceSidebar({
                 // question about a row should not redraw it as a foreign object.
                 <div className="ws ws-confirming">
                   <span className="ws-name">{ws.name}</span>
-                  <span className="ws-meta">Delete this workspace? The branch is kept.</span>
+                  <span className="ws-meta">
+                    Delete this workspace? The branch is kept.
+                  </span>
                   <div className="ws-actions">
-                    <button type="button" className="btn btn-quiet" onClick={() => setConfirming(null)}>
+                    <button
+                      type="button"
+                      className="btn btn-quiet"
+                      onClick={() => setConfirming(null)}
+                    >
                       Cancel
                     </button>
                     <button

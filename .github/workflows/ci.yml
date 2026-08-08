@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # --ignore-scripts skips postinstall, which reaches out to the GitHub API
+      # for ssh.wasm. Nothing under test needs the wasm, and a rate-limited
+      # runner should not be able to fail the build.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # server/static.ts imports server/assets.generated.ts, which is gitignored
+      # and therefore absent on a fresh checkout. Without dist/web this writes an
+      # empty manifest, which is all typecheck needs.
+      - name: Generate asset manifest
+        run: bun run build:assets
+
+      - name: Lint and format check
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test

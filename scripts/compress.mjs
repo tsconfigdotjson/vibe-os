@@ -1,30 +1,26 @@
 #!/usr/bin/env node
+
 // Precompresses large static assets after `vite build`.
 //
 // ssh.wasm is ~20MB and every first-time visitor pays for it. Compressing at
 // build time (rather than per-request) lets the server hand out a ~5MB body
 // with zero CPU cost at serve time.
 
-import { readdir, stat, readFile, writeFile } from 'node:fs/promises';
-import { brotliCompress, gzip, constants } from 'node:zlib';
-import { promisify } from 'node:util';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { brotliCompress, constants, gzip } from "node:zlib";
+import { walk } from "./lib/walk.ts";
 
 const br = promisify(brotliCompress);
 const gz = promisify(gzip);
 
-const WEB = path.resolve(fileURLToPath(new URL('../dist/web', import.meta.url)));
+const WEB = path.resolve(
+  fileURLToPath(new URL("../dist/web", import.meta.url)),
+);
 const COMPRESSIBLE = /\.(wasm|js|css|html|json|svg)$/;
 const MIN_SIZE = 4096;
-
-async function* walk(dir) {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) yield* walk(full);
-    else yield full;
-  }
-}
 
 const t0 = Date.now();
 let count = 0;
