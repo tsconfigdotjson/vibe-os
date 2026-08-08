@@ -59,8 +59,11 @@ function webManifest(themeColor: string) {
     orientation: "any",
     background_color: "#0d1117",
     theme_color: themeColor,
+    // PNGs only, and every one of them opaque. `icon.svg` is deliberately
+    // absent: it has the rounded corners that suit a favicon and a README, and
+    // an installer that fills transparency with white turns those into a white
+    // border around a dark icon in the Dock.
     icons: [
-      { src: "/icon.svg", sizes: "any", type: "image/svg+xml" },
       { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
       { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
       {
