@@ -56,68 +56,6 @@ const THEME = {
 };
 
 /**
- * Records every byte the session hands the terminal, and ships it to the server
- * so it can be replayed offline.
- *
- * This is the only place the stream can be seen. SSH decrypts inside the page,
- * so there is nothing to tap on the wire, and by the time anything is visible
- * on screen xterm has already interpreted it — which is precisely the step
- * under suspicion when a pane is garbled. Wrapping `write` catches the bytes in
- * between, exactly as they arrive and before anything has read them.
- *
- * Recording from the first byte matters more than it sounds. A full-screen
- * program paints incrementally, so a capture that starts late is missing the
- * frame every later update is written against, and replaying it will diverge
- * for reasons that are an artefact of the capture rather than a bug. This
- * installs before the session is started, so the stream is self-contained.
- *
- * Uploads on a timer rather than on demand so that reproducing a fault needs no
- * console work — open the window with `?debugterm`, make it misbehave, and the
- * bytes are already on the server. Capped, because a busy pane can produce
- * megabytes and the point is to catch a fault, not to keep a session log.
- */
-function captureBytes(term: Terminal): () => void {
-  const CAP = 6 * 1024 * 1024;
-  const original = term.write.bind(term);
-  let chunks: Uint8Array[] = [];
-  let held = 0;
-  let seq = 0;
-  // Every terminal on the page records separately, and replaying two streams as
-  // one would invent corruption that never happened. The id keeps them apart.
-  const id = Math.random().toString(36).slice(2, 8);
-
-  (term as unknown as { write: Terminal['write'] }).write = ((
-    data: string | Uint8Array,
-    callback?: () => void,
-  ) => {
-    if (typeof data !== 'string' && held < CAP) {
-      chunks.push(new Uint8Array(data));
-      held += data.length;
-    }
-    return original(data as string, callback);
-  }) as Terminal['write'];
-
-  const flush = (): void => {
-    if (chunks.length === 0) return;
-    const blob = new Blob(chunks as BlobPart[]);
-    chunks = [];
-    held = 0;
-    const label = `${id}-t${String(seq++).padStart(3, "0")}`;
-    void fetch(`/api/debug/capture?label=${label}`, { method: 'POST', body: blob }).catch(() => {
-      // Best effort: a failed upload must never disturb the session it watches.
-    });
-  };
-
-  // Short interval while debugging: each upload is paired with a grid snapshot,
-  // so more uploads means finer resolution when bisecting.
-  const timer = setInterval(flush, 15_000);
-  return () => {
-    clearInterval(timer);
-    flush();
-  };
-}
-
-/**
  * Swallows the banner upstream prints into every session.
  *
  * `internal/start.go` writes a three-line box and a blank line straight to the
@@ -191,7 +129,6 @@ export function SshTerminal({
 
     let disposed = false;
     const nudges: number[] = [];
-    let stopCapture: (() => void) | undefined;
 
     // Own child element per session, so a StrictMode double-mount never has
     // two terminals fighting over the same node.
@@ -328,21 +265,6 @@ export function SshTerminal({
       if (event.button === 1) paste();
     };
 
-    /*
-     * Diagnostic handle, opt-in.
-     *
-     * Reaching a Terminal from a devtools console is otherwise impossible — it
-     * lives in a closure inside this effect, and only the desktop happens to
-     * park a copy in React state. Chasing a corruption that only appears in the
-     * browser means being able to read the buffer, so `?debugterm` hands one
-     * out. Off unless asked for, and it exposes nothing a page on this origin
-     * could not already reach.
-     */
-    if (new URLSearchParams(window.location.search).has('debugterm')) {
-      ((window as unknown as { __vibeTerms?: Set<Terminal> }).__vibeTerms ??= new Set()).add(term);
-      stopCapture = captureBytes(term);
-    }
-
     const disposables = [
       term.parser.registerOscHandler(52, onOsc52),
       term.onSelectionChange(copySelection),
@@ -438,7 +360,6 @@ export function SshTerminal({
       resizeObserver.disconnect();
       clearTimeout(settle);
       for (const n of nudges) window.clearTimeout(n);
-      stopCapture?.();
       // Retracted before disposal, so nothing outside can write to a dead term.
       handlers.current.onTerminal?.(null);
       term.element?.removeEventListener('contextmenu', onContextMenu);

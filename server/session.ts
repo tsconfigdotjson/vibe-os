@@ -124,7 +124,22 @@ export function windowCommand(
   const harness = profile ? harnessCommand(profile) : undefined;
   // Falls back to the login shell, so a window with no profile is still a
   // session that survives a reload rather than a bare ssh command.
-  const inner = `cd ${shellQuote(cwd)} && ${harness ?? 'exec "$SHELL"'}`;
+  /*
+   * Say what this terminal can actually do.
+   *
+   * sshterm asks sshd for a pty as `xterm`, and terminfo's `xterm` promises
+   * eight colours. Programs believe it: Claude picks a duller palette, and
+   * anything consulting `tput colors` gets 8. The browser's terminal is not that
+   * — xterm.js has done 256 colours and 24-bit for years — so the honest value
+   * is the wider one, and `COLORTERM` is how the true-colour half of that is
+   * conventionally advertised.
+   *
+   * Set on the session rather than the attachment because a program reads this
+   * once, at startup. Reattaching later inherits nothing, which is the same
+   * reason the working directory belongs here too.
+   */
+  const env = 'export TERM=xterm-256color COLORTERM=truecolor;';
+  const inner = `cd ${shellQuote(cwd)} && ${env} ${harness ?? 'exec "$SHELL"'}`;
 
   // `dtach -p` writes to a live socket and fails on a dead one, which makes it
   // a liveness probe. A socket left behind by a crashed session would otherwise
