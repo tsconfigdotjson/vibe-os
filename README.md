@@ -1,16 +1,20 @@
+<div align="center">
+
+<img src="public/icon.svg" width="88" height="88" alt="">
+
 # vibe-os
 
-A coding desktop in the browser, on a box you own. Switch between the git repos
-on a machine, spin up a worktree per piece of work, and open terminals into it —
-all over HTTP from anything with a browser.
+**A coding desktop in the browser, on a box you own.**
 
-> **Status:** running on a real VPS as of 2026-08-07 — an OVHcloud box on
-> Ubuntu 26.04, behind Tailscale, serving over HTTPS with a Let's Encrypt
-> certificate, with Claude launching into worktrees from the profile rail.
-> `systemctl` and `tailscale serve` are proven; `--domain` (Let's Encrypt via
-> ACME) remains untested, because taking the Tailscale path means never
-> reaching for it. No release binaries are published yet, so build one (below)
-> or run the container.
+Switch between the git repos on a machine, spin up a worktree per piece of work,
+and open terminals into it — all over HTTP from anything with a browser.
+
+[![CI](https://github.com/GratefulWorkspace/vibe-os/actions/workflows/ci.yml/badge.svg)](https://github.com/GratefulWorkspace/vibe-os/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+
+</div>
+
+---
 
 Open the desktop and you get a project picker, a sidebar of workspaces, and
 windows you can drag around a snap grid over a wallpaper. Every window is a dtach
@@ -28,9 +32,48 @@ still running.
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
 edit, no `sshd_config` change, and no root.
 
-## Run it
+## Contents
 
-The fastest way to see it, and the one that is actually tested:
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+  - [The bootstrap problem](#the-bootstrap-problem)
+  - [How windows stay alive](#how-windows-stay-alive)
+- [Using it](#using-it)
+  - [Projects and workspaces](#projects-and-workspaces)
+  - [What terminals in a workspace share](#what-terminals-in-a-workspace-share)
+  - [Profiles](#profiles)
+  - [Popping a terminal out](#popping-a-terminal-out)
+  - [The desktop](#the-desktop)
+  - [Wallpaper](#wallpaper)
+  - [Installing it as an app](#installing-it-as-an-app)
+- [Deploying on a VPS](#deploying-on-a-vps)
+  - [What the box needs](#what-the-box-needs)
+  - [Install](#install)
+  - [Check it, twice](#check-it-twice)
+  - [Behind Tailscale](#behind-tailscale)
+  - [Firewall: tailnet only](#firewall-tailnet-only)
+  - [Do not run it as root](#do-not-run-it-as-root)
+  - [Keeping it running](#keeping-it-running)
+  - [Binding port 80](#binding-port-80)
+  - [Giving the box a GitHub identity](#giving-the-box-a-github-identity)
+  - [Updating a box that is already running](#updating-a-box-that-is-already-running)
+- [Security](#security)
+  - [The access model](#the-access-model)
+  - [The token gate](#the-token-gate)
+  - [TLS and secure origins](#tls-and-secure-origins)
+- [CLI reference](#cli-reference)
+- [Development](#development)
+  - [Stack](#stack)
+  - [Things that will bite you](#things-that-will-bite-you)
+- [Project status](#project-status)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Quick start
+
+The fastest way to see it, and the path with the most coverage:
 
 ```bash
 docker compose up --build
@@ -67,334 +110,6 @@ the host key as changed after a rebuild.
 
 ---
 
-## On a VPS
-
-> These steps were walked end to end on a fresh OVHcloud VPS, and the two
-> things that broke there were both PATH: a forced command does not get a login
-> shell, and a systemd service does not get one either. Both are fixed. The
-> firewall rules below have since been verified from outside the tailnet —
-> see [Firewall](#firewall-tailnet-only).
-
-### What the box needs
-
-vibe-os is one binary with no runtime dependencies, but it shells out to a few
-things and logs in through the machine's own sshd. These are the prerequisites:
-
-| Package | What uses it | Without it |
-| --- | --- | --- |
-| `openssh-server` | every window logs in through it | nothing connects |
-| `openssh-client` | `ssh-keygen` signs certificates, `ssh-keyscan` finds the host key to pin | **the server refuses to start** |
-| `dtach` | keeps every window alive across reloads | windows become plain shells that die on reload, and **profiles launch no harness at all** |
-| `git` | projects and worktrees | no projects |
-| `gh` | pull requests, issues and reviews — *optional* | git still works; the GitHub API does not |
-| `claude` | the Claude harness | those profiles open a window that closes again immediately |
-
-```bash
-sudo apt update && sudo apt install -y openssh-server openssh-client dtach git gh
-curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
-```
-
-Verified on **Debian 12 and 13** and **Ubuntu 24.04 and 26.04 LTS**, x86\_64,
-from the compiled binary — `vibe-os doctor` clean on each. The binary is
-dynamically linked against glibc and was built against an old baseline, so
-anything from bookworm onward is fine.
-
-If you intend to run a real browser on this box for Claude's Chrome
-integration, install **Google Chrome's own .deb** rather than the distribution's
-`chromium` package. On Ubuntu that package is a snap, and snap confinement is a
-known breaker of native messaging hosts — which is exactly the mechanism the
-Claude extension uses to reach a local Claude Code.
-
-`dtach` is the one people skip. It is not a nicety here: the harness command
-lives in the dtach invocation, so without it a profile opens a shell and does
-nothing else.
-
-It is deliberately dtach and not tmux. A window needs exactly two things from a
-session manager — survive a reload, and let a real terminal take over — and tmux
-brings a second terminal emulator along with them. That emulator keeps its own
-model of your screen and sends only the cells it thinks changed, so any
-momentary disagreement with the browser's terminal becomes permanent: it will
-not resend a cell it believes is already correct. dtach keeps no model. It holds
-the pty and moves bytes, and the program talks to your terminal directly.
-
-### Install
-
-```bash
-# a self-contained binary — no Bun, Node or npm on the target
-bun run compile              # writes dist/bin/vibe-os-linux-{x64,arm64}
-scp dist/bin/vibe-os-linux-x64 you@host:/usr/local/bin/vibe-os
-ssh you@host 'chmod +x /usr/local/bin/vibe-os'
-```
-
-```bash
-# or from a checkout, which needs Bun on the target
-bun install && bun run build && bun bin/vibe-os.mjs start
-```
-
-The binary carries the whole app, including the 20MB SSH WASM runtime. Once
-releases are published the first path collapses into a single `curl`.
-
-Then, before starting anything:
-
-```bash
-vibe-os doctor          # and again with sudo — see below
-```
-
-### Check it, twice
-
-`vibe-os doctor` answers the one question that matters: will a certificate this
-host signs actually be accepted for this user? It reads sshd's *effective*
-configuration to do it, which catches the failures that otherwise show up in a
-browser as `handshake failed` and nowhere else — a non-default
-`AuthorizedKeysFile`, an `AllowUsers` list that omits your user,
-`PubkeyAuthentication no`, or a home directory that is group-writable and so
-silently ignored under `StrictModes`.
-
-Reading sshd's effective config needs root, so run it **both ways**:
-
-```bash
-vibe-os doctor          # everything that does not need privileges
-sudo vibe-os doctor     # adds the sshd checks — this is the one that matters
-```
-
-Without root it says so rather than guessing:
-
-```
-! sshd config    could not read sshd's effective config — the checks below are the defaults, not the truth
-```
-
-### Behind Tailscale
-
-This is the recommended way to run it, and not only for the network. Tailscale
-removes the two riskiest parts of a public deployment: you stop needing to bind
-port 80, and you stop needing Let's Encrypt.
-
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-
-# Loopback, not the tailnet address: `tailscale serve` proxies to 127.0.0.1,
-# and it is the only thing that should be able to reach the plain HTTP port.
-# Binding the tailnet address instead gives a 502 — serve cannot reach it.
-vibe-os start --port 7681 --host 127.0.0.1 --token
-
-# HTTPS on your tailnet name, certificate provisioned automatically
-sudo tailscale serve --bg 7681
-```
-
-Enabling HTTPS for the tailnet is a one-time toggle in the admin console, and
-`tailscale serve` says so if it is off. `--token` with no value generates one
-and remembers it; the startup log prints the URL with it filled in.
-
-That serves it at `https://<machine>.<tailnet>.ts.net`, and gives you three
-things beyond privacy:
-
-- **A real certificate**, so `--domain` and the whole ACME path stay unused.
-- **A secure origin**, which is what the browser requires before it will expose
-  `navigator.clipboard`. Copy-on-select and paste-on-right-click start working
-  in the terminals — over plain HTTP on a bare IP they silently do not.
-- **No privileged port**, so no `setcap` and no `CAP_NET_BIND_SERVICE`.
-
-### Firewall: tailnet only
-
-Tailscale does not close ports for you. Until you do, the machine is still
-answering on its public address, and vibe-os hands out shells.
-
-**Do not lock yourself out.** Confirm you can reach the box over the tailnet in
-a second terminal *before* denying anything, and know where your provider's
-serial or rescue console is.
-
-```bash
-sudo ufw allow in on tailscale0        # anything arriving over the tailnet
-sudo ufw allow 41641/udp               # lets Tailscale make direct connections
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw enable
-```
-
-These rules were checked from a machine outside the tailnet, against the public
-address of a box running exactly this recipe: 22, 80, 443, 7681 and 8080 all
-time out rather than refusing, which is `default deny` dropping the packets. The
-same ports answer on the tailnet address at the same moment, so the box was up
-and it is specifically the public path that is shut.
-
-`vibe-os doctor` checks the local rules for you, and needs root to read them:
-
-```
-✓ firewall       ufw: incoming denied by default, tailnet and 41641/udp allowed
-                 (local rules only: your provider's firewall is separate, and
-                 proving a port is shut needs a packet from outside)
-```
-
-It reads ufw, and falls back to nftables and iptables. Two things it cannot do,
-which is why that caveat travels with the ✓ rather than being left to
-inference: it reads *configuration* rather than reachability, and it cannot see
-your provider's firewall at all. For reachability, probe the public address
-from somewhere else — that is the only test that answers the question.
-
-`41641/udp` is worth understanding rather than pasting: without it Tailscale
-still works, but falls back to relaying through DERP, which is slower. It is
-not a hole in the tailnet — it is how peers find each other directly.
-
-Note there is no `allow 22` here. Once the rules are in place, SSH arrives over
-the tailnet like everything else. If you would rather keep a public SSH door
-open while you gain confidence, add `sudo ufw allow 22/tcp` and remove it later.
-
-The nftables equivalent, if you are not using ufw:
-
-```bash
-sudo nft add rule inet filter input iifname "tailscale0" accept
-sudo nft add rule inet filter input udp dport 41641 accept
-```
-
-**Your provider's firewall is a separate thing.** AWS security groups, OVH's
-Network Firewall, Hetzner firewalls, DigitalOcean cloud firewalls and the rest
-sit in front of the machine and know nothing about ufw. Close 80 and 443 there
-too, and leave only what you actually serve publicly, which with Tailscale is
-nothing.
-
-OVH's is worth singling out because it is *stateless*: it filters each packet on
-its own with no idea which connection it belongs to, so a naive "allow
-established" rule does not exist and blocking inbound UDP will quietly break
-Tailscale's direct connections. If you use it, leave `41641/udp` open there as
-well as in ufw, or accept that every packet relays through DERP.
-
-Finally, belt and braces — bind vibe-os to the tailnet address so it is not
-listening on the public interface at all:
-
-```bash
-vibe-os start --port 7681 --token --host 100.x.y.z
-```
-
-`vibe-os doctor` reports on this directly, and prints your tailnet address when
-it finds one:
-
-```
-! exposure       no token and bound to every interface — Tailscale is up (100.x.y.z), but so is any public address
-                 bind to the tailnet only:  --host 100.x.y.z
-```
-
-### Pushing a change to a box that is already running
-
-```bash
-bun run build && bun scripts/compile.ts linux-x64
-scp dist/bin/vibe-os-linux-x64 you@host:/tmp/vibe-os
-ssh you@host 'sudo systemctl stop vibe-os \
-  && sudo mv /tmp/vibe-os /usr/local/bin/vibe-os \
-  && sudo chmod +x /usr/local/bin/vibe-os \
-  && sudo systemctl start vibe-os'
-```
-
-Nothing is lost by that restart: workspaces, profiles and window layout are in
-SQLite, and the terminals are dtach sessions the server does not own. Reload the
-browser and every window reattaches to whatever was running.
-
-Two things that restart does *not* pick up, both worth knowing before you
-conclude a change did not work:
-
-- **A changed harness command.** A window attaches to its existing socket if one
-  is live, and the command only runs when the session is created, so an existing
-  session keeps running whatever it was started with. Close the window and open
-  it again — reloading is not enough.
-- **Changed service flags.** The port, bind address and token live in the unit,
-  so re-run `sudo vibe-os install-service …` with the new ones.
-
-### Do not run it as root
-
-A fresh VPS logs you in as root, and vibe-os hands out shells as whoever it runs
-as. Make an account first — everything above assumes you have:
-
-```bash
-adduser --gecos "" vibe
-usermod -aG sudo vibe
-su - vibe          # and do the rest from here
-```
-
-`install-service` refuses to write a unit that runs as root rather than letting
-you find out later, and the CA line only means anything in the home directory of
-the user who actually logs in.
-
-### Give the box a GitHub identity
-
-Workspaces are git worktrees on their own branches, and vibe-os deliberately
-stops there — pushing, PRs and merging happen in the terminal. So a box with no
-GitHub credentials is a box where the whole workflow dead-ends at the first
-`git push`. Do this as the login user, not root: the key has to live in the home
-directory that windows actually log into.
-
-```bash
-ssh-keygen -t ed25519 -C "vibe-os@$(hostname)" -f ~/.ssh/id_ed25519 -N ""
-cat ~/.ssh/id_ed25519.pub
-```
-
-No passphrase, deliberately. An agent-less passphrase prompt appears inside
-whichever window happens to run `git push`, which is not somewhere an agent can
-answer it. The security boundary here is who can reach the box, not the key file.
-
-Add that public key to GitHub **twice**, at
-[github.com/settings/keys](https://github.com/settings/keys):
-
-- as an **Authentication key**, which is what makes clone and push work
-- as a **Signing key**, if you want commits made here to show as *Verified*
-
-Signing is worth the extra minute when an agent is doing the committing, because
-it is the only thing that distinguishes a commit that really came from your
-machine:
-
-```bash
-git config --global gpg.format ssh
-git config --global user.signingkey ~/.ssh/id_ed25519.pub
-git config --global commit.gpgsign true
-git config --global user.name  "Your Name"
-git config --global user.email "you@example.com"   # must match a verified GitHub email
-```
-
-That key covers the git protocol — clone, fetch, pull, push. It does **not**
-cover the GitHub API, which is a separate authentication system: pull requests,
-issues and reviews are HTTPS calls that take an OAuth token, and no SSH key can
-sign one. So if you want to open or merge a PR from a window — or want an agent
-in one to do it — the CLI needs its own login:
-
-```bash
-sudo apt install -y gh
-gh auth login          # choose SSH, so git keeps using the key above
-```
-
-Skip it if your habit is to push from the box and open the PR in a browser
-somewhere else; nothing else degrades. Choosing SSH at the prompt is what keeps
-the token confined to API calls rather than taking over git as well.
-
-Check both halves before trusting them:
-
-```bash
-ssh -T git@github.com     # "Hi <you>! You've successfully authenticated"
-gh auth status
-```
-
-One thing to be clear-eyed about: a push-capable key on this box means anyone
-who gets a shell here can push to your repositories, and vibe-os hands out
-shells. That is an argument for the token gate and the firewall rules above, and
-for keeping this box as trusted as the laptop you would otherwise be typing on.
-If you would rather it could not push everywhere, use a per-repository deploy
-key instead and accept that `gh` will not work.
-
-### Keeping it running
-
-```bash
-sudo vibe-os install-service --port 7681 --token hunter2
-journalctl -u vibe-os -f
-```
-
-Run it with `sudo` **from your own account**, not as root — it takes the user
-from `SUDO_USER`, resolves that account's real home from its passwd entry, and
-writes a unit that runs as them. It forwards whatever flags you passed, so the
-service behaves exactly like the command you just tested by hand.
-
-It also grants `CAP_NET_BIND_SERVICE`, which you no longer need if you took the
-Tailscale path above — harmless, but that is why it is there.
-
----
-
 ## How it works
 
 ```
@@ -421,7 +136,7 @@ channel multiplexing all happen in a Go/WASM sandbox in the tab. The server is a
 byte pipe that understands nothing about SSH — it never sees plaintext and holds
 no credentials for your session.
 
-### The bootstrap problem, and how it is solved
+### The bootstrap problem
 
 The awkward part of browser-based SSH is the first connection: the browser has a
 key nobody has ever heard of, and a blank VPS has an empty `authorized_keys`.
@@ -465,7 +180,10 @@ the browser sends an id and never names a directory.
 
 `dtach -p` is a liveness probe: it writes to the socket and fails on a dead one,
 so a session left behind by a crash is replaced instead of blocking every later
-attach. Creating with `-n` and attaching with `-a` is deliberate rather than
+attach. That probe-then-create pair runs under `flock -o`, so two logins for the
+same window cannot both decide to create it.
+
+Creating with `-n` and attaching with `-a` is deliberate rather than
 using `-A` for both — the two differ in argv, which is what lets the server
 detach a client without any risk of killing the session itself. `-E` gives the
 detach key back to the program, and `-r winch` asks it to repaint on attach,
@@ -487,42 +205,7 @@ composes a dtach invocation of its own.
 
 ---
 
-## Commands
-
-| command | what it does |
-| --- | --- |
-| `vibe-os` / `vibe-os start` | serve the UI and the SSH bridge |
-| `vibe-os attach [window]` | attach this terminal to a window's session |
-| `vibe-os doctor` | check this machine is ready, and say what is missing |
-| `sudo vibe-os install-service` | write and enable a systemd unit |
-| `vibe-os fetch-wasm` | re-download the SSH WASM runtime |
-
-### Options
-
-```
---port <n>          HTTP port (default 80)
---host <addr>       bind address (default 0.0.0.0)
---domain <fqdn>     provision a Let's Encrypt certificate and serve HTTPS
---email <addr>      contact address for Let's Encrypt
---tls-port <n>      HTTPS port (default 443)
-
---token [value]     require a token; generates and remembers one if omitted
---no-token          disable the gate (default)
-
---ssh-host <addr>   SSH target for the bridge (default 127.0.0.1)
---ssh-port <n>      SSH target port (default 22)
---ssh-advertise <host[:port]>
-                    host to print in attach commands, when sshd is not on
-                    the name the browser reached the desktop on
---user <name>       unix user to log in as (default: current user)
---no-sessions       plain login shells instead of persistent dtach sessions
---cert-ttl <secs>   certificate lifetime (default 43200)
-
---workspace <dir>   where worktrees are created (default ~/workspace);
-                    projects are discovered across the host, not just here
---state-dir <dir>   CA, TLS material and generated MCP configs
-                    (default ~/.vibe-os)
-```
+## Using it
 
 ### Projects and workspaces
 
@@ -656,7 +339,8 @@ Two switches are worth knowing the shape of:
   would rule out a VPS entirely. The binary tells a fuller story: it also
   contains a WebSocket bridge and errors about the extension and Claude Code
   being logged into *different* claude.ai accounts, which only makes sense if
-  the two can pair over the network. **Untested here** — if you want it, sign in
+  the two can pair over the network. This project has not verified that path —
+  if you want it, sign in
   on both ends and run `/chrome` to see whether it pairs before building any
   infrastructure. Passing it on a box with no Chrome is harmless either way; the
   session starts normally, just without browser tools.
@@ -701,7 +385,8 @@ whenever the editor reads the list and again whenever a window starts, so
 `claude mcp add` is the only place a server is ever really configured, and
 every profile using it follows.
 
-Three things worth knowing, all measured rather than assumed:
+Three things worth knowing, all verified against a running box rather than
+inferred from the documentation:
 
 - Credentials follow the **server name**, not the file that declared it. A
   server you have already logged into keeps working through a generated file,
@@ -787,13 +472,13 @@ disturbs neither: a browser pop-out is asked who is out there and answers, and
 an SSH handoff is a column on the window row, so it survives anything the
 browser does.
 
-### Popping out to a real terminal
+#### Popping out to a real terminal
 
 Choosing **SSH session** hands the window over and shows you the command that
 picks it up:
 
 ```bash
-ssh -t vibe@vibe-os.tail76dd79.ts.net vibe-os attach quiet-amber-otter-1
+ssh -t vibe@vibe-os.your-tailnet.ts.net vibe-os attach quiet-amber-otter-1
 ```
 
 It names vibe-os by an absolute path whenever the binary is somewhere sshd's
@@ -891,9 +576,399 @@ The **Dim** slider darkens the wallpaper behind the windows. Terminal text sits
 on a 62% plate over the glass, which reads well on most images; turn Dim up for
 a busy or bright one.
 
+### Installing it as an app
+
+vibe-os ships a web app manifest, so Chrome and Edge offer to install it and it
+runs in its own window with no browser chrome. Look for the install icon in the
+address bar, or **⋮ → Cast, save and share → Install page as app**. On iOS,
+**Share → Add to Home Screen**.
+
+It needs a [secure origin](#tls-and-secure-origins) — `localhost`, or HTTPS by
+way of [`tailscale serve`](#behind-tailscale) or `--domain`. Over plain HTTP to
+a bare IP the browser will not offer it.
+
+The window chrome takes its colour from `--theme-color`, which defaults to a
+neutral slate:
+
+```bash
+vibe-os start --theme-color '#7a4fd6'
+```
+
+That option exists because installed apps are otherwise indistinguishable. A
+laptop, a staging box and the real one all look identical in a dock, and
+installing the wrong one is the kind of mistake you only notice after typing
+into it. Give each box its own colour and the title bar tells you which is which.
+
+The service worker registered for installability **caches nothing, on purpose**.
+A caching worker in front of a terminal is a way to serve a stale bundle to a
+live session; offline support would need a real answer for the hashed assets and
+for the API, not a cache-first sweep.
+
+---
+
+## Deploying on a VPS
+
+### What the box needs
+
+vibe-os is one binary with no runtime dependencies, but it shells out to a few
+things and logs in through the machine's own sshd. These are the prerequisites:
+
+| Package | What uses it | Without it |
+| --- | --- | --- |
+| `openssh-server` | every window logs in through it | nothing connects |
+| `openssh-client` | `ssh-keygen` signs certificates, `ssh-keyscan` finds the host key to pin | **the server refuses to start** |
+| `dtach` | keeps every window alive across reloads | windows become plain shells that die on reload, and **profiles launch no harness at all** |
+| `git` | projects and worktrees | no projects |
+| `gh` | pull requests, issues and reviews — *optional* | git still works; the GitHub API does not |
+| `claude` | the Claude harness | those profiles open a window that closes again immediately |
+
+```bash
+sudo apt update && sudo apt install -y openssh-server openssh-client dtach git gh
+curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
+```
+
+Verified on **Debian 12 and 13** and **Ubuntu 24.04 and 26.04 LTS**, x86\_64,
+from the compiled binary — `vibe-os doctor` clean on each. The binary is
+dynamically linked against glibc and was built against an old baseline, so
+anything from bookworm onward is fine.
+
+If you intend to run a real browser on this box for Claude's Chrome
+integration, install **Google Chrome's own .deb** rather than the distribution's
+`chromium` package. On Ubuntu that package is a snap, and snap confinement is a
+known breaker of native messaging hosts — which is exactly the mechanism the
+Claude extension uses to reach a local Claude Code.
+
+`dtach` is the one people skip. It is not a nicety here: the harness command
+lives in the dtach invocation, so without it a profile opens a shell and does
+nothing else.
+
+It is deliberately dtach and not tmux. A window needs exactly two things from a
+session manager — survive a reload, and let a real terminal take over — and tmux
+brings a second terminal emulator along with them. That emulator keeps its own
+model of your screen and sends only the cells it thinks changed, so any
+momentary disagreement with the browser's terminal becomes permanent: it will
+not resend a cell it believes is already correct. dtach keeps no model. It holds
+the pty and moves bytes, and the program talks to your terminal directly.
+
+### Install
+
+```bash
+# a self-contained binary — no Bun, Node or npm on the target
+bun run compile              # writes dist/bin/vibe-os-linux-{x64,arm64}
+scp dist/bin/vibe-os-linux-x64 you@host:/usr/local/bin/vibe-os
+ssh you@host 'chmod +x /usr/local/bin/vibe-os'
+```
+
+```bash
+# or from a checkout, which needs Bun on the target
+bun install && bun run build && bun bin/vibe-os.mjs start
+```
+
+The binary carries the whole app, including the 20MB SSH WASM runtime. Once
+releases are published the first path collapses into a single `curl`.
+
+Then, before starting anything:
+
+```bash
+vibe-os doctor          # and again with sudo — see below
+```
+
+### Check it, twice
+
+`vibe-os doctor` answers the one question that matters: will a certificate this
+host signs actually be accepted for this user? It reads sshd's *effective*
+configuration to do it, which catches the failures that otherwise show up in a
+browser as `handshake failed` and nowhere else — a non-default
+`AuthorizedKeysFile`, an `AllowUsers` list that omits your user,
+`PubkeyAuthentication no`, or a home directory that is group-writable and so
+silently ignored under `StrictModes`.
+
+Reading sshd's effective config needs root, so run it **both ways**:
+
+```bash
+vibe-os doctor          # everything that does not need privileges
+sudo vibe-os doctor     # adds the sshd and firewall checks
+```
+
+Without root it says so rather than guessing:
+
+```
+! sshd config    could not read sshd's effective config — the checks below are the defaults, not the truth
+```
+
+### Behind Tailscale
+
+This is the recommended way to run it, and not only for the network. Tailscale
+removes the two riskiest parts of a public deployment: you stop needing to bind
+port 80, and you stop needing Let's Encrypt.
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# Loopback, not the tailnet address: `tailscale serve` proxies to 127.0.0.1,
+# and it is the only thing that should be able to reach the plain HTTP port.
+# Binding the tailnet address instead gives a 502 — serve cannot reach it.
+vibe-os start --port 7681 --host 127.0.0.1 --token
+
+# HTTPS on your tailnet name, certificate provisioned automatically
+sudo tailscale serve --bg 7681
+```
+
+Enabling HTTPS for the tailnet is a one-time toggle in the admin console, and
+`tailscale serve` says so if it is off. `--token` with no value generates one
+and remembers it; the startup log prints the URL with it filled in.
+
+That serves it at `https://<machine>.<tailnet>.ts.net`, and gives you three
+things beyond privacy:
+
+- **A real certificate**, so `--domain` and the whole ACME path stay unused.
+- **A secure origin**, which is what the browser requires before it will expose
+  `navigator.clipboard` or offer to [install the app](#installing-it-as-an-app).
+  Copy-on-select and paste-on-right-click start working in the terminals — over
+  plain HTTP on a bare IP they silently do not.
+- **No privileged port**, so no `setcap` and no `CAP_NET_BIND_SERVICE`.
+
+### Firewall: tailnet only
+
+Tailscale does not close ports for you. Until you do, the machine is still
+answering on its public address, and vibe-os hands out shells.
+
+**Do not lock yourself out.** Confirm you can reach the box over the tailnet in
+a second terminal *before* denying anything, and know where your provider's
+serial or rescue console is.
+
+```bash
+sudo ufw allow in on tailscale0        # anything arriving over the tailnet
+sudo ufw allow 41641/udp               # lets Tailscale make direct connections
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw enable
+```
+
+These rules were checked from a machine outside the tailnet, against the public
+address of a box running exactly this recipe: 22, 80, 443, 7681 and 8080 all
+time out rather than refusing, which is `default deny` dropping the packets. The
+same ports answer on the tailnet address at the same moment, so the box was up
+and it is specifically the public path that is shut.
+
+`vibe-os doctor` checks the local rules for you, and needs root to read them:
+
+```
+✓ firewall       ufw: incoming denied by default, tailnet and 41641/udp allowed
+                 (local rules only: your provider's firewall is separate, and
+                 proving a port is shut needs a packet from outside)
+```
+
+It reads ufw, and falls back to nftables and iptables. Two things it cannot do,
+which is why that caveat travels with the ✓ rather than being left to
+inference: it reads *configuration* rather than reachability, and it cannot see
+your provider's firewall at all. For reachability, probe the public address
+from somewhere else — that is the only test that answers the question.
+
+`41641/udp` is worth understanding rather than pasting: without it Tailscale
+still works, but falls back to relaying through DERP, which is slower. It is
+not a hole in the tailnet — it is how peers find each other directly.
+
+Note there is no `allow 22` here. Once the rules are in place, SSH arrives over
+the tailnet like everything else. If you would rather keep a public SSH door
+open while you gain confidence, add `sudo ufw allow 22/tcp` and remove it later.
+
+The nftables equivalent, if you are not using ufw:
+
+```bash
+sudo nft add rule inet filter input iifname "tailscale0" accept
+sudo nft add rule inet filter input udp dport 41641 accept
+```
+
+**Your provider's firewall is a separate thing.** AWS security groups, OVH's
+Network Firewall, Hetzner firewalls, DigitalOcean cloud firewalls and the rest
+sit in front of the machine and know nothing about ufw. Close 80 and 443 there
+too, and leave only what you actually serve publicly, which with Tailscale is
+nothing.
+
+OVH's is worth singling out because it is *stateless*: it filters each packet on
+its own with no idea which connection it belongs to, so a naive "allow
+established" rule does not exist and blocking inbound UDP will quietly break
+Tailscale's direct connections. If you use it, leave `41641/udp` open there as
+well as in ufw, or accept that every packet relays through DERP.
+
+Finally, belt and braces — bind vibe-os to the tailnet address so it is not
+listening on the public interface at all:
+
+```bash
+vibe-os start --port 7681 --token --host 100.x.y.z
+```
+
+`vibe-os doctor` reports on this directly, and prints your tailnet address when
+it finds one:
+
+```
+! exposure       no token and bound to every interface — Tailscale is up (100.x.y.z), but so is any public address
+                 bind to the tailnet only:  --host 100.x.y.z
+```
+
+### Do not run it as root
+
+A fresh VPS logs you in as root, and vibe-os hands out shells as whoever it runs
+as. Make an account first — everything above assumes you have:
+
+```bash
+adduser --gecos "" vibe
+usermod -aG sudo vibe
+su - vibe          # and do the rest from here
+```
+
+`install-service` refuses to write a unit that runs as root rather than letting
+you find out later, and the CA line only means anything in the home directory of
+the user who actually logs in.
+
+### Keeping it running
+
+```bash
+sudo vibe-os install-service --port 7681 --token hunter2
+journalctl -u vibe-os -f
+```
+
+Run it with `sudo` **from your own account**, not as root — it takes the user
+from `SUDO_USER`, resolves that account's real home from its passwd entry, and
+writes a unit that runs as them. It forwards whatever flags you passed, so the
+service behaves exactly like the command you just tested by hand.
+
+It also grants `CAP_NET_BIND_SERVICE`, which you no longer need if you took the
+Tailscale path above — harmless, but that is why it is there.
+
+### Binding port 80
+
+Binding it needs root or `CAP_NET_BIND_SERVICE`. On a fresh VPS you are usually
+root and it just works. Otherwise vibe-os falls back to port 8080 and tells you
+how to fix it:
+
+```bash
+# the compiled binary
+sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
+# or, if running from a checkout, the Bun that executes it
+sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(which bun)")"
+```
+
+or let systemd handle it, which grants the capability without setcap at all:
+
+```bash
+sudo vibe-os install-service --user "$USER"
+journalctl -u vibe-os -f
+```
+
+Or sidestep it: run on a high port with
+[`tailscale serve`](#behind-tailscale) in front. Nothing privileged is involved,
+and you get HTTPS as well.
+
+### Giving the box a GitHub identity
+
+Workspaces are git worktrees on their own branches, and vibe-os deliberately
+stops there — pushing, PRs and merging happen in the terminal. So a box with no
+GitHub credentials is a box where the whole workflow dead-ends at the first
+`git push`. Do this as the login user, not root: the key has to live in the home
+directory that windows actually log into.
+
+```bash
+ssh-keygen -t ed25519 -C "vibe-os@$(hostname)" -f ~/.ssh/id_ed25519 -N ""
+cat ~/.ssh/id_ed25519.pub
+```
+
+No passphrase, deliberately. An agent-less passphrase prompt appears inside
+whichever window happens to run `git push`, which is not somewhere an agent can
+answer it. The security boundary here is who can reach the box, not the key file.
+
+Add that public key to GitHub **twice**, at
+[github.com/settings/keys](https://github.com/settings/keys):
+
+- as an **Authentication key**, which is what makes clone and push work
+- as a **Signing key**, if you want commits made here to show as *Verified*
+
+Signing is worth the extra minute when an agent is doing the committing, because
+it is the only thing that distinguishes a commit that really came from your
+machine:
+
+```bash
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+git config --global user.name  "Your Name"
+git config --global user.email "you@example.com"   # must match a verified GitHub email
+```
+
+That key covers the git protocol — clone, fetch, pull, push. It does **not**
+cover the GitHub API, which is a separate authentication system: pull requests,
+issues and reviews are HTTPS calls that take an OAuth token, and no SSH key can
+sign one. So if you want to open or merge a PR from a window — or want an agent
+in one to do it — the CLI needs its own login:
+
+```bash
+sudo apt install -y gh
+gh auth login          # choose SSH, so git keeps using the key above
+```
+
+Skip it if your habit is to push from the box and open the PR in a browser
+somewhere else; nothing else degrades. Choosing SSH at the prompt is what keeps
+the token confined to API calls rather than taking over git as well.
+
+Check both halves before trusting them:
+
+```bash
+ssh -T git@github.com     # "Hi <you>! You've successfully authenticated"
+gh auth status
+```
+
+One thing to be clear-eyed about: a push-capable key on this box means anyone
+who gets a shell here can push to your repositories, and vibe-os hands out
+shells. That is an argument for the token gate and the firewall rules above, and
+for keeping this box as trusted as the laptop you would otherwise be typing on.
+If you would rather it could not push everywhere, use a per-repository deploy
+key instead and accept that `gh` will not work.
+
+### Updating a box that is already running
+
+```bash
+bun run build && bun scripts/compile.ts linux-x64
+scp dist/bin/vibe-os-linux-x64 you@host:/tmp/vibe-os
+ssh you@host 'sudo systemctl stop vibe-os \
+  && sudo mv /tmp/vibe-os /usr/local/bin/vibe-os \
+  && sudo chmod +x /usr/local/bin/vibe-os \
+  && sudo systemctl start vibe-os'
+```
+
+Nothing is lost by that restart: workspaces, profiles and window layout are in
+SQLite, and the terminals are dtach sessions the server does not own. Reload the
+browser and every window reattaches to whatever was running.
+
+Two things that restart does *not* pick up, both worth knowing before you
+conclude a change did not work:
+
+- **A changed harness command.** A window attaches to its existing socket if one
+  is live, and the command only runs when the session is created, so an existing
+  session keeps running whatever it was started with. Close the window and open
+  it again — reloading is not enough.
+- **Changed service flags.** The port, bind address and token live in the unit,
+  so re-run `sudo vibe-os install-service …` with the new ones.
+
 ---
 
 ## Security
+
+### The access model
+
+**vibe-os hands out shell access to the machine it runs on.** Every window is
+the same unix user, there is no per-user isolation, and anyone who can reach the
+port and pass the gate can run anything that user can. Treat access to vibe-os
+as equivalent to SSH access to the box, because that is what it is.
+
+That framing decides everything else here. The gate is one secret in front of a
+shell; a closed port is not reachable at all. The recommended shape is all
+three: [behind Tailscale](#behind-tailscale), [firewalled to the tailnet
+only](#firewall-tailnet-only), bound to the tailnet address, *and* with the
+token on.
+
+### The token gate
 
 **The gate is off by default.** Anyone who can reach the port gets a shell as
 the user running vibe-os. That is a deliberate choice for private networks
@@ -921,14 +996,15 @@ and bind to the tailnet address — then keep the token as well. `vibe-os doctor
 reports on exactly this and will tell you when you have a shell on a public
 interface with no gate in front of it.
 
-### TLS
+### TLS and secure origins
 
 Plain HTTP on port 80 works out of the box on a bare IP. Pass `--domain` and it
 provisions a Let's Encrypt certificate over HTTP-01 (it already owns port 80),
 serves HTTPS, and redirects. Certificates are renewed 30 days before expiry.
 
 On plain HTTP the browser clipboard API is unavailable — the origin is not a
-secure context — so copy-on-select and paste-on-right-click stop working. A
+secure context — so copy-on-select and paste-on-right-click stop working, and
+the browser will not offer to [install the app](#installing-it-as-an-app). A
 profile's prompt is unaffected either way: its **Send** button writes into the
 session directly and never touches the clipboard.
 
@@ -942,34 +1018,45 @@ ask what you last copied.
 There are two ways to get a secure origin, and the second is easier than the
 first: `--domain` and Let's Encrypt, or [`tailscale serve`](#behind-tailscale),
 which provisions a certificate for your `.ts.net` name with no domain to own, no
-ACME, and no port 80. The ACME path is also the one part of this codebase that
-has never run outside a test.
+ACME, and no port 80.
 
 ---
 
-## Port 80
+## CLI reference
 
-Binding it needs root or `CAP_NET_BIND_SERVICE`. On a fresh VPS you are usually
-root and it just works. Otherwise vibe-os falls back to port 8080 and tells you
-how to fix it:
+| command | what it does |
+| --- | --- |
+| `vibe-os` / `vibe-os start` | serve the UI and the SSH bridge |
+| `vibe-os attach [window]` | attach this terminal to a window's session |
+| `vibe-os doctor` | check this machine is ready, and say what is missing |
+| `sudo vibe-os install-service` | write and enable a systemd unit |
+| `vibe-os fetch-wasm` | re-download the SSH WASM runtime |
 
-```bash
-# the compiled binary
-sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
-# or, if running from a checkout, the Bun that executes it
-sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(which bun)")"
 ```
+--port <n>          HTTP port (default 80)
+--host <addr>       bind address (default 0.0.0.0)
+--domain <fqdn>     provision a Let's Encrypt certificate and serve HTTPS
+--email <addr>      contact address for Let's Encrypt
+--tls-port <n>      HTTPS port (default 443)
 
-or let systemd handle it, which grants the capability without setcap at all:
+--token [value]     require a token; generates and remembers one if omitted
+--no-token          disable the gate (default)
 
-```bash
-sudo vibe-os install-service --user "$USER"
-journalctl -u vibe-os -f
+--ssh-host <addr>   SSH target for the bridge (default 127.0.0.1)
+--ssh-port <n>      SSH target port (default 22)
+--ssh-advertise <host[:port]>
+                    host to print in attach commands, when sshd is not on
+                    the name the browser reached the desktop on
+--user <name>       unix user to log in as (default: current user)
+--no-sessions       plain login shells instead of persistent dtach sessions
+--cert-ttl <secs>   certificate lifetime (default 43200)
+
+--theme-color <hex> window chrome colour for the installed app (default #1c2128)
+--workspace <dir>   where worktrees are created (default ~/workspace);
+                    projects are discovered across the host, not just here
+--state-dir <dir>   CA, TLS material and generated MCP configs
+                    (default ~/.vibe-os)
 ```
-
-Or sidestep it: run on a high port with
-[`tailscale serve`](#behind-tailscale) in front. Nothing privileged is involved,
-and you get HTTPS as well.
 
 ---
 
@@ -1015,6 +1102,17 @@ script, and copy the checksum it prints into `PINNED`:
 SSHTERM_VERSION=v0.9.0 bun run fetch-wasm    # warns, and prints the sha256
 ```
 
+The app icons in `public/` are generated from `public/icon.svg`, which is the
+same mark as the inline favicon in `index.html`. To regenerate them after an
+edit:
+
+```bash
+rsvg-convert -w 192 -h 192 public/icon.svg -o public/icon-192.png
+rsvg-convert -w 512 -h 512 public/icon.svg -o public/icon-512.png
+rsvg-convert -w 180 -h 180 public/icon.svg -o public/apple-touch-icon.png
+rsvg-convert -w 512 -h 512 public/icon-maskable.svg -o public/icon-maskable-512.png
+```
+
 ### Stack
 
 | | |
@@ -1040,6 +1138,13 @@ is raced against a timeout because a panicked runtime never settles `done` at
 all), and
 `onRuntimeDead` exists so the app can rebuild every window instead of leaving
 you with terminals that look fine but accept no input.
+
+**`flock` holds its lock on a file descriptor, and descriptors are inherited.**
+The session command serialises its probe-then-create with `flock -o`. Without
+`-o`, the daemonised `dtach` inherits the descriptor and holds the lock for the
+life of the session, and every later login blocks forever — presenting as a
+terminal that hangs just after verifying the host key, which points nowhere near
+the cause.
 
 **Host key algorithm order is not the obvious one.** golang.org/x/crypto/ssh's
 `supportedHostKeyAlgos` puts ECDSA *ahead* of Ed25519 — the opposite of OpenSSH.
@@ -1075,28 +1180,61 @@ subcommand.
 
 ---
 
-## What is not here yet
+## Project status
 
-- **ACME is still untested.** `--domain` and the Let's Encrypt path have never
-  run outside a test, and taking the [Tailscale path](#behind-tailscale) means
-  never reaching for them — which is why they stay that way.
-- **IPv6 reachability is unverified.** The v4 rules were tested from outside
-  the tailnet and hold; the v6 rules mirror them exactly and the default input
-  policy is `DROP`, but that was read from the box rather than probed from a
-  network with IPv6.
+Usable and in daily use, but young. No release binaries are published yet, so
+build one or run the container.
+
+**Verified on real hardware.** Everything in
+[Deploying on a VPS](#deploying-on-a-vps) has been walked end to end on a fresh
+OVHcloud VPS running Ubuntu 26.04, behind Tailscale, serving over HTTPS with a
+certificate from `tailscale serve`. Two problems surfaced only there, both PATH:
+a forced command does not get a login shell, and neither does a systemd service.
+Both are fixed. The [firewall rules](#firewall-tailnet-only) have been checked
+from a machine outside the tailnet — the public address drops packets on 22, 80,
+443, 7681 and 8080, while the tailnet address answers.
+
+Known gaps, in rough order of how likely they are to matter:
+
 - **No authentication by default.** The token gate exists and works; it is off
   until you pass `--token`. There is no multi-user story at all.
-- **No keyboard shortcuts at all.** The desktop is click-only, deliberately —
-  see [The desktop](#the-desktop). Something that does not steal keys from the
+- **ACME has not been exercised in production.** `--domain` and the Let's
+  Encrypt path have never issued a real certificate, because the
+  [Tailscale path](#behind-tailscale) makes them unnecessary.
+- **IPv6 reachability is unverified.** The IPv4 firewall rules were tested from
+  outside the tailnet; the v6 rules mirror them and the default input policy is
+  `DROP`, but that was read from the box rather than probed from a network with
+  IPv6.
+- **No keyboard shortcuts.** The desktop is click-only, deliberately — see
+  [The desktop](#the-desktop). Something that does not steal keys from the
   terminal is worth having; it has not been designed yet.
 - **MCP servers can be picked but not added.** The editor lists what the box
   has and hands a profile the ones you choose; adding, editing and removing
-  them is still `claude mcp` on the box, which is also the only place they are
-  configured.
+  them is still `claude mcp` on the box.
 - **No branch operations.** Workspaces create a worktree and a branch; pushing,
   PRs and merging happen in the terminal.
 - **Deleting a workspace keeps its branch**, deliberately, so work is
   recoverable — nothing prunes those branches for you.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening one:
+
+```bash
+bun run check     # lint, typecheck and tests — the same three CI runs
+```
+
+CI runs those on every push and pull request, so a green local `check` is a
+green PR. Tests live in `test/` for the server and beside the code for the
+browser; anything with logic worth trusting should arrive with some.
+
+The prose in this repository — comments included — explains *why* rather than
+*what*, because the what is already in the code. Changes that undo a documented
+decision are welcome; please update the reasoning along with the code.
+
+---
 
 ## License
 

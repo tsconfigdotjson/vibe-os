@@ -136,6 +136,15 @@ export function useServerConfig() {
     revalidateOnFocus: false,
     revalidateIfStale: false,
   });
+  // index.html ships a default so a cold load is not white; this replaces it
+  // with the configured one, which is what makes two instances distinguishable.
+  useEffect(() => {
+    if (!data?.themeColor) return;
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", data.themeColor);
+  }, [data?.themeColor]);
+
   return {
     server: data ?? null,
     error: error ? describeError(error) : null,

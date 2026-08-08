@@ -142,6 +142,7 @@ export function createApi(deps: ApiDeps) {
         hostKeyFingerprint: hostKey ? fingerprint(hostKey) : null,
         certificateEndpoint: "/api/ssh/certificate",
         maxWallpaperBytes: MAX_WALLPAPER_BYTES,
+        themeColor: config.themeColor,
         palette: PALETTE,
       };
       return json(body);

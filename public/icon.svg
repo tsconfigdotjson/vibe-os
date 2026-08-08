@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="vibe-os">
+  <title>vibe-os</title>
+  <!--
+    The block cursor, which is the whole idea: a terminal you can see into.
+    Same two shapes and same two colours as the inline favicon in index.html —
+    a dark plate and one cyan cell — so the tab, the installed app and the
+    README are recognisably the same thing.
+
+    The cursor sits left of centre, exactly as the favicon does. That is the
+    point of it — a cursor rests at the start of a line, not in the middle of
+    one — so it is kept rather than balanced away.
+  -->
+  <rect width="512" height="512" rx="96" fill="#0d1117"/>
+  <rect x="128" y="128" width="160" height="256" rx="8" fill="#56cfe1"/>
+</svg>

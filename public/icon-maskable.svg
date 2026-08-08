@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="vibe-os">
+  <title>vibe-os</title>
+  <!--
+    Android masks this to a circle, squircle or rounded square of its choosing,
+    and only the middle 80% is guaranteed to survive. The plate therefore fills
+    the whole canvas with no radius, and the cursor is scaled to sit well inside
+    that safe area rather than being clipped by whichever shape a launcher picks.
+    It is centred where the others are not, because an off-centre mark loses its
+    left edge to the mask — the one place the offset cannot survive.
+  -->
+  <rect width="512" height="512" fill="#0d1117"/>
+  <rect x="186" y="163" width="110" height="176" rx="6" fill="#56cfe1"/>
+</svg>

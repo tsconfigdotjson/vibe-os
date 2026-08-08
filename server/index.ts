@@ -39,6 +39,43 @@ const FIRST_UNPRIVILEGED_PORT = 1024;
 /** Where we land when port 80 is refused, so a first run still gets a URL. */
 const UNPRIVILEGED_FALLBACK_PORT = 8080;
 
+/**
+ * The installable-app description Chrome reads before it will offer "Install".
+ *
+ * `display: standalone` is what drops the browser chrome; without the 192 and
+ * 512 icons Chrome declines to offer installation at all. `id` is fixed so that
+ * changing `start_url` later updates the installed app rather than creating a
+ * second one beside it.
+ */
+function webManifest(themeColor: string) {
+  return {
+    id: "/",
+    name: "vibe-os",
+    short_name: "vibe-os",
+    description: "A coding desktop in the browser, on a box you own.",
+    start_url: "/",
+    scope: "/",
+    display: "standalone",
+    orientation: "any",
+    background_color: "#0d1117",
+    theme_color: themeColor,
+    // PNGs only, and every one of them opaque. `icon.svg` is deliberately
+    // absent: it has the rounded corners that suit a favicon and a README, and
+    // an installer that fills transparency with white turns those into a white
+    // border around a dark icon in the Dock.
+    icons: [
+      { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      {
+        src: "/icon-maskable-512.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "maskable",
+      },
+    ],
+  };
+}
+
 const UNAUTHORISED_PAGE = `<!doctype html><meta charset="utf-8"><title>vibe-os</title>
 <body style="font:14px ui-monospace,monospace;background:#07090d;color:#c8cedb;padding:2rem">
 <h1 style="font-weight:600">vibe-os</h1>
@@ -214,6 +251,19 @@ export async function startServer(config: Config): Promise<RunningServer> {
       return new Response(UNAUTHORISED_PAGE, {
         status: 401,
         headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    // Generated rather than a file in public/, because the theme colour is
+    // configurable and the whole point of that is telling two installed
+    // instances apart.
+    if (url.pathname === "/manifest.webmanifest") {
+      return Response.json(webManifest(config.themeColor), {
+        headers: {
+          "content-type": "application/manifest+json",
+          // Cheap to fetch and it changes with a flag, so never cache it.
+          "cache-control": "no-store",
+        },
       });
     }
 

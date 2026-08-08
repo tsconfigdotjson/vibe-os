@@ -69,6 +69,7 @@ async function build() {
     workspace: "/tmp/demo",
     sessions: false,
     token: null,
+    themeColor: "#1c2128",
     stateDir: dir,
   } as unknown as Config;
 
@@ -205,6 +206,7 @@ describe("reads", () => {
       "endpoint",
       "certificateEndpoint",
       "maxWallpaperBytes",
+      "themeColor",
       "palette",
     ]) {
       expect(body).toHaveProperty(key);

@@ -41,6 +41,8 @@ export interface ClientConfig {
   hostKeyFingerprint: string | null;
   certificateEndpoint: string;
   maxWallpaperBytes: number;
+  /** Window-chrome colour, so a tab matches the installed app. */
+  themeColor: string;
   /** Colour tokens a profile may use; `--profile-<token>` resolves each one. */
   palette: readonly string[];
 }
