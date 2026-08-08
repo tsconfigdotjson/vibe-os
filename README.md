@@ -762,35 +762,22 @@ browser does.
 
 ### Popping out to a real terminal
 
-Choosing **SSH session** hands the window over and shows you two ways to pick it
-up. One is plain ssh:
+Choosing **SSH session** hands the window over and shows you the command that
+picks it up:
 
 ```bash
 ssh -t vibe@vibe-os.tail76dd79.ts.net vibe-os attach quiet-amber-otter-1
 ```
 
-The other is a URL you type into a terminal:
+It names vibe-os by an absolute path whenever the binary is somewhere sshd's
+PATH would not find it, so it resolves wherever it happens to be installed.
 
-```bash
-sh -c "$(curl -sSL https://vibe-os.tail76dd79.ts.net/t/quiet-amber-otter-1)"
-```
-
-That URL answers with a three-line shell script that `exec`s an `ssh` command,
-so `curl` on its own shows you exactly what you are about to run. Everything is
-resolved server-side, so the box needs nothing installed for it. Use
-`sh -c "$(…)"` and not `curl … | sh`: a pipe makes the script's stdin the pipe,
-leaving `ssh -t` with no terminal to allocate, and dtach fails on arrival.
-
-**Which one is listed first depends on the token gate.** The URL is the nicer
-answer right up until there is a token, because the token has to travel in the
-query string for `curl` to get past the gate — and a URL you can no longer type
-from memory, that also lands your token in your shell history, has lost every
-advantage it had over the ssh command beside it. So an ungated server offers the
-URL first and a gated one offers ssh first.
-
-The ssh form has no matching caveat. It names vibe-os by an absolute path
-whenever the binary is somewhere sshd's PATH would not find it, so it resolves
-wherever it happens to be installed.
+There used to be a second spelling — a URL you fetched with `curl` and ran —
+and it is gone. Its whole appeal was being short enough to type from memory,
+and a token gate took that away: the token had to ride in the query string for
+`curl` to get past it, which made the URL untypeable and put the token in your
+shell history. What was left was worse than the ssh line in every respect,
+so the line is all there is now.
 
 `vibe-os attach` with no window gives you a picker of every window on the box,
 newest workspace first, which is the one worth remembering — on your laptop you

@@ -7,19 +7,20 @@ import { writeClipboard } from '../clipboard';
  *
  * The desktop is not mirroring the session here — it has let go of it entirely,
  * the same way it does for a browser pop-out, because dtach sizes the pty to
- * its smallest client and a desktop tile would drag a full-screen terminal down
- * to its own width. So this is a placeholder with the one thing you need next:
- * the command that gets you there.
+ * whichever client arrived last and a desktop tile would drag a full-screen
+ * terminal down to its own width. So this is a placeholder with the one thing
+ * you need next: the command that gets you there.
  *
- * Two spellings of the same thing, whichever suits this server first — the
- * order comes from `attachForms` on the far side, because which one is nicer
- * depends on whether the token gate is on, and that is not the browser's
- * business to know.
+ * One command, not a choice of two. The other spelling was a URL that fetched a
+ * script over curl, which had to carry the server's token in the query string
+ * to get past the gate — putting it in shell history and on screen — and the
+ * whole appeal of a short URL went with it. An ssh line names the window,
+ * carries nothing secret, and is the thing you would have typed anyway.
  */
 export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclaim: () => void }) {
   const [info, setInfo] = useState<AttachInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,10 +33,10 @@ export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclai
     };
   }, [windowId]);
 
-  const copy = async (label: string, text: string) => {
+  const copy = async (text: string) => {
     if (await writeClipboard(text)) {
-      setCopied(label);
-      window.setTimeout(() => setCopied((c) => (c === label ? null : c)), 1600);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
     }
   };
 
@@ -49,26 +50,21 @@ export function SshHandoff({ windowId, onReclaim }: { windowId: string; onReclai
         <p className="popped-hint">resolving…</p>
       ) : (
         <>
-          <p className="handoff-lead">Type either of these into a terminal:</p>
-          {/* Selectable text with a button beside it, never a button alone: on
+          {/* Nothing introduces this. The heading above already says where the
+              window went, and a line telling you to type a command into a
+              terminal, directly under a line saying it went to a terminal, was
+              the same sentence twice.
+
+              Selectable text with a button beside it, never a button alone: on
               plain HTTP the clipboard API does not exist and the fallback in
               clipboard.ts can still be refused, and a command you cannot copy
               is one you should at least be able to read. */}
-          {info.forms.map((form) => (
-            <div className="handoff-cmd" key={form.key}>
-              <div className="handoff-hint">{form.hint}</div>
-              <div className="handoff-row">
-                <code className="handoff-code">{form.command}</code>
-                <button
-                  type="button"
-                  className="ghost handoff-copy"
-                  onClick={() => void copy(form.key, form.command)}
-                >
-                  {copied === form.key ? 'copied' : 'copy'}
-                </button>
-              </div>
-            </div>
-          ))}
+          <div className="handoff-row">
+            <code className="handoff-code">{info.command}</code>
+            <button type="button" className="ghost handoff-copy" onClick={() => void copy(info.command)}>
+              {copied ? 'copied' : 'copy'}
+            </button>
+          </div>
         </>
       )}
 
