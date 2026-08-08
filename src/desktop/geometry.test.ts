@@ -1,6 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { GRID_COLS, GRID_ROWS } from "../../shared/grid";
-import { cellSize, GUTTER, rectToPixels } from "./geometry";
+import {
+  GRID_COLS,
+  GRID_ROWS,
+  MIN_WINDOW_COLS,
+  MIN_WINDOW_ROWS,
+} from "../../shared/grid";
+import {
+  cellSize,
+  clampBox,
+  GUTTER,
+  pixelsToRect,
+  rectToPixels,
+} from "./geometry";
+import { clampRect } from "./useWindows";
 
 const view = { width: 1920, height: 1080 };
 
@@ -69,5 +81,70 @@ describe("grid geometry", () => {
         expect(drawn).toBeCloseTo(actual, 6);
       }
     });
+  });
+});
+
+/**
+ * Every rectangle the drag preview shows must be a real cell.
+ *
+ * The highlight has no transition, so whatever comes out of here is drawn
+ * exactly where it lands — an off-grid or out-of-bounds rect would be visible
+ * as a box sitting between the lines rather than on them.
+ */
+describe("resize previews stay on the grid", () => {
+  const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
+  const start = { col: 6, row: 4, colSpan: 9, rowSpan: 6 };
+  const origin = rectToPixels(start, view);
+
+  for (const handle of HANDLES) {
+    test(`handle ${handle}`, () => {
+      for (let dx = -600; dx <= 600; dx += 23) {
+        for (let dy = -400; dy <= 400; dy += 29) {
+          const next = { ...origin };
+          if (handle.includes("w")) {
+            next.left = origin.left + dx;
+            next.width = origin.width - dx;
+          }
+          if (handle.includes("e")) next.width = origin.width + dx;
+          if (handle.includes("n")) {
+            next.top = origin.top + dy;
+            next.height = origin.height - dy;
+          }
+          if (handle.includes("s")) next.height = origin.height + dy;
+
+          const r = clampRect(
+            pixelsToRect(clampBox(next, handle, view), view),
+            "resize",
+          );
+          const where = `${handle} ${dx},${dy} -> ${JSON.stringify(r)}`;
+          expect(
+            Number.isInteger(r.col) && Number.isInteger(r.row),
+            where,
+          ).toBe(true);
+          expect(r.colSpan >= MIN_WINDOW_COLS, where).toBe(true);
+          expect(r.rowSpan >= MIN_WINDOW_ROWS, where).toBe(true);
+          expect(r.col >= 0 && r.row >= 0, where).toBe(true);
+          expect(r.col + r.colSpan <= GRID_COLS, where).toBe(true);
+          expect(r.row + r.rowSpan <= GRID_ROWS, where).toBe(true);
+        }
+      }
+    });
+  }
+
+  test("dragging one edge leaves the opposite edge alone", () => {
+    // The two roundings (origin and size) are independent, so this is only
+    // true because the edge that is not moving stays on a cell boundary.
+    for (let dx = 0; dx <= 200; dx += 1) {
+      const dragged = {
+        ...origin,
+        left: origin.left + dx,
+        width: origin.width - dx,
+      };
+      const r = clampRect(
+        pixelsToRect(clampBox(dragged, "w", view), view),
+        "resize",
+      );
+      expect(r.col + r.colSpan).toBe(start.col + start.colSpan);
+    }
   });
 });
