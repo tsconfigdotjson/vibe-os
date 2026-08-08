@@ -7,7 +7,7 @@
 **A coding desktop in the browser, on a box you own.**
 
 Switch between the git repos on a machine, spin up a worktree per piece of work,
-and open terminals into it — all over HTTP from anything with a browser.
+and open terminals into it, from anything with a browser.
 
 [![CI](https://github.com/GratefulWorkspace/vibe-os/actions/workflows/ci.yml/badge.svg)](https://github.com/GratefulWorkspace/vibe-os/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
@@ -17,17 +17,15 @@ and open terminals into it — all over HTTP from anything with a browser.
 ---
 
 Open the desktop and you get a project picker, a sidebar of workspaces, and
-windows you can drag around a snap grid over a wallpaper. Every window is a dtach
-session in its workspace's worktree, so closing the tab and coming back tomorrow
-finds whatever was running still running.
+windows you can drag around a snap grid. Every window is a
+[dtach](https://github.com/crigler/dtach) session in its workspace's worktree,
+so closing the tab and coming back tomorrow finds whatever was running still
+running.
 
-Down the right is a rail of **profiles** — the roles you work as. *QA Engineer*,
+Down the right is a rail of **profiles**, the roles you work as. *QA Engineer*,
 *Backend Manager*, whatever your work divides into. Each carries a colour, a
-harness with its settings, and a standing prompt that can leave blanks for you
-to fill in. Click one and you get a window tinted in its colour with Claude
-already running in the worktree and the prompt waiting above it. Any terminal
-can be popped out into its own browser window and brought back, with everything
-still running.
+harness with its settings, and a standing prompt. Click one and you get a window
+tinted in its colour with Claude already running in the worktree.
 
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
 edit, no `sshd_config` change, and no root.
@@ -36,35 +34,23 @@ edit, no `sshd_config` change, and no root.
 
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
-  - [The bootstrap problem](#the-bootstrap-problem)
-  - [How windows stay alive](#how-windows-stay-alive)
 - [Using it](#using-it)
   - [Projects and workspaces](#projects-and-workspaces)
-  - [What terminals in a workspace share](#what-terminals-in-a-workspace-share)
   - [Profiles](#profiles)
   - [Popping a terminal out](#popping-a-terminal-out)
   - [The desktop](#the-desktop)
-  - [Wallpaper](#wallpaper)
   - [Installing it as an app](#installing-it-as-an-app)
 - [Deploying on a VPS](#deploying-on-a-vps)
   - [What the box needs](#what-the-box-needs)
   - [Install](#install)
-  - [Check it, twice](#check-it-twice)
   - [Behind Tailscale](#behind-tailscale)
-  - [Firewall: tailnet only](#firewall-tailnet-only)
-  - [Do not run it as root](#do-not-run-it-as-root)
-  - [Keeping it running](#keeping-it-running)
-  - [Binding port 80](#binding-port-80)
+  - [Firewall](#firewall)
+  - [Running it as a service](#running-it-as-a-service)
   - [Giving the box a GitHub identity](#giving-the-box-a-github-identity)
-  - [Updating a box that is already running](#updating-a-box-that-is-already-running)
+  - [Updating a running box](#updating-a-running-box)
 - [Security](#security)
-  - [The access model](#the-access-model)
-  - [The token gate](#the-token-gate)
-  - [TLS and secure origins](#tls-and-secure-origins)
 - [CLI reference](#cli-reference)
 - [Development](#development)
-  - [Stack](#stack)
-  - [Things that will bite you](#things-that-will-bite-you)
 - [Project status](#project-status)
 - [Contributing](#contributing)
 - [License](#license)
@@ -73,40 +59,53 @@ edit, no `sshd_config` change, and no root.
 
 ## Quick start
 
-The fastest way to see it, and the path with the most coverage:
+### Try it locally
 
 ```bash
 docker compose up --build
 open http://localhost:8080
 ```
 
-The container is a blank Debian box with sshd, dtach and git — the same shape as
-a fresh VPS, so it exercises the real thing: vibe-os generates its CA, writes
-the `cert-authority` line, discovers the host key, and binds port 80 as an
-unprivileged user via `setcap`.
+A blank Debian box with sshd, dtach and git, which is the same shape as a fresh
+VPS. The port is published on loopback only, because this compose file runs
+without a token and an unauthenticated vibe-os is a shell for anyone who can
+reach it.
 
-The runtime stage contains **no Bun, Node or npm** — plain Debian, OpenSSH, dtach
-and one compiled binary. If anything the server needed at runtime were not
-actually embedded in that binary, the container would fail to start rather than
-quietly work because a source tree happened to be lying around.
+### Or point an agent at a VPS
 
-Two differences from a VPS worth knowing:
+You have an agent. Give it SSH access to a fresh box and this:
 
-- `localhost` counts as a **secure origin**, so clipboard copy/paste works here
-  even over plain HTTP. Reached by bare IP on a VPS, it would not.
-- The startup banner prints the container's bridge address (`172.x.x.x`), which
-  the host cannot reach. Use `localhost:8080`. On a VPS that same line prints
-  the address you actually want.
+> Set up vibe-os (https://github.com/GratefulWorkspace/vibe-os) on this VPS.
+>
+> 1. Create a non-root user with sudo if I am logged in as root, and do the rest
+>    as that user. vibe-os hands out shells as whoever runs it.
+> 2. Install the prerequisites: `openssh-server`, `openssh-client`, `dtach`,
+>    `git`, and `gh`. Install Claude Code with the standalone installer from
+>    https://claude.ai/install.sh, not npm.
+> 3. Install Tailscale, run `tailscale up`, and tell me the tailnet address.
+> 4. Build the binary. If you have Bun locally, `bun run compile` and copy
+>    `dist/bin/vibe-os-linux-x64` to `/usr/local/bin/vibe-os`. Otherwise clone
+>    the repo on the box, install Bun, and run `bun install && bun run build`.
+> 5. Run `vibe-os doctor` and then `sudo vibe-os doctor`. Fix what they report
+>    before continuing. Do not skip this.
+> 6. Install the service: `sudo vibe-os install-service --port 7681 --host
+>    127.0.0.1 --token`. Run that with sudo from the user account, not as root.
+> 7. Put HTTPS in front: `sudo tailscale serve --bg 7681`.
+> 8. Close the box down with ufw: allow in on `tailscale0`, allow `41641/udp`,
+>    default deny incoming, then enable. Confirm you can still reach the box
+>    over the tailnet in a second session before enabling it.
+> 9. Turn off SSH password authentication by writing
+>    `PasswordAuthentication no` to `/etc/ssh/sshd_config.d/01-hardening.conf`.
+>    That file has to sort before `50-cloud-init.conf`, which sets it to yes.
+>    Run `sshd -t` before reloading.
+> 10. Run `sudo vibe-os doctor` one more time and paste the output, along with
+>     the URL and token from `journalctl -u vibe-os`.
+>
+> Tell me what you are about to run before you run anything that opens a port
+> or changes sshd.
 
-The port is published on **loopback only** (`127.0.0.1:8080:80`), because this
-compose file runs without a token — and an unauthenticated vibe-os is a shell
-for anyone who can reach the port. To open it up, either tunnel
-(`ssh -L 8080:localhost:8080 box`), publish it on a tailnet address, or bind it
-publicly *and* uncomment `command: ["--token"]`.
-
-Both volumes are worth keeping: `vibe-home` preserves the CA and your work,
-`vibe-sshd` preserves the container's host keys so the browser does not report
-the host key as changed after a rebuild.
+Read what it proposes before you let it run. Step 8 can lock you out of the box
+if the tailnet is not actually working yet.
 
 ---
 
@@ -126,82 +125,25 @@ the host key as changed after a rebuild.
 └─────────────────┘
 ```
 
-The bottom route is the same session by a different door: your own ssh client,
-your own key, straight to sshd, with vibe-os nowhere in the path except to have
-told you what to type. See [popping out to a real
-terminal](#popping-out-to-a-real-terminal).
-
 **The SSH protocol runs inside the browser.** Key exchange, authentication and
-channel multiplexing all happen in a Go/WASM sandbox in the tab. The server is a
-byte pipe that understands nothing about SSH — it never sees plaintext and holds
-no credentials for your session.
+channel multiplexing happen in a Go/WASM sandbox in the tab. The server is a
+byte pipe: it never sees plaintext and holds no credentials for your session.
 
-### The bootstrap problem
+**vibe-os is its own short-lived certificate authority.** On first start it
+generates an ed25519 CA and appends one `cert-authority` line to
+`~/.ssh/authorized_keys`. Each window generates a keypair in the browser, keeps
+the private half in IndexedDB, and posts only the public half to be signed.
+Certificates last 12 hours. Revoking every browser that ever connected is
+deleting one line.
 
-The awkward part of browser-based SSH is the first connection: the browser has a
-key nobody has ever heard of, and a blank VPS has an empty `authorized_keys`.
-The usual answers are all bad — print a public key and make the user paste it,
-or ship a private key down to the browser.
+**Windows survive because dtach owns them, not vibe-os.** Each certificate
+carries a `force-command` that attaches to the window's dtach socket, creating
+it in the workspace's worktree if it is not there yet. Restarting the server,
+reloading the page and closing the laptop all leave the session running.
 
-vibe-os does neither. **It is its own short-lived SSH certificate authority.**
-
-1. On first start it generates an ed25519 CA in `~/.vibe-os/` and appends one
-   line to `~/.ssh/authorized_keys`:
-
-   ```
-   cert-authority ssh-ed25519 AAAA… vibe-os-ca@host
-   ```
-
-2. Each window generates its own keypair inside the WASM sandbox. The private
-   half stays in IndexedDB and never crosses the network.
-
-3. The window POSTs only its **public** key to `/api/ssh/certificate`. The
-   server signs it and returns a certificate valid for 12 hours.
-
-4. sshd accepts it because of that one `cert-authority` line.
-
-No private key is ever transmitted. Certificates expire on their own, and
-revoking every browser that ever connected is deleting one line.
-
-### How windows stay alive
-
-Each certificate carries a per-window `force-command` critical option:
-
-```
-force-command dtach -p '~/.vibe-os/sessions/vibe-quiet-amber-otter-1.sock' … \
-              || dtach -n '…/vibe-quiet-amber-otter-1.sock' -E -z /bin/sh -c \
-                    'cd /home/you/workspace/.vibe-worktrees/my-repo/quiet-amber-otter && …'
-              ;  exec dtach -a '…/vibe-quiet-amber-otter-1.sock' -E -z -r winch
-```
-
-The socket name comes from the workspace, and the `cd` is what puts the shell in
-that workspace's worktree. Both are resolved server-side from the window id —
-the browser sends an id and never names a directory.
-
-`dtach -p` is a liveness probe: it writes to the socket and fails on a dead one,
-so a session left behind by a crash is replaced instead of blocking every later
-attach. That probe-then-create pair runs under `flock -o`, so two logins for the
-same window cannot both decide to create it.
-
-Creating with `-n` and attaching with `-a` is deliberate rather than
-using `-A` for both — the two differ in argv, which is what lets the server
-detach a client without any risk of killing the session itself. `-E` gives the
-detach key back to the program, and `-r winch` asks it to repaint on attach,
-since dtach stores no screen to replay. Because the client
-requests a *shell* (not an exec), sshd allocates a real PTY and then runs the
-forced command inside it — so resize, job control and full-screen programs all
-behave.
-
-This detail is load-bearing and easy to get wrong. sshterm's `autoConnect.command`
-option looks like the obvious place to put the session command, but it takes
-upstream's `session.Run(command)` path, which requests **no PTY and installs no
-resize handler**. dtach fails outright there. The command has to travel in the
-certificate instead.
-
-That command is built in one place, `server/session.ts`, and has two callers:
-the certificate signer above, and `vibe-os attach`. They must not drift — a
-window has to be the same window whichever door you come in by — so neither
-composes a dtach invocation of its own.
+The bottom route in that diagram is the same session by a different door: your
+own ssh client, your own key, straight to sshd. See
+[popping out](#popping-a-terminal-out).
 
 ---
 
@@ -210,290 +152,102 @@ composes a dtach invocation of its own.
 ### Projects and workspaces
 
 The picker in the top-left switches between git repositories on the machine.
-**Refresh** walks the disk for them — bounded by depth, a skip list and a visit
-budget, and only ever on that button, never on a poll.
+**Refresh** walks the disk for them, bounded by depth and a visit budget, and
+only on that button.
 
 Each project has **workspaces** in the sidebar. A workspace is a git worktree on
-its own branch, named with three random words, so they are cheap to make and
-safe to throw away. Terminals belong to a workspace: switching workspaces swaps
-which windows are on screen and restores their placement, while the sessions you
-left keep running — switching detaches, only ✕ ends anything.
+its own branch, named with three random words. Terminals belong to a workspace:
+switching swaps which windows are on screen and restores their placement, while
+the sessions you left keep running. Only ✕ ends anything.
 
-Every terminal starts in its workspace's worktree. That path is resolved
-server-side from the window id; the browser never names a directory.
+`git push` works with no arguments from a new workspace, because creating one
+sets `push.autoSetupRemote` on the project. Nothing is pushed for you.
 
-**`git push` works with no arguments** from a new workspace. A branch made by
-`worktree add -b` normally has no upstream, so the first push stops with a
-command to copy — a papercut on every workspace, which is most of them. So
-creating a workspace sets `push.autoSetupRemote` on the project, and push
-establishes the tracking branch itself when it creates the remote branch.
-
-Nothing is pushed for you, and no branch appears on the remote until you push
-one. The alternative — writing the tracking config up front — points the branch
-at a ref that does not exist yet, so `git status` reads
-`## name...origin/name [gone]` until the first push, and "gone" is what git says
-about an upstream someone deleted. This way status stays clean.
-
-The setting lands on the project repository, because worktrees share their
-repository's config. It is skipped for a project with no remote, and an existing
-value is left alone — including a deliberate `false`.
-
-### What terminals in a workspace share
-
-Every window in a workspace opens in the same worktree, so they share one
-checkout, one branch, and one git index — `.git/worktrees/<name>/index`. Editing
-a file in one window changes it for all of them, which is the point: a workspace
-is one piece of work, and the roles on the rail are people looking at it
-together.
-
-The catch is that git takes a lock on that index for anything that writes, so
-two agents running `git add` or `git commit` in the same workspace at the same
-moment will collide:
-
-```
-fatal: Unable to create '.../index.lock': File exists.
-```
-
-Nothing is corrupted — one of them simply loses and has to retry — but it is
-worth knowing before you point three Claude sessions at one workspace and ask
-them all to commit. Reading, building, testing and analysing in parallel is
-fine; it is only the index that is exclusive.
-
-If two pieces of work genuinely need to proceed independently, give them a
-workspace each. Different workspaces have different worktrees, different
-branches and different index files, so they never contend at all — which is what
-workspaces are for.
-
-State lives in SQLite in the state directory, reached over the API, so a desktop
-follows you between browsers and machines. The sidebar polls once a minute and
-on window focus — a VPS is not a realtime database and a minute of staleness
-costs nothing.
+Every window in a workspace shares one checkout, one branch and one git index.
+That is the point, but it means two agents running `git commit` at the same
+moment will collide on `index.lock`. Nothing is corrupted, one of them retries.
+If two pieces of work need to proceed independently, give them a workspace each.
 
 ### Profiles
 
-The rail on the right lists the roles you can open a terminal as — *QA
-Engineer*, *Backend Manager*, whatever your work divides into. Clicking one
-opens a window, launches its harness in the worktree, and offers its standing
-prompt above the terminal. Profiles belong to a project and appear in every
-workspace of it, because the prompts and flags describe the codebase while
-workspaces are worktrees you throw away.
+A profile is a name, a colour, a harness (`claude`, a shell, or any command on
+the box) with its flags, and a standing prompt. Profiles belong to a project and
+appear in every workspace of it.
 
-A profile carries a name, one of ten colours, a harness (`claude`, a plain
-shell, or any command on the box) with its flags, and a prompt. The colour is
-the point of the thing: it tints the window, its title bar and its dock entry,
-so three roles running at once are distinguishable without reading anything. A
-role window also gets a taller header with the role's name at the top of the
-hierarchy and the session name demoted beneath it.
+The colour is the point: it tints the window, its title bar and its dock entry,
+so three roles running at once are distinguishable without reading anything.
 
-**Quitting the harness closes the window.** A window opened as a role exists to
-run that role, so leaving Claude ends the session rather than dropping you into
-a shell in the worktree — which would leave a window behind to be tidied up by
-hand after every finished conversation. It closes everywhere at once, the
-browser tile and any terminal attached to the same session, because there is
-only one session underneath. ⟳ opens it again with the harness relaunched.
+- **Quitting the harness closes the window.** A role window exists to run that
+  role. ⟳ opens it again.
+- **Clicking a role that is already open raises it.** Hover a live row and press
+  **+** to open a second one.
+- **Flags are stored as a list of arguments**, quoted individually when the
+  command is built. The browser never sends a command at all.
 
-The cost is that a harness which cannot start at all — the wrong command, or a
-PATH that does not reach it — closes the window before the error can be read.
-`vibe-os doctor` and `journalctl -u vibe-os` are where that shows up. If you
-want a shell in the worktree, that is what a plain-shell profile is for.
-
-Clicking a role that is already open **raises that window** rather than starting
-a second one — a workspace usually wants one of each. When it does not, a live
-row grows a **+** on hover, which opens another.
-
-Flags are stored as a list of arguments, not a command line, and each is quoted
-on its own when the launch command is built. `--model 'opus; rm -rf /'` is one
-argument containing a semicolon, not two commands. The browser never sends a
-command at all: the window row says which profile it was opened as, and the
-server resolves the rest, exactly as it already does for the worktree path.
-
-The editor does not ask you to know any of that. A model dropdown, a thinking
-dropdown, a permission dropdown, and a few switches; the flags they produce are
-folded behind **Advanced**, along with a field for anything else and a preview
-of the exact command that will run.
-
-**Thinking** is `--effort`, from low up to max. It is how long the session
-reasons before it acts, so it costs latency and tokens in exchange for being
-right more often — worth spending on a role that reviews or debugs, wasted on
-one that runs a build. Leaving it on Default passes no flag at all and lets the
-harness choose, which is the right answer until you have a reason otherwise.
-
-The model list is read off the Claude binary installed on the server, so it
-follows Claude's releases rather than this project's. Aliases come first and
-full versions after, because an alias is almost always what you want: a role
-written today should get the best Opus, not the one that was current the day it
-was written. Permission modes and effort levels come from the CLI's own help
-output, so a mode or a level added upstream appears without a change here — the
-one difference is that effort is a scale rather than a set, so a list this
-project cannot parse falls back to the known ladder whole rather than being
-merged into something out of order.
-
-Two switches are worth knowing the shape of:
-
-- **Remote control** works anywhere. It needs nothing on the box beyond outbound
-  network, which makes it a natural fit here — the session is on the VPS either
-  way, and this just gives you a second way to reach it.
-- **Browser tools** (`--chrome`) is the one to be careful about. The
-  [documentation](https://code.claude.com/docs/en/chrome) describes a native
-  messaging host, which requires Chrome and Claude Code on the same machine and
-  would rule out a VPS entirely. The binary tells a fuller story: it also
-  contains a WebSocket bridge and errors about the extension and Claude Code
-  being logged into *different* claude.ai accounts, which only makes sense if
-  the two can pair over the network. This project has not verified that path —
-  if you want it, sign in
-  on both ends and run `/chrome` to see whether it pairs before building any
-  infrastructure. Passing it on a box with no Chrome is harmless either way; the
-  session starts normally, just without browser tools.
-
-The harness runs as `<command> <args>; exec "$SHELL"`. The tail matters — dtach
-ends a session when its last pane exits, so without it, quitting Claude would
-take the desktop window with it. And because windows attach with
-`new-session -A`, which ignores a shell-command when it attaches, reloading the
-page rejoins the running harness instead of starting a second one on top.
+The editor gives you a model dropdown, a thinking dropdown (`--effort`), a
+permission dropdown and a few switches, with the generated flags and a preview
+behind **Advanced**. Models and permission modes are read off the Claude binary
+installed on the server, so the list follows Claude's releases.
 
 #### MCP servers
 
-A **MCP servers** dropdown sits with the others, and it has three settings
-rather than a list of switches, because that is what Claude can actually be
-told. There is no flag that enables a server by name. What exists is
-`--mcp-config`, which takes definitions, and `--strict-mcp-config`, which
-ignores everything else — so the three states are: pass neither and get
-whatever the box has, pass `--strict-mcp-config` alone and get none of it, or
-pass both and get exactly what you picked.
+Three settings rather than a list of switches, because that is what Claude
+accepts: everything the box has, nothing, or exactly what you pick.
 
-The list is read off the box, the same way the model list is read off the
-binary. Add one and it appears:
+The list is read off the box. Add one and it appears:
 
 ```sh
 claude mcp add --scope user linear --transport sse https://mcp.linear.app/sse
 ```
 
-**Use `--scope user`.** Without it Claude files the server under whichever
-directory you happened to run the command in, and if that was a workspace, the
-server goes when the worktree does. All three scopes are listed anyway —
-machine-wide, the repo's `.mcp.json`, and one-directory — each labelled with
-which it is, because the alternative answer to "I added it, where is it?" is
-silence.
+Use `--scope user`. Without it Claude files the server under whichever directory
+you ran the command in, and if that was a workspace, the server goes when the
+worktree does.
 
-Picking servers writes a file per server under `~/.vibe-os/mcp/`, holding just
-that one, and the profile stores the path. Not the definition itself, for two
-reasons: a definition can contain an API key or a bearer token, and arguments
-show up in `ps`, while these files are 0600 in a 0700 directory. And a copy
-frozen into a profile stops matching the box the moment the URL changes. The
-files are rewritten from `~/.claude.json` and each project's `.mcp.json`
-whenever the editor reads the list and again whenever a window starts, so
-`claude mcp add` is the only place a server is ever really configured, and
-every profile using it follows.
+Picking servers writes one file per server under `~/.vibe-os/mcp/` at 0600, and
+the profile stores the path rather than the definition, which can contain an API
+key. The files are rewritten from `~/.claude.json` whenever a window starts, so
+`claude mcp add` stays the only place a server is configured.
 
-Three things worth knowing, all verified against a running box rather than
-inferred from the documentation:
-
-- Credentials follow the **server name**, not the file that declared it. A
-  server you have already logged into keeps working through a generated file,
-  with no second OAuth round.
-- Because the file is passed explicitly, a **one-directory server works in a
-  workspace** — which it would not otherwise, since the session's directory is
-  the worktree and not the one it was registered against.
-- `--strict-mcp-config` also drops **plugin-provided** MCP servers. It does not
-  drop **claude.ai connectors** — Gmail, Calendar, Drive and the rest are
-  attached to the account rather than to this machine, and nothing on the
-  command line turns them off.
-
-Picking nothing is the same command line as picking none, so the editor writes
-it as none rather than leaving it half-said. A selection whose server has since
-gone from the box is shown struck through and stays selected: it is what the
-profile says, and dropping it quietly would change what the profile does
-without telling you.
+Credentials follow the server name, so a server you have already logged into
+keeps working. `--strict-mcp-config` also drops plugin-provided servers, but not
+claude.ai connectors like Gmail or Drive, which are attached to your account.
 
 #### Blanks
 
-A standing prompt is worth most when it is nearly the same every time. "Review
-the ticket" only helps if you can say which ticket, so a prompt can leave gaps:
+A prompt can leave gaps:
 
 ```
 Read {{which files}} on branch {{branch}} and report back.
 ```
 
-Each `{{…}}` becomes a field in the band, drawn inline in the sentence it
-belongs to rather than as a form above it — you read the prompt and fill the
-holes in it. The words inside the braces are the placeholder, so they should say
-what goes there. Select a word in the editor and press **+ blank** to turn it
-into one; typing the braces by hand does the same thing.
+Each `{{…}}` becomes a field in the band above the terminal, drawn inline in the
+sentence. Select a word in the editor and press **+ blank** to make one.
 
-Blanks are keyed by position, not by name. Two `{{file}}` in one prompt stay two
-separate fields, because they are far more likely to be two files than the same
-one written twice.
+Blanks are keyed by position, so two `{{file}}` stay two separate fields.
+Pressing Copy or Send with blanks empty refuses once, then goes anyway, and an
+unfilled blank falls back to its own label.
 
-Pressing Copy or Send with blanks still empty refuses once and puts the cursor
-in the first one. Pressing again goes anyway, and an unfilled blank falls back
-to its own label so the sentence still reads.
-
-#### The prompt band
-
-The band above the terminal offers the prompt two ways, and the second is the
-one that always works.
-
-**Copy** puts it on the clipboard. **Send** writes it straight into the SSH
-session and lets xterm wrap it in bracketed-paste markers, so a multi-line
-prompt arrives in Claude's composer as one unsent block rather than submitting
-itself on the first newline.
-
-Send exists because `navigator.clipboard` **does not exist at all** on a page
-served over plain HTTP to an IP address — which is the deployment this project
-is for. Copy falls back to `execCommand`, which still works there; pasting *into*
-the terminal has no such fallback. Either button dismisses the band, and that
-sticks across reloads, per window.
-
-Deleting a profile leaves any window already running it alone — those are live
-sessions with real work in them. The window just becomes an ordinary terminal.
+**Copy** puts the prompt on the clipboard. **Send** writes it into the session
+with bracketed paste, so a multi-line prompt arrives in Claude's composer as one
+block rather than submitting on the first newline. Send always works;
+`navigator.clipboard` does not exist on a page served over plain HTTP to an IP.
 
 ### Popping a terminal out
 
-The ⇗ button in a window's title bar offers two places to send that terminal:
-
-- **Browser window** — its own window on this screen, worth having when a role
-  needs a whole screen rather than a tile on someone else's.
-- **SSH session** — a real terminal on your own machine, over plain `ssh`.
-
-There is nothing clever underneath either one. Every route addresses the same
-window id, the server turns that into the same dtach session, and dtach is what
-actually holds the terminal — so popping out is just detaching one client and
-attaching another, and everything running carries on.
-
-The desktop shows a placeholder while a terminal is out, rather than mirroring
-it. dtach is perfectly happy with two clients on one session and would show the
-same thing in both, but it sizes a session to its *smallest* client, so a
-mirrored pair drags itself down to whichever window is narrower. One client at a
-time means whatever picked the terminal up gets the size it actually has.
-
-**Bring it back** returns the terminal to the desktop with its scrollback
-intact, and closing a browser pop-out does the same. Reloading the desktop
-disturbs neither: a browser pop-out is asked who is out there and answers, and
-an SSH handoff is a column on the window row, so it survives anything the
-browser does.
-
-#### Popping out to a real terminal
-
-Choosing **SSH session** hands the window over and shows you the command that
-picks it up:
+The ⇗ button sends a terminal to its own browser window, or to a real terminal
+on your machine:
 
 ```bash
 ssh -t vibe@vibe-os.your-tailnet.ts.net vibe-os attach quiet-amber-otter-1
 ```
 
-It names vibe-os by an absolute path whenever the binary is somewhere sshd's
-PATH would not find it, so it resolves wherever it happens to be installed.
+Every route addresses the same window id and the same dtach session, so popping
+out is detaching one client and attaching another. **Bring it back** returns it
+with scrollback intact, and the desktop reclaims a window on its own if the
+terminal goes away.
 
-There used to be a second spelling — a URL you fetched with `curl` and ran —
-and it is gone. Its whole appeal was being short enough to type from memory,
-and a token gate took that away: the token had to ride in the query string for
-`curl` to get past it, which made the URL untypeable and put the token in your
-shell history. What was left was worse than the ssh line in every respect,
-so the line is all there is now.
-
-`vibe-os attach` with no window gives you a picker of every window on the box,
-newest workspace first, which is the one worth remembering — on your laptop you
-do not have a window id, you have "the thing I was doing yesterday".
+`vibe-os attach` with no argument gives you a picker of every window on the box:
 
 ```
   vibe-os · 3 windows
@@ -505,104 +259,45 @@ do not have a window id, you have "the thing I was doing yesterday".
   attach [1-3, q to quit]:
 ```
 
-Both routes build their command with the same function that fills in a
-certificate's `force-command`, so arriving over ssh puts you in the same
-session, in the same worktree, running the same harness the browser would have
-started. Nothing is special-cased for terminals.
-
-**This grants no access.** The ssh connection authenticates with your own key in
-`~/.ssh/authorized_keys`, or with your tailnet identity under `tailscale up
---ssh`; vibe-os is not in the auth path at all and `--token` does not gate it.
-Anyone who can ssh to the box as that user could already type `dtach -a`.
-What this adds is knowing what to attach *to*.
-
-Tailscale SSH is worth turning on for exactly this — it makes the command work
-with no key to distribute, and it coexists with the bridge, which dials
-`127.0.0.1:22` and is not intercepted.
-
-**Bring it back** kills the attached dtach client, which is the
-server-side equivalent of closing a browser pop-out: your terminal drops back to
-its shell, and the desktop takes the window over. Nothing running is disturbed.
-
-The desktop also takes a window back on its own when the terminal goes away, so
-closing your laptop lid does not leave a placeholder behind forever. It waits
-for a client to actually show up before it starts watching — otherwise it would
-reclaim the window while the command was still on your clipboard — and gives up
-after fifteen minutes on a handoff nobody ever used.
-
-The host in those commands is the host your browser used to reach the desktop,
-which is almost always the one sshd answers on. `--ssh-advertise host[:port]`
-overrides it for when the two genuinely differ, such as a reverse proxy in front
-of the web port.
+**This grants no access.** That ssh connection authenticates with your own key,
+or your tailnet identity under `tailscale up --ssh`. vibe-os is not in the auth
+path and `--token` does not gate it. Anyone who can ssh to the box could already
+type `dtach -a`.
 
 ### The desktop
 
-Windows float over a wallpaper and snap to a 24 × 14 grid. Drag a title bar to
-move, drag any edge or corner to resize; the grid only appears while you are
-dragging, with the destination cell lit up. Double-click a title bar to fill the
-desktop.
+Windows snap to a 24 × 14 grid. Drag a title bar to move, any edge to resize,
+double-click to fill the desktop. **⊞** on the dock tiles up to four windows.
 
 There are no keyboard chords. The terminal has focus nearly all the time, and
-every key the desktop took for itself was a key the session underneath could not
-have — `alt` is how a terminal sends the characters
-a Mac keyboard has no other way to type. Everything is a control you can see.
+every key the desktop took would be a key the session could not have.
 
-**⊞ on the dock tiles the windows.** One fills the desktop, two go across, three
-are two across with a full-width one beneath, and four take the corners. Five is
-where it stops: past four every tile is narrower than a terminal wants to be, so
-the button greys out and nothing moves rather than arranging something nobody
-would work in. Minimised windows are left where they are — they were put away on
-purpose, so they are neither counted nor dragged back out.
+The dock and the profile rail hide themselves. Push the pointer into the bottom
+or right edge to bring them back.
 
-**The dock and the profile rail hide themselves.** Both are things you reach for
-rather than read, and between reaches they were two strips of screen a terminal
-could have had — the window surface now runs to the right edge. Push the pointer
-into the bottom edge and the dock comes back; into the right edge and the rail
-does. A hairline in each edge marks where.
+Closing a window ends its session. **Minimise** puts it away and keeps it
+running.
 
-Closing a window ends the session behind it; **minimise** puts one away and
-keeps it running. Reloading or closing the tab keeps everything — persistence
-only gives way to an explicit dismissal.
-
-### Wallpaper
-
-The dock's ◑ button opens the picker. Uploads are stored on the server, not in
-the browser, so the same desktop appears on every device you open it from.
-Images are content-addressed by hash and their type is decided by sniffing magic
-bytes — not by the filename or the declared Content-Type, since these get served
-back to a browser and a mislabelled HTML file would be a stored-XSS primitive.
-
-The **Dim** slider darkens the wallpaper behind the windows. Terminal text sits
-on a 62% plate over the glass, which reads well on most images; turn Dim up for
-a busy or bright one.
+The dock's **◑** opens the wallpaper picker. Uploads are stored on the server,
+so the same desktop appears on every device. **Dim** darkens the wallpaper
+behind the windows.
 
 ### Installing it as an app
 
-vibe-os ships a web app manifest, so Chrome and Edge offer to install it and it
-runs in its own window with no browser chrome. Look for the install icon in the
-address bar, or **⋮ → Cast, save and share → Install page as app**. On iOS,
-**Share → Add to Home Screen**.
+vibe-os ships a web app manifest, so Chrome, Edge and Brave offer to install it
+and it runs in its own window. On iOS, **Share → Add to Home Screen**.
 
-It needs a [secure origin](#tls-and-secure-origins) — `localhost`, or HTTPS by
-way of [`tailscale serve`](#behind-tailscale) or `--domain`. Over plain HTTP to
-a bare IP the browser will not offer it.
+It needs a secure origin: `localhost`, or HTTPS by way of
+[`tailscale serve`](#behind-tailscale) or `--domain`.
 
-The window chrome takes its colour from `--theme-color`, which defaults to a
-neutral slate:
+Give each box its own colour so you can tell installed instances apart:
 
 ```bash
 vibe-os start --theme-color '#7a4fd6'
 ```
 
-That option exists because installed apps are otherwise indistinguishable. A
-laptop, a staging box and the real one all look identical in a dock, and
-installing the wrong one is the kind of mistake you only notice after typing
-into it. Give each box its own colour and the title bar tells you which is which.
-
-The service worker registered for installability **caches nothing, on purpose**.
-A caching worker in front of a terminal is a way to serve a stale bundle to a
-live session; offline support would need a real answer for the hashed assets and
-for the API, not a cache-first sweep.
+The service worker caches nothing. It exists only because Chrome will not offer
+installation without one.
 
 ---
 
@@ -610,323 +305,158 @@ for the API, not a cache-first sweep.
 
 ### What the box needs
 
-vibe-os is one binary with no runtime dependencies, but it shells out to a few
-things and logs in through the machine's own sshd. These are the prerequisites:
-
 | Package | What uses it | Without it |
 | --- | --- | --- |
 | `openssh-server` | every window logs in through it | nothing connects |
-| `openssh-client` | `ssh-keygen` signs certificates, `ssh-keyscan` finds the host key to pin | **the server refuses to start** |
-| `dtach` | keeps every window alive across reloads | windows become plain shells that die on reload, and **profiles launch no harness at all** |
+| `openssh-client` | signing certificates, finding the host key | **the server refuses to start** |
+| `dtach` | keeps windows alive across reloads | windows die on reload, and **profiles launch no harness** |
 | `git` | projects and worktrees | no projects |
-| `gh` | pull requests, issues and reviews — *optional* | git still works; the GitHub API does not |
-| `claude` | the Claude harness | those profiles open a window that closes again immediately |
+| `gh` | PRs, issues and reviews (optional) | git works, the GitHub API does not |
+| `claude` | the Claude harness | those profiles open a window that closes immediately |
 
 ```bash
 sudo apt update && sudo apt install -y openssh-server openssh-client dtach git gh
 curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
 ```
 
-Verified on **Debian 12 and 13** and **Ubuntu 24.04 and 26.04 LTS**, x86\_64,
-from the compiled binary — `vibe-os doctor` clean on each. The binary is
-dynamically linked against glibc and was built against an old baseline, so
-anything from bookworm onward is fine.
+Verified on Debian 12 and 13, Ubuntu 24.04 and 26.04 LTS, x86\_64.
 
-If you intend to run a real browser on this box for Claude's Chrome
-integration, install **Google Chrome's own .deb** rather than the distribution's
-`chromium` package. On Ubuntu that package is a snap, and snap confinement is a
-known breaker of native messaging hosts — which is exactly the mechanism the
-Claude extension uses to reach a local Claude Code.
-
-`dtach` is the one people skip. It is not a nicety here: the harness command
-lives in the dtach invocation, so without it a profile opens a shell and does
-nothing else.
-
-It is deliberately dtach and not tmux. A window needs exactly two things from a
-session manager — survive a reload, and let a real terminal take over — and tmux
-brings a second terminal emulator along with them. That emulator keeps its own
-model of your screen and sends only the cells it thinks changed, so any
-momentary disagreement with the browser's terminal becomes permanent: it will
-not resend a cell it believes is already correct. dtach keeps no model. It holds
-the pty and moves bytes, and the program talks to your terminal directly.
+`dtach` is the one people skip. The harness command lives in the dtach
+invocation, so without it a profile opens a shell and does nothing else.
 
 ### Install
 
 ```bash
-# a self-contained binary — no Bun, Node or npm on the target
 bun run compile              # writes dist/bin/vibe-os-linux-{x64,arm64}
 scp dist/bin/vibe-os-linux-x64 you@host:/usr/local/bin/vibe-os
 ssh you@host 'chmod +x /usr/local/bin/vibe-os'
 ```
 
-```bash
-# or from a checkout, which needs Bun on the target
-bun install && bun run build && bun bin/vibe-os.mjs start
-```
+The binary carries the whole app, including the 20MB SSH WASM runtime. No Bun,
+Node or npm on the target.
 
-The binary carries the whole app, including the 20MB SSH WASM runtime. Once
-releases are published the first path collapses into a single `curl`.
-
-Then, before starting anything:
-
-```bash
-vibe-os doctor          # and again with sudo — see below
-```
-
-### Check it, twice
-
-`vibe-os doctor` answers the one question that matters: will a certificate this
-host signs actually be accepted for this user? It reads sshd's *effective*
-configuration to do it, which catches the failures that otherwise show up in a
-browser as `handshake failed` and nowhere else — a non-default
-`AuthorizedKeysFile`, an `AllowUsers` list that omits your user,
-`PubkeyAuthentication no`, or a home directory that is group-writable and so
-silently ignored under `StrictModes`.
-
-Reading sshd's effective config needs root, so run it **both ways**:
+Then check it, twice. `vibe-os doctor` answers whether a certificate this host
+signs will actually be accepted, which catches the failures that otherwise
+appear in a browser as `handshake failed` and nowhere else. Reading sshd's
+effective config and the firewall needs root:
 
 ```bash
 vibe-os doctor          # everything that does not need privileges
 sudo vibe-os doctor     # adds the sshd and firewall checks
 ```
 
-Without root it says so rather than guessing:
-
-```
-! sshd config    could not read sshd's effective config — the checks below are the defaults, not the truth
-```
+`doctor` evaluates the flags it is given and cannot see a systemd unit, so pass
+the same flags the service uses to get a true answer.
 
 ### Behind Tailscale
 
-This is the recommended way to run it, and not only for the network. Tailscale
-removes the two riskiest parts of a public deployment: you stop needing to bind
-port 80, and you stop needing Let's Encrypt.
+The recommended setup. You stop needing to bind port 80, and you stop needing
+Let's Encrypt.
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 
-# Loopback, not the tailnet address: `tailscale serve` proxies to 127.0.0.1,
-# and it is the only thing that should be able to reach the plain HTTP port.
-# Binding the tailnet address instead gives a 502 — serve cannot reach it.
+# Loopback, not the tailnet address: serve proxies to 127.0.0.1, and binding
+# the tailnet address gives a 502 because serve cannot reach it.
 vibe-os start --port 7681 --host 127.0.0.1 --token
-
-# HTTPS on your tailnet name, certificate provisioned automatically
 sudo tailscale serve --bg 7681
 ```
 
-Enabling HTTPS for the tailnet is a one-time toggle in the admin console, and
-`tailscale serve` says so if it is off. `--token` with no value generates one
-and remembers it; the startup log prints the URL with it filled in.
+That serves it at `https://<machine>.<tailnet>.ts.net` with a real certificate,
+which is also what the browser needs before it will expose the clipboard or
+offer to install the app.
 
-That serves it at `https://<machine>.<tailnet>.ts.net`, and gives you three
-things beyond privacy:
+### Firewall
 
-- **A real certificate**, so `--domain` and the whole ACME path stay unused.
-- **A secure origin**, which is what the browser requires before it will expose
-  `navigator.clipboard` or offer to [install the app](#installing-it-as-an-app).
-  Copy-on-select and paste-on-right-click start working in the terminals — over
-  plain HTTP on a bare IP they silently do not.
-- **No privileged port**, so no `setcap` and no `CAP_NET_BIND_SERVICE`.
+Tailscale does not close ports for you. Until you do, the machine still answers
+on its public address, and vibe-os hands out shells.
 
-### Firewall: tailnet only
-
-Tailscale does not close ports for you. Until you do, the machine is still
-answering on its public address, and vibe-os hands out shells.
-
-**Do not lock yourself out.** Confirm you can reach the box over the tailnet in
-a second terminal *before* denying anything, and know where your provider's
-serial or rescue console is.
+**Confirm you can reach the box over the tailnet in a second terminal before
+denying anything**, and know where your provider's rescue console is.
 
 ```bash
-sudo ufw allow in on tailscale0        # anything arriving over the tailnet
-sudo ufw allow 41641/udp               # lets Tailscale make direct connections
+sudo ufw allow in on tailscale0
+sudo ufw allow 41641/udp               # keeps Tailscale on a direct path
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw enable
 ```
 
-These rules were checked from a machine outside the tailnet, against the public
-address of a box running exactly this recipe: 22, 80, 443, 7681 and 8080 all
-time out rather than refusing, which is `default deny` dropping the packets. The
-same ports answer on the tailnet address at the same moment, so the box was up
-and it is specifically the public path that is shut.
+Verified from outside the tailnet against a box running this recipe: ports 22,
+80, 443, 7681 and 8080 all time out, while the tailnet address answers.
 
-`vibe-os doctor` checks the local rules for you, and needs root to read them:
+`sudo vibe-os doctor` checks these. It reads ufw, falling back to nftables and
+iptables, and it reads configuration rather than reachability. It cannot see
+your provider's firewall, which is a separate thing worth closing too. OVH's is
+stateless, so leave `41641/udp` open there or Tailscale relays everything.
 
-```
-✓ firewall       ufw: incoming denied by default, tailnet and 41641/udp allowed
-                 (local rules only: your provider's firewall is separate, and
-                 proving a port is shut needs a packet from outside)
-```
-
-It reads ufw, and falls back to nftables and iptables. Two things it cannot do,
-which is why that caveat travels with the ✓ rather than being left to
-inference: it reads *configuration* rather than reachability, and it cannot see
-your provider's firewall at all. For reachability, probe the public address
-from somewhere else — that is the only test that answers the question.
-
-`41641/udp` is worth understanding rather than pasting: without it Tailscale
-still works, but falls back to relaying through DERP, which is slower. It is
-not a hole in the tailnet — it is how peers find each other directly.
-
-Note there is no `allow 22` here. Once the rules are in place, SSH arrives over
-the tailnet like everything else. If you would rather keep a public SSH door
-open while you gain confidence, add `sudo ufw allow 22/tcp` and remove it later.
-
-The nftables equivalent, if you are not using ufw:
+Cloud images often ship `PasswordAuthentication yes` in
+`/etc/ssh/sshd_config.d/50-cloud-init.conf`. sshd takes the first occurrence of
+a keyword, so overriding it needs a file that sorts *earlier*:
 
 ```bash
-sudo nft add rule inet filter input iifname "tailscale0" accept
-sudo nft add rule inet filter input udp dport 41641 accept
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+  | sudo tee /etc/ssh/sshd_config.d/01-hardening.conf
+sudo sshd -t && sudo systemctl reload ssh
 ```
 
-**Your provider's firewall is a separate thing.** AWS security groups, OVH's
-Network Firewall, Hetzner firewalls, DigitalOcean cloud firewalls and the rest
-sit in front of the machine and know nothing about ufw. Close 80 and 443 there
-too, and leave only what you actually serve publicly, which with Tailscale is
-nothing.
+Confirm a fresh key-based login works before closing the session you have.
 
-OVH's is worth singling out because it is *stateless*: it filters each packet on
-its own with no idea which connection it belongs to, so a naive "allow
-established" rule does not exist and blocking inbound UDP will quietly break
-Tailscale's direct connections. If you use it, leave `41641/udp` open there as
-well as in ufw, or accept that every packet relays through DERP.
-
-Finally, belt and braces — bind vibe-os to the tailnet address so it is not
-listening on the public interface at all:
-
-```bash
-vibe-os start --port 7681 --token --host 100.x.y.z
-```
-
-`vibe-os doctor` reports on this directly, and prints your tailnet address when
-it finds one:
-
-```
-! exposure       no token and bound to every interface — Tailscale is up (100.x.y.z), but so is any public address
-                 bind to the tailnet only:  --host 100.x.y.z
-```
-
-### Do not run it as root
-
-A fresh VPS logs you in as root, and vibe-os hands out shells as whoever it runs
-as. Make an account first — everything above assumes you have:
-
-```bash
-adduser --gecos "" vibe
-usermod -aG sudo vibe
-su - vibe          # and do the rest from here
-```
-
-`install-service` refuses to write a unit that runs as root rather than letting
-you find out later, and the CA line only means anything in the home directory of
-the user who actually logs in.
-
-### Keeping it running
+### Running it as a service
 
 ```bash
 sudo vibe-os install-service --port 7681 --token hunter2
 journalctl -u vibe-os -f
 ```
 
-Run it with `sudo` **from your own account**, not as root — it takes the user
-from `SUDO_USER`, resolves that account's real home from its passwd entry, and
-writes a unit that runs as them. It forwards whatever flags you passed, so the
-service behaves exactly like the command you just tested by hand.
+Run it with `sudo` from your own account, not as root. It takes the user from
+`SUDO_USER` and writes a unit that runs as them, forwarding whatever flags you
+passed. It refuses to write a unit that runs as root.
 
-It also grants `CAP_NET_BIND_SERVICE`, which you no longer need if you took the
-Tailscale path above — harmless, but that is why it is there.
-
-### Binding port 80
-
-Binding it needs root or `CAP_NET_BIND_SERVICE`. On a fresh VPS you are usually
-root and it just works. Otherwise vibe-os falls back to port 8080 and tells you
-how to fix it:
+If you are binding port 80 rather than using Tailscale, that needs
+`CAP_NET_BIND_SERVICE`, which `install-service` grants. By hand:
 
 ```bash
-# the compiled binary
 sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
-# or, if running from a checkout, the Bun that executes it
-sudo setcap 'cap_net_bind_service=+ep' "$(readlink -f "$(which bun)")"
 ```
 
-or let systemd handle it, which grants the capability without setcap at all:
-
-```bash
-sudo vibe-os install-service --user "$USER"
-journalctl -u vibe-os -f
-```
-
-Or sidestep it: run on a high port with
-[`tailscale serve`](#behind-tailscale) in front. Nothing privileged is involved,
-and you get HTTPS as well.
+Otherwise vibe-os falls back to port 8080 and says so.
 
 ### Giving the box a GitHub identity
 
-Workspaces are git worktrees on their own branches, and vibe-os deliberately
-stops there — pushing, PRs and merging happen in the terminal. So a box with no
-GitHub credentials is a box where the whole workflow dead-ends at the first
-`git push`. Do this as the login user, not root: the key has to live in the home
-directory that windows actually log into.
+Workspaces are branches, and pushing happens in the terminal, so a box with no
+GitHub credentials dead-ends at the first `git push`. Do this as the login user,
+not root:
 
 ```bash
 ssh-keygen -t ed25519 -C "vibe-os@$(hostname)" -f ~/.ssh/id_ed25519 -N ""
 cat ~/.ssh/id_ed25519.pub
 ```
 
-No passphrase, deliberately. An agent-less passphrase prompt appears inside
-whichever window happens to run `git push`, which is not somewhere an agent can
-answer it. The security boundary here is who can reach the box, not the key file.
+No passphrase: an agent-less prompt would appear inside whichever window ran
+`git push`, where nothing can answer it.
 
-Add that public key to GitHub **twice**, at
-[github.com/settings/keys](https://github.com/settings/keys):
-
-- as an **Authentication key**, which is what makes clone and push work
-- as a **Signing key**, if you want commits made here to show as *Verified*
-
-Signing is worth the extra minute when an agent is doing the committing, because
-it is the only thing that distinguishes a commit that really came from your
-machine:
+Add that key to [github.com/settings/keys](https://github.com/settings/keys)
+twice, as an **Authentication key** and as a **Signing key** if you want commits
+made here to show as verified:
 
 ```bash
 git config --global gpg.format ssh
 git config --global user.signingkey ~/.ssh/id_ed25519.pub
 git config --global commit.gpgsign true
 git config --global user.name  "Your Name"
-git config --global user.email "you@example.com"   # must match a verified GitHub email
+git config --global user.email "you@example.com"   # a verified GitHub email
 ```
 
-That key covers the git protocol — clone, fetch, pull, push. It does **not**
-cover the GitHub API, which is a separate authentication system: pull requests,
-issues and reviews are HTTPS calls that take an OAuth token, and no SSH key can
-sign one. So if you want to open or merge a PR from a window — or want an agent
-in one to do it — the CLI needs its own login:
+The key covers git. It does not cover the GitHub API, so PRs and issues need
+`gh auth login` (choose SSH, which keeps the token confined to API calls).
 
-```bash
-sudo apt install -y gh
-gh auth login          # choose SSH, so git keeps using the key above
-```
+A push-capable key here means anyone who gets a shell can push to your
+repositories. Use a per-repository deploy key instead if that matters, and
+accept that `gh` will not work.
 
-Skip it if your habit is to push from the box and open the PR in a browser
-somewhere else; nothing else degrades. Choosing SSH at the prompt is what keeps
-the token confined to API calls rather than taking over git as well.
-
-Check both halves before trusting them:
-
-```bash
-ssh -T git@github.com     # "Hi <you>! You've successfully authenticated"
-gh auth status
-```
-
-One thing to be clear-eyed about: a push-capable key on this box means anyone
-who gets a shell here can push to your repositories, and vibe-os hands out
-shells. That is an argument for the token gate and the firewall rules above, and
-for keeping this box as trusted as the laptop you would otherwise be typing on.
-If you would rather it could not push everywhere, use a per-repository deploy
-key instead and accept that `gh` will not work.
-
-### Updating a box that is already running
+### Updating a running box
 
 ```bash
 bun run build && bun scripts/compile.ts linux-x64
@@ -937,88 +467,50 @@ ssh you@host 'sudo systemctl stop vibe-os \
   && sudo systemctl start vibe-os'
 ```
 
-Nothing is lost by that restart: workspaces, profiles and window layout are in
-SQLite, and the terminals are dtach sessions the server does not own. Reload the
-browser and every window reattaches to whatever was running.
+Nothing is lost by that restart. Two things it does not pick up:
 
-Two things that restart does *not* pick up, both worth knowing before you
-conclude a change did not work:
+- **A changed harness command.** An existing session keeps running whatever it
+  was started with. Close the window and open it again.
+- **Changed service flags.** Those live in the unit, so re-run
+  `install-service`.
 
-- **A changed harness command.** A window attaches to its existing socket if one
-  is live, and the command only runs when the session is created, so an existing
-  session keeps running whatever it was started with. Close the window and open
-  it again — reloading is not enough.
-- **Changed service flags.** The port, bind address and token live in the unit,
-  so re-run `sudo vibe-os install-service …` with the new ones.
+A reboot is different: dtach sessions do not survive one.
 
 ---
 
 ## Security
 
-### The access model
-
 **vibe-os hands out shell access to the machine it runs on.** Every window is
 the same unix user, there is no per-user isolation, and anyone who can reach the
 port and pass the gate can run anything that user can. Treat access to vibe-os
-as equivalent to SSH access to the box, because that is what it is.
+as equivalent to SSH access to the box.
 
-That framing decides everything else here. The gate is one secret in front of a
-shell; a closed port is not reachable at all. The recommended shape is all
-three: [behind Tailscale](#behind-tailscale), [firewalled to the tailnet
-only](#firewall-tailnet-only), bound to the tailnet address, *and* with the
-token on.
+The recommended shape is all of it: behind Tailscale, firewalled to the tailnet,
+bound to the tailnet address, and with the token on.
 
-### The token gate
-
-**The gate is off by default.** Anyone who can reach the port gets a shell as
-the user running vibe-os. That is a deliberate choice for private networks
-(Tailscale, a VPC, an SSH tunnel) and startup prints a warning saying so.
-
-To lock it:
+**The gate is off by default**, which suits a private network, and startup warns
+you about it.
 
 ```bash
 vibe-os --token          # generates one, remembers it, prints the URL
 vibe-os --token hunter2  # or pick your own
 ```
 
-The token is exchanged for an httpOnly session cookie on first visit, and gates
-everything: the app, the API, the certificate signer, and the WebSocket bridge.
-Cross-origin WebSocket upgrades are always rejected.
+It gates the app, the API, the certificate signer, the wallpaper upload and the
+WebSocket bridge. Cross-origin WebSocket upgrades are always rejected.
 
-Nothing about the gate protects against someone who already has the token, and
-there is no per-user isolation — every window is the same unix user. Treat access
-to vibe-os as equivalent to SSH access to the box, because it is.
+Open the URL with `?token=…` once and the server sets an `HttpOnly` cookie, then
+redirects without the token so it does not linger in history. Scripts can send
+`Authorization: Bearer <token>`. Comparison is constant-time.
 
-Which is the argument for not relying on the gate alone. A token is one secret
-in front of a shell; a closed port is not reachable at all. On a VPS, put it
-behind Tailscale, [close everything else at the firewall](#firewall-tailnet-only),
-and bind to the tailnet address — then keep the token as well. `vibe-os doctor`
-reports on exactly this and will tell you when you have a shell on a public
-interface with no gate in front of it.
+The cookie value is the token rather than a derived session id, so there is no
+per-browser session to revoke. Rotating means changing it on the server.
 
-### TLS and secure origins
-
-Plain HTTP on port 80 works out of the box on a bare IP. Pass `--domain` and it
-provisions a Let's Encrypt certificate over HTTP-01 (it already owns port 80),
-serves HTTPS, and redirects. Certificates are renewed 30 days before expiry.
-
-On plain HTTP the browser clipboard API is unavailable — the origin is not a
-secure context — so copy-on-select and paste-on-right-click stop working, and
-the browser will not offer to [install the app](#installing-it-as-an-app). A
-profile's prompt is unaffected either way: its **Send** button writes into the
-session directly and never touches the clipboard.
-
-Copying *inside* a session — from Claude, from vim — reaches the browser
-clipboard as well. Programs ask for that with OSC 52, which arrives here
-untouched because nothing sits between the program and the terminal; the browser
-side then has to handle it, which xterm.js does not do on its own. Clipboard
-*reads* over OSC 52 are refused — anything running in a session could otherwise
-ask what you last copied.
-
-There are two ways to get a secure origin, and the second is easier than the
-first: `--domain` and Let's Encrypt, or [`tailscale serve`](#behind-tailscale),
-which provisions a certificate for your `.ts.net` name with no domain to own, no
-ACME, and no port 80.
+`--domain` provisions a Let's Encrypt certificate over HTTP-01 and serves HTTPS,
+renewing 30 days before expiry. On plain HTTP the browser clipboard API is
+unavailable, so copy-on-select and paste stop working and the app cannot be
+installed. OSC 52 clipboard *reads* are always refused, since anything running
+in a session could otherwise ask what you last copied.
 
 ---
 
@@ -1052,11 +544,13 @@ ACME, and no port 80.
 --cert-ttl <secs>   certificate lifetime (default 43200)
 
 --theme-color <hex> window chrome colour for the installed app (default #1c2128)
---workspace <dir>   where worktrees are created (default ~/workspace);
-                    projects are discovered across the host, not just here
+--workspace <dir>   where worktrees are created (default ~/workspace)
 --state-dir <dir>   CA, TLS material and generated MCP configs
                     (default ~/.vibe-os)
 ```
+
+Every option except `--tls-port` and `--cert-ttl` also reads a `VIBE_OS_`
+environment variable, which is how the container is configured.
 
 ---
 
@@ -1070,113 +564,34 @@ bun run dev:server   # the server with --hot, on :7681
 bun run compile      # standalone binaries into dist/bin
 
 bun run check        # lint + typecheck + tests, the same three CI runs
-bun run lint         # Biome: recommended rules, and formatting
-bun run lint:fix     # apply the safe fixes
-bun run format       # formatting only
-bun test             # bun's runner; specs sit in test/ and beside the code
+bun test             # specs in test/ and beside the code
 ```
 
-Formatting and linting are [Biome](https://biomejs.dev) with the recommended
-rule set and Prettier's defaults — double quotes, 80 columns, two-space indent.
-Nothing is switched off in `biome.json`; the handful of exceptions are
-`biome-ignore` comments that say why in place. GitHub Actions runs `lint`,
-`typecheck` and `test` on every push and pull request.
-
-The server is TypeScript run directly by Bun — there is no build step for it.
-`bun run compile` bundles it with every web asset into one executable per
-platform.
-
-`ssh.wasm` (~19 MB) comes prebuilt from
-[c2FmZQ/sshterm](https://github.com/c2FmZQ/sshterm) releases rather than being
-compiled here, so no Go toolchain is needed on the target machine. The build
-precompresses it to about 4.5 MB of brotli, which is what visitors actually
-download.
-
-The release is pinned in `scripts/fetch-wasm.mjs` and the tarball's SHA-256 is
-verified before anything is extracted — this file becomes the SSH client that
-generates and holds every private key in the browser, so it is not something to
-track `latest` on. To move it, set `SSHTERM_VERSION` to the new tag, run the
-script, and copy the checksum it prints into `PINNED`:
-
-```bash
-SSHTERM_VERSION=v0.9.0 bun run fetch-wasm    # warns, and prints the sha256
-```
-
-The app icons in `public/` are generated from `public/icon.svg`, which is the
-same mark as the inline favicon in `index.html`. To regenerate them after an
-edit:
-
-```bash
-rsvg-convert -w 192 -h 192 public/icon.svg -o public/icon-192.png
-rsvg-convert -w 512 -h 512 public/icon.svg -o public/icon-512.png
-rsvg-convert -w 180 -h 180 public/icon.svg -o public/apple-touch-icon.png
-rsvg-convert -w 512 -h 512 public/icon-maskable.svg -o public/icon-maskable-512.png
-```
-
-### Stack
+Biome with the recommended rule set and Prettier's defaults. Nothing is switched
+off in `biome.json`. The server is TypeScript run directly by Bun, with no build
+step of its own.
 
 | | |
 | --- | --- |
-| server | Bun, TypeScript run directly, `Bun.serve` — no framework |
+| server | Bun, TypeScript run directly, `Bun.serve`, no framework |
 | storage | SQLite (`bun:sqlite`) via drizzle-orm, idempotent DDL at startup |
 | browser | React 19, Vite, xterm.js v6, SWR for polling |
-| ssh | `ssh.wasm` in the tab; `ssh-keygen` and `ssh-keyscan` on the host |
-| shared | `shared/` — wire types, the grid, and the argv tokeniser, imported by both halves |
-| checks | Biome, `tsc`, `bun test`, run together by `bun run check` |
+| ssh | `ssh.wasm` in the tab, `ssh-keygen` and `ssh-keyscan` on the host |
+| shared | `shared/`: wire types, the grid, the argv tokeniser |
 
-Two runtime dependencies: `drizzle-orm` and `acme-client`. Everything else is a
-devDependency and ends up bundled.
+`ssh.wasm` comes prebuilt from
+[c2FmZQ/sshterm](https://github.com/c2FmZQ/sshterm) releases, pinned by tag with
+its SHA-256 verified before extraction. To move it, set `SSHTERM_VERSION`, run
+`bun run fetch-wasm`, and copy the checksum it prints into `PINNED`.
 
-### Things that will bite you
+App icons are generated from `public/icon.svg`:
 
-**One Go runtime serves the whole page.** Every window calls `start()` on the
-same WASM instance, and an unhandled Go panic in *any* window kills the runtime
-for *all* of them. Two consequences: teardown order in `SshTerminal.tsx` is
-load-bearing (close the session and await `done` *before* disposing the
-Terminal — React StrictMode's double-mount hits this immediately, and that await
-is raced against a timeout because a panicked runtime never settles `done` at
-all), and
-`onRuntimeDead` exists so the app can rebuild every window instead of leaving
-you with terminals that look fine but accept no input.
-
-**`flock` holds its lock on a file descriptor, and descriptors are inherited.**
-The session command serialises its probe-then-create with `flock -o`. Without
-`-o`, the daemonised `dtach` inherits the descriptor and holds the lock for the
-life of the session, and every later login blocks forever — presenting as a
-terminal that hangs just after verifying the host key, which points nowhere near
-the cause.
-
-**Host key algorithm order is not the obvious one.** golang.org/x/crypto/ssh's
-`supportedHostKeyAlgos` puts ECDSA *ahead* of Ed25519 — the opposite of OpenSSH.
-vibe-os discovers the host key with `ssh-keyscan` in that order, because pinning
-a key the server holds but does not present makes every window report the host key
-as **changed**, which reads like an attack rather than a misconfiguration.
-
-**dtach is detected on the machine vibe-os runs on**, which is the SSH target by
-default. If you point `--ssh-host` somewhere else, pass `--sessions` explicitly.
-
-**Upstream prints a banner into every session** from `internal/start.go`, with
-no option to disable it. It is filtered in `SshTerminal.tsx` by wrapping the
-terminal object handed to Go, rather than by forking the Go source — building
-ssh.wasm ourselves would cost the "prebuilt from upstream releases, no Go
-toolchain on the VPS" property. The filter switches itself off at the first line
-that is not part of the banner, so it cannot swallow real output.
-
-**xterm's `allowTransparency` is not enough to see through a terminal.** It
-covers the cell layer; xterm 6 also paints an opaque background on the element
-it mounts into and on its scrollable wrapper. Miss those and the terminal
-renders perfectly while punching a solid black rectangle through the glass — the
-effect just silently disappears. styles.css clears them explicitly.
-
-**BunFile.stat() returns undefined for embedded files** rather than a rejected
-promise, so `.catch()` on it throws. Use `.size`, which works in both modes.
-Embedded assets have no mtime either, so their ETag version comes from the
-generated `BUILD_ID`.
-
-**A compiled Bun binary keeps the same argv shape as `bun run`** —
-`[runtime, entry, ...args]`, where the entry reads as `/$bunfs/root/<name>`.
-Assuming a standalone executable drops the entry slot turns that path into the
-subcommand.
+```bash
+rsvg-convert -w 192 -h 192 public/icon-app.svg -o public/icon-192.png
+rsvg-convert -w 512 -h 512 public/icon-app.svg -o public/icon-512.png
+rsvg-convert -w 180 -h 180 public/icon-app.svg -o public/apple-touch-icon.png
+rsvg-convert -w 512 -h 512 public/icon-maskable.svg -o public/icon-maskable-512.png
+```
 
 ---
 
@@ -1185,54 +600,46 @@ subcommand.
 Usable and in daily use, but young. No release binaries are published yet, so
 build one or run the container.
 
-**Verified on real hardware.** Everything in
-[Deploying on a VPS](#deploying-on-a-vps) has been walked end to end on a fresh
-OVHcloud VPS running Ubuntu 26.04, behind Tailscale, serving over HTTPS with a
-certificate from `tailscale serve`. Two problems surfaced only there, both PATH:
-a forced command does not get a login shell, and neither does a systemd service.
-Both are fixed. The [firewall rules](#firewall-tailnet-only) have been checked
-from a machine outside the tailnet — the public address drops packets on 22, 80,
-443, 7681 and 8080, while the tailnet address answers.
+Everything in [Deploying on a VPS](#deploying-on-a-vps) has been walked end to
+end on a fresh OVHcloud VPS on Ubuntu 26.04, behind Tailscale, serving HTTPS.
+The firewall rules were checked from outside the tailnet.
 
-Known gaps, in rough order of how likely they are to matter:
+Known gaps:
 
-- **No authentication by default.** The token gate exists and works; it is off
-  until you pass `--token`. There is no multi-user story at all.
-- **ACME has not been exercised in production.** `--domain` and the Let's
-  Encrypt path have never issued a real certificate, because the
-  [Tailscale path](#behind-tailscale) makes them unnecessary.
-- **IPv6 reachability is unverified.** The IPv4 firewall rules were tested from
-  outside the tailnet; the v6 rules mirror them and the default input policy is
-  `DROP`, but that was read from the box rather than probed from a network with
-  IPv6.
-- **No keyboard shortcuts.** The desktop is click-only, deliberately — see
-  [The desktop](#the-desktop). Something that does not steal keys from the
-  terminal is worth having; it has not been designed yet.
-- **MCP servers can be picked but not added.** The editor lists what the box
-  has and hands a profile the ones you choose; adding, editing and removing
-  them is still `claude mcp` on the box.
-- **No branch operations.** Workspaces create a worktree and a branch; pushing,
-  PRs and merging happen in the terminal.
-- **Deleting a workspace keeps its branch**, deliberately, so work is
-  recoverable — nothing prunes those branches for you.
+- **No authentication by default.** The token gate is off until you pass
+  `--token`, and there is no multi-user story at all.
+- **ACME has never issued a real certificate.** `--domain` works in tests, but
+  the Tailscale path makes it unnecessary, so it stays unproven.
+- **IPv6 reachability is unverified.** The v4 firewall rules were tested from
+  outside; the v6 rules mirror them and default to `DROP`, but that was read
+  from the box rather than probed.
+- **No keyboard shortcuts.** Deliberate, see [the desktop](#the-desktop), but
+  something that does not steal keys from the terminal is worth having.
+- **MCP servers can be picked but not added.** Adding them is `claude mcp` on
+  the box.
+- **No branch operations.** Pushing, PRs and merging happen in the terminal.
+- **Deleting a workspace keeps its branch**, so work is recoverable. Nothing
+  prunes them for you.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. Before opening one:
+Issues and pull requests welcome. Before opening one:
 
 ```bash
-bun run check     # lint, typecheck and tests — the same three CI runs
+bun run check     # lint, typecheck and tests, the same three CI runs
 ```
 
-CI runs those on every push and pull request, so a green local `check` is a
-green PR. Tests live in `test/` for the server and beside the code for the
-browser; anything with logic worth trusting should arrive with some.
+Tests live in `test/` for the server and beside the code for the browser.
+Anything with logic worth trusting should arrive with some.
 
-The prose in this repository — comments included — explains *why* rather than
-*what*, because the what is already in the code. Changes that undo a documented
-decision are welcome; please update the reasoning along with the code.
+[docs/gotchas.md](docs/gotchas.md) lists the traps in this codebase that cost
+someone an afternoon. Worth a skim before changing the terminal or the session
+plumbing.
+
+Comments in this repository explain why rather than what. If you undo a
+documented decision, update the reasoning with it.
 
 ---
 
