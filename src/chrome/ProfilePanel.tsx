@@ -5,6 +5,7 @@ import {
   TOGGLES,
   buildArgs,
   detokenize,
+  effortLabel,
   modeLabel,
   parseSettings,
   type ClaudeSettings,
@@ -276,6 +277,32 @@ export function ProfilePanel({
                   1M context
                 </label>
               </div>
+            </div>
+
+            <div className="field">
+              <label htmlFor="profile-effort">Thinking</label>
+              <select
+                id="profile-effort"
+                className="text-input select"
+                value={settings.effort}
+                onChange={(event) => patch({ effort: event.target.value })}
+              >
+                <option value="">Default — whatever the harness picks</option>
+                {(harnessInfo?.effortLevels ?? []).map((level) => (
+                  <option key={level} value={level}>
+                    {effortLabel(level)}
+                  </option>
+                ))}
+                {/* Same round-trip guarantee the model dropdown makes: a level
+                    this build has not heard of is offered back, not reset. */}
+                {settings.effort && !(harnessInfo?.effortLevels ?? []).includes(settings.effort) ? (
+                  <option value={settings.effort}>{settings.effort}</option>
+                ) : null}
+              </select>
+              <p className="field-hint">
+                How long the session reasons before it acts. Higher is slower and costs more tokens;
+                it is worth it for work where being wrong is expensive.
+              </p>
             </div>
 
             <div className="field">

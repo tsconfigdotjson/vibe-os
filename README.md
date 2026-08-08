@@ -584,17 +584,26 @@ argument containing a semicolon, not two commands. The browser never sends a
 command at all: the window row says which profile it was opened as, and the
 server resolves the rest, exactly as it already does for the worktree path.
 
-The editor does not ask you to know any of that. A model dropdown, a permission
-dropdown, and a few switches; the flags they produce are folded behind
-**Advanced**, along with a field for anything else and a preview of the exact
-command that will run.
+The editor does not ask you to know any of that. A model dropdown, a thinking
+dropdown, a permission dropdown, and a few switches; the flags they produce are
+folded behind **Advanced**, along with a field for anything else and a preview
+of the exact command that will run.
+
+**Thinking** is `--effort`, from low up to max. It is how long the session
+reasons before it acts, so it costs latency and tokens in exchange for being
+right more often — worth spending on a role that reviews or debugs, wasted on
+one that runs a build. Leaving it on Default passes no flag at all and lets the
+harness choose, which is the right answer until you have a reason otherwise.
 
 The model list is read off the Claude binary installed on the server, so it
 follows Claude's releases rather than this project's. Aliases come first and
 full versions after, because an alias is almost always what you want: a role
 written today should get the best Opus, not the one that was current the day it
-was written. Permission modes come from the CLI's own help output, so a mode
-added upstream appears without a change here.
+was written. Permission modes and effort levels come from the CLI's own help
+output, so a mode or a level added upstream appears without a change here — the
+one difference is that effort is a scale rather than a set, so a list this
+project cannot parse falls back to the known ladder whole rather than being
+merged into something out of order.
 
 Two switches are worth knowing the shape of:
 

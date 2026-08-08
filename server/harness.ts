@@ -28,7 +28,19 @@ export interface HarnessInfo {
   models: string[];
   /** Values `--permission-mode` accepts. */
   permissionModes: string[];
+  /** Values `--effort` accepts, weakest first — the order is the scale. */
+  effortLevels: string[];
 }
+
+/**
+ * The effort ladder as of writing, used only when the binary cannot be read.
+ *
+ * Unlike the model aliases, this is not merged with what was discovered. Effort
+ * is ordinal — the list *is* the scale, low to max — so a union of two sources
+ * would put a newly-added level in the wrong place and quietly mislabel how
+ * hard a role thinks. Either the binary's order or this one, never a blend.
+ */
+const KNOWN_EFFORT = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 const EMPTY: HarnessInfo = {
   available: false,
@@ -36,6 +48,7 @@ const EMPTY: HarnessInfo = {
   aliases: [],
   models: [],
   permissionModes: [],
+  effortLevels: KNOWN_EFFORT,
 };
 
 /**
@@ -111,17 +124,48 @@ async function embeddedModels(binary: string): Promise<string[]> {
   }
 }
 
-/** The choices `--permission-mode` lists in its own help output. */
-async function permissionModes(binary: string): Promise<string[]> {
+/**
+ * `claude --help`, or empty if it cannot be run.
+ *
+ * Read once and handed to every parser below. Each `claude` invocation costs a
+ * couple of seconds of its own startup, and the help text answers more than one
+ * question — asking twice would double the slowest part of discovery to learn
+ * nothing new.
+ */
+async function helpText(binary: string): Promise<string> {
   try {
     const { stdout } = await run(binary, ['--help'], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
-    // Help text wraps, so the list is matched across newlines and whitespace.
-    const section = /--permission-mode[\s\S]{0,400}?\(choices:([\s\S]{0,300}?)\)/.exec(stdout);
-    if (!section) return [];
-    return [...section[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    return stdout;
   } catch {
-    return [];
+    return '';
   }
+}
+
+/** The choices `--permission-mode` lists in its own help output. */
+function permissionModes(help: string): string[] {
+  // Help text wraps, so the list is matched across newlines and whitespace.
+  const section = /--permission-mode[\s\S]{0,400}?\(choices:([\s\S]{0,300}?)\)/.exec(help);
+  if (!section) return [];
+  return [...section[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+}
+
+/**
+ * The levels `--effort` lists in its own help output.
+ *
+ * `--permission-mode` prints a `(choices: "a", "b")` block this can anchor on;
+ * `--effort` prints a bare `(low, medium, high, xhigh, max)`, so the only
+ * anchor available is "the first parenthesis after the flag". That is loose
+ * enough to catch a sentence in some future release, which is what the shape
+ * check is for: every token has to look like a level, or the whole match is
+ * discarded and the caller falls back to the known ladder. Half a list read out
+ * of a paragraph would be worse than not reading one at all.
+ */
+function effortLevels(help: string): string[] {
+  const section = /--effort[\s\S]{0,400}?\(([^)]{0,200})\)/.exec(help);
+  if (!section) return [];
+  const levels = section[1].split(',').map((s) => s.trim());
+  if (levels.length < 2 || !levels.every((l) => /^[a-z][a-z0-9-]*$/.test(l))) return [];
+  return levels;
 }
 
 let cached: Promise<HarnessInfo> | null = null;
@@ -143,21 +187,34 @@ export function discoverClaude(): Promise<HarnessInfo> {
 
     // Concurrently, because each `claude` invocation costs a couple of seconds
     // of its own startup and there is no reason to pay for them in series.
-    const [version, models, modes] = await Promise.all([
+    const [version, models, help] = await Promise.all([
       run(binary, ['--version'], { timeout: 15_000 })
         .then(({ stdout }) => stdout.trim().split(/\s+/)[0] ?? null)
         .catch(() => null),
       embeddedModels(binary),
-      permissionModes(binary),
+      helpText(binary),
     ]);
+
+    const modes = permissionModes(help);
+    const effort = effortLevels(help);
 
     // A tier that shows up in the binary but not in the list above still gets
     // an alias, because that is how Claude names them.
     const tiers = new Set(models.map((m) => m.split('-')[1]).filter(Boolean));
     const aliases = [...new Set([...KNOWN_ALIASES, ...tiers])];
 
-    log.debug(`claude ${version ?? '?'}: ${models.length} models, ${modes.length} permission modes`);
-    return { available: true, version, aliases, models, permissionModes: modes };
+    log.debug(
+      `claude ${version ?? '?'}: ${models.length} models, ${modes.length} permission modes, ` +
+        `${effort.length > 0 ? effort.join('/') : 'no'} effort levels`,
+    );
+    return {
+      available: true,
+      version,
+      aliases,
+      models,
+      permissionModes: modes,
+      effortLevels: effort.length > 0 ? effort : KNOWN_EFFORT,
+    };
   })();
   return cached;
 }
