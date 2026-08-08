@@ -1,6 +1,6 @@
 import os from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import Ss from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
 import type { Config } from './config.ts';
 import type { SshCa } from './ssh-ca.ts';
 import { fingerprint } from './ssh-ca.ts';
@@ -20,12 +20,10 @@ import { listProfiles, getProfile, createProfile, updateProfile, deleteProfile, 
 import { discoverClaude } from './harness.ts';
 import { discoverMcp, syncMcpMirrors, type McpScan, type McpServer } from './mcp.ts';
 import { windowCommand } from './session.ts';
-import { attachInfo, setHandoff, reapStaleHandoffs, publicOrigin, publicHost } from './attach.ts';
+import { attachInfo, setHandoff, reapStaleHandoffs, publicOrigin, publicHost, killSession } from './attach.ts';
 import { listWindows, getWindow, createWindow, updateWindow, deleteWindow, sessionNameFor } from './windows.ts';
 import { log } from './log.ts';
 import pkg from '../package.json' with { type: 'json' };
-
-const run = promisify(execFile);
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_PUBKEY_BYTES = 16 * 1024;
@@ -35,7 +33,8 @@ export interface ClientConfig {
   hostname: string;
   user: string;
   workspaceRoot: string;
-  tmux: boolean;
+  /** Windows are dtach-backed and survive a reload. */
+  sessions: boolean;
   authRequired: boolean;
   /** WebSocket endpoint, relative to the page so it follows http/https. */
   endpoint: { name: string; url: string };
@@ -52,10 +51,6 @@ function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
 }
 
-/** argv array, never a shell. */
-function killSession(name: string): Promise<unknown> {
-  return run('tmux', ['kill-session', '-t', name], { timeout: 10_000 });
-}
 
 /**
  * Where to look for MCP servers, for one project or for all of them.
@@ -118,7 +113,7 @@ export function createApi(deps: ApiDeps) {
         hostname: os.hostname(),
         user: config.user,
         workspaceRoot: config.workspace,
-        tmux: config.tmux,
+        sessions: config.sessions,
         authRequired: config.token !== null,
         endpoint: { name: 'local', url: './websocket' },
         hostKey: deps.hostKey,
@@ -226,11 +221,11 @@ export function createApi(deps: ApiDeps) {
       if (!ID.test(id)) return json({ error: 'invalid workspace id' }, 400);
 
       if (req.method === 'DELETE') {
-        // Every window here has a live tmux session; removing the worktree
+        // Every window here has a live session; removing the worktree
         // without ending them leaves shells sitting in a deleted directory.
         for (const win of listWindows(db, id)) {
           const target = sessionNameFor(db, win.id);
-          if (target && config.tmux) await killSession(target.session).catch(() => {});
+          if (target && config.sessions) await killSession(config, target.session).catch(() => {});
         }
         try {
           await removeWorkspace(db, id);
@@ -287,21 +282,21 @@ export function createApi(deps: ApiDeps) {
     if (attachMatch && req.method === 'GET') {
       const id = decodeURIComponent(attachMatch[1]);
       if (!ID.test(id)) return json({ error: 'invalid window id' }, 400);
-      if (!config.tmux) return json({ error: 'this server runs plain login shells (--no-tmux)' }, 409);
+      if (!config.sessions) return json({ error: 'this server runs plain login shells (--no-sessions)' }, 409);
       const info = attachInfo(db, config, id, publicOrigin(req, url), publicHost(req, url));
       return info ? json(info) : json({ error: 'unknown window' }, 404);
     }
 
     // Hands the window's terminal to an ssh client, or takes it back — which
-    // detaches whoever is attached, so there is never a second tmux client.
+    // detaches whoever is attached, so there is never a second client.
     const handoffMatch = /^\/api\/windows\/([^/]+)\/handoff$/.exec(p);
     if (handoffMatch && req.method === 'POST') {
       const id = decodeURIComponent(handoffMatch[1]);
       if (!ID.test(id)) return json({ error: 'invalid window id' }, 400);
       const body = (await req.json().catch(() => ({}))) as { mode?: unknown };
       if (body.mode !== 'ssh' && body.mode !== null) return json({ error: 'mode must be "ssh" or null' }, 400);
-      if (body.mode === 'ssh' && !config.tmux) {
-        return json({ error: 'this server runs plain login shells (--no-tmux)' }, 409);
+      if (body.mode === 'ssh' && !config.sessions) {
+        return json({ error: 'this server runs plain login shells (--no-sessions)' }, 409);
       }
       const ok = await setHandoff(db, config, id, body.mode);
       if (!ok) return json({ error: 'unknown window' }, 404);
@@ -324,9 +319,9 @@ export function createApi(deps: ApiDeps) {
         // goes too. Window indices are reused and `new-session -A` attaches, so
         // leaving it alive would silently resurrect it in the next window.
         const target = sessionNameFor(db, id);
-        if (target && config.tmux) {
-          await killSession(target.session)
-            .then(() => log.info(`ended tmux session ${target.session}`))
+        if (target && config.sessions) {
+          await killSession(config, target.session)
+            .then(() => log.info(`ended session ${target.session}`))
             .catch(() => {});
         }
         return deleteWindow(db, id) ? json({ ok: true }) : json({ error: 'unknown window' }, 404);
@@ -404,6 +399,44 @@ export function createApi(deps: ApiDeps) {
         }
       }
       return json({ error: 'method not allowed' }, 405);
+    }
+
+    /*
+     * ── diagnostics ──────────────────────────────────────────────────────────
+     *
+     * Takes the raw bytes a browser terminal received and writes them where
+     * they can be read over ssh, so a corrupted pane can be replayed offline
+     * against `capture-pane` until the two disagree on one escape sequence.
+     *
+     * This exists because that stream cannot be captured any other way. It only
+     * exists inside the page — after SSH has decrypted it and before xterm
+     * parses it — and a browser has no route to disk. Reading it back out of
+     * devtools does not work either: the console truncates, and a megabyte of
+     * escape sequences is not something to move by hand.
+     *
+     * Written by the page only when it was opened with `?debugterm`, so nothing
+     * is recorded unless somebody is deliberately debugging. The body is
+     * verbatim terminal output — the same bytes the session already sent to a client,
+     * carrying whatever was on screen — so it is capped, kept inside the state
+     * directory with the rest of vibe-os's private files, and worth deleting
+     * when an investigation ends.
+     */
+    if (p === '/api/debug/capture' && req.method === 'POST') {
+      const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
+      if (Number(req.headers.get('content-length') ?? 0) > MAX_CAPTURE_BYTES) {
+        return json({ error: 'capture too large' }, 413);
+      }
+      const bytes = new Uint8Array(await req.arrayBuffer());
+      if (bytes.byteLength > MAX_CAPTURE_BYTES) return json({ error: 'capture too large' }, 413);
+
+      const label = (url.searchParams.get('label') ?? 'capture').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+      const dir = Ss.join(config.stateDir, 'debug');
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const file = Ss.join(dir, `${label || 'capture'}-${bytes.byteLength}.bin`);
+      await writeFile(file, bytes, { mode: 0o600 });
+
+      log.info(`debug capture: ${bytes.byteLength} bytes → ${file}`);
+      return json({ ok: true, bytes: bytes.byteLength, file }, 201);
     }
 
     // ── wallpapers ───────────────────────────────────────────────────────────

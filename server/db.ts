@@ -30,7 +30,7 @@ export const workspaces = sqliteTable(
   {
     id: text('id').primaryKey(),
     projectId: text('project_id').notNull(),
-    /** Three words, kebab-case. Doubles as the branch and the tmux prefix. */
+    /** Three words, kebab-case. Doubles as the branch and the dtach prefix. */
     name: text('name').notNull(),
     branch: text('branch').notNull(),
     path: text('path').notNull(),
@@ -74,7 +74,7 @@ export const windows = sqliteTable(
   {
     id: text('id').primaryKey(),
     workspaceId: text('workspace_id').notNull(),
-    /** Per-workspace counter; forms the tmux session name with the workspace. */
+    /** Per-workspace counter; forms the session name with the workspace. */
     idx: integer('idx').notNull(),
     col: integer('col').notNull(),
     row: integer('row').notNull(),

@@ -208,7 +208,7 @@ function Desktop() {
    *
    * A role window is called by its role everywhere it appears — the title bar,
    * the dock — because that is the name you went looking for. Plain terminals
-   * keep the workspace-and-index name, which is also their tmux session.
+   * keep the workspace-and-index name, which is also their session.
    */
   const labels = useMemo(() => {
     const map: Record<string, string> = {};

@@ -273,7 +273,7 @@ export function useWindowRows(workspaceId: string | null) {
      * the trap: gate the poll on `handoff === 'ssh'` alone and a desktop only
      * ever polls once it has already found out, so a second tab or another
      * machine never learns at all. It keeps its terminal mounted, and then
-     * there are two clients on one tmux session — the size fight the whole
+     * there are two clients on one session — the size fight the whole
      * handoff exists to prevent. The baseline poll is what closes that, and
      * focus revalidation is what makes it immediate in the case that actually
      * happens: coming back to a tab you left.
@@ -328,7 +328,7 @@ export const windowApi = {
   attachInfo: (id: string) => fetcher<AttachInfo>(`/api/windows/${id}/attach`),
   /**
    * Hands the terminal to an ssh client, or takes it back — which detaches
-   * whoever is attached, so the desktop never becomes a second tmux client.
+   * whoever is attached, so the desktop never becomes a second client.
    */
   handoff: (id: string, mode: 'ssh' | null) => send<WindowRow>(`/api/windows/${id}/handoff`, 'POST', { mode }),
 };

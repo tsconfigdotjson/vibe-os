@@ -246,7 +246,7 @@ export function updateProfile(db: Db, id: string, input: ProfileInput): Profile 
 /**
  * Forgets a profile, leaving its windows running.
  *
- * Those windows are live tmux sessions with real work in them. Deleting the
+ * Those windows are live sessions with real work in them. Deleting the
  * definition of a role should not kill the session doing it — the window simply
  * becomes an ordinary terminal.
  */

@@ -13,7 +13,7 @@ all over HTTP from anything with a browser.
 > or run the container.
 
 Open the desktop and you get a project picker, a sidebar of workspaces, and
-windows you can drag around a snap grid over a wallpaper. Every window is a tmux
+windows you can drag around a snap grid over a wallpaper. Every window is a dtach
 session in its workspace's worktree, so closing the tab and coming back tomorrow
 finds whatever was running still running.
 
@@ -37,12 +37,12 @@ docker compose up --build
 open http://localhost:8080
 ```
 
-The container is a blank Debian box with sshd, tmux and git — the same shape as
+The container is a blank Debian box with sshd, dtach and git — the same shape as
 a fresh VPS, so it exercises the real thing: vibe-os generates its CA, writes
 the `cert-authority` line, discovers the host key, and binds port 80 as an
 unprivileged user via `setcap`.
 
-The runtime stage contains **no Bun, Node or npm** — plain Debian, OpenSSH, tmux
+The runtime stage contains **no Bun, Node or npm** — plain Debian, OpenSSH, dtach
 and one compiled binary. If anything the server needed at runtime were not
 actually embedded in that binary, the container would fail to start rather than
 quietly work because a source tree happened to be lying around.
@@ -77,13 +77,13 @@ things and logs in through the machine's own sshd. These are the prerequisites:
 | --- | --- | --- |
 | `openssh-server` | every window logs in through it | nothing connects |
 | `openssh-client` | `ssh-keygen` signs certificates, `ssh-keyscan` finds the host key to pin | **the server refuses to start** |
-| `tmux` | wraps every window | windows become plain shells that die on reload, and **profiles launch no harness at all** |
+| `dtach` | keeps every window alive across reloads | windows become plain shells that die on reload, and **profiles launch no harness at all** |
 | `git` | projects and worktrees | no projects |
 | `gh` | pull requests, issues and reviews — *optional* | git still works; the GitHub API does not |
 | `claude` | the Claude harness | those profiles open a window that closes again immediately |
 
 ```bash
-sudo apt update && sudo apt install -y openssh-server openssh-client tmux git gh
+sudo apt update && sudo apt install -y openssh-server openssh-client dtach git gh
 curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
 ```
 
@@ -98,9 +98,17 @@ integration, install **Google Chrome's own .deb** rather than the distribution's
 known breaker of native messaging hosts — which is exactly the mechanism the
 Claude extension uses to reach a local Claude Code.
 
-`tmux` is the one people skip. It is not a nicety here: the harness command
-lives in the tmux invocation, so without it a profile opens a shell and does
+`dtach` is the one people skip. It is not a nicety here: the harness command
+lives in the dtach invocation, so without it a profile opens a shell and does
 nothing else.
+
+It is deliberately dtach and not tmux. A window needs exactly two things from a
+session manager — survive a reload, and let a real terminal take over — and tmux
+brings a second terminal emulator along with them. That emulator keeps its own
+model of your screen and sends only the cells it thinks changed, so any
+momentary disagreement with the browser's terminal becomes permanent: it will
+not resend a cell it believes is already correct. dtach keeps no model. It holds
+the pty and moves bytes, and the program talks to your terminal directly.
 
 ### Install
 
@@ -251,16 +259,16 @@ ssh you@host 'sudo systemctl stop vibe-os \
 ```
 
 Nothing is lost by that restart: workspaces, profiles and window layout are in
-SQLite, and the terminals are tmux sessions the server does not own. Reload the
+SQLite, and the terminals are dtach sessions the server does not own. Reload the
 browser and every window reattaches to whatever was running.
 
 Two things that restart does *not* pick up, both worth knowing before you
 conclude a change did not work:
 
-- **A changed harness command.** Windows attach with `tmux new-session -A`, and
-  tmux ignores a shell-command when it attaches, so an existing session keeps
-  running whatever it was started with. Close the window and open it again —
-  reloading is not enough.
+- **A changed harness command.** A window attaches to its existing socket if one
+  is live, and the command only runs when the session is created, so an existing
+  session keeps running whatever it was started with. Close the window and open
+  it again — reloading is not enough.
 - **Changed service flags.** The port, bind address and token live in the unit,
   so re-run `sudo vibe-os install-service …` with the new ones.
 
@@ -367,12 +375,12 @@ Tailscale path above — harmless, but that is why it is there.
 │     browser     │   wss://…/websocket    │  vibe-os (bun)   │  TCP   │ sshd │
 │   ssh.wasm      │ ─────────────────────► │    :80 / :443    │ ─────► │  :22 │
 │  private key    │                        │   byte pipe      │        │      │
-│  in IndexedDB   │   POST /api/ssh/…      │   + SSH CA       │        │ tmux │
+│  in IndexedDB   │   POST /api/ssh/…      │   + SSH CA       │        │dtach │
 └─────────────────┘ ─────────────────────► └──────────────────┘        └───▲──┘
                                                                            │
 ┌─────────────────┐                                                        │
 │  your terminal  │   ssh -t … vibe-os attach quiet-amber-otter-1           │
-│    ssh + tmux   │ ──────────────────────────────────────────────────────►─┘
+│   ssh + dtach   │ ──────────────────────────────────────────────────────►─┘
 └─────────────────┘
 ```
 
@@ -418,30 +426,37 @@ revoking every browser that ever connected is deleting one line.
 Each certificate carries a per-window `force-command` critical option:
 
 ```
-force-command tmux -u new-session -A -s 'vibe-quiet-amber-otter-1' \
-                  -c '/home/you/workspace/.vibe-worktrees/my-repo/quiet-amber-otter'
+force-command dtach -p '~/.vibe-os/sessions/vibe-quiet-amber-otter-1.sock' … \
+              || dtach -n '…/vibe-quiet-amber-otter-1.sock' -E -z /bin/sh -c \
+                    'cd /home/you/workspace/.vibe-worktrees/my-repo/quiet-amber-otter && …'
+              ;  exec dtach -a '…/vibe-quiet-amber-otter-1.sock' -E -z -r winch
 ```
 
-The session name comes from the workspace, and `-c` is what puts the shell in
+The socket name comes from the workspace, and the `cd` is what puts the shell in
 that workspace's worktree. Both are resolved server-side from the window id —
 the browser sends an id and never names a directory.
 
-`new-session -A` attaches if the session exists and creates it otherwise, so a
-window reattaches to exactly what it was running before. Because the client
+`dtach -p` is a liveness probe: it writes to the socket and fails on a dead one,
+so a session left behind by a crash is replaced instead of blocking every later
+attach. Creating with `-n` and attaching with `-a` is deliberate rather than
+using `-A` for both — the two differ in argv, which is what lets the server
+detach a client without any risk of killing the session itself. `-E` gives the
+detach key back to the program, and `-r winch` asks it to repaint on attach,
+since dtach stores no screen to replay. Because the client
 requests a *shell* (not an exec), sshd allocates a real PTY and then runs the
 forced command inside it — so resize, job control and full-screen programs all
 behave.
 
 This detail is load-bearing and easy to get wrong. sshterm's `autoConnect.command`
-option looks like the obvious place to put the tmux command, but it takes
+option looks like the obvious place to put the session command, but it takes
 upstream's `session.Run(command)` path, which requests **no PTY and installs no
-resize handler**. tmux fails outright there. The command has to travel in the
+resize handler**. dtach fails outright there. The command has to travel in the
 certificate instead.
 
 That command is built in one place, `server/session.ts`, and has two callers:
 the certificate signer above, and `vibe-os attach`. They must not drift — a
 window has to be the same window whichever door you come in by — so neither
-composes a tmux invocation of its own.
+composes a dtach invocation of its own.
 
 ---
 
@@ -473,9 +488,7 @@ composes a tmux invocation of its own.
                     host to print in attach commands, when sshd is not on
                     the name the browser reached the desktop on
 --user <name>       unix user to log in as (default: current user)
---no-tmux           plain login shells instead of persistent tmux sessions
---tmux-status       show tmux's own status bar inside each window
---no-tmux-theme     leave tmux's colours alone
+--no-sessions       plain login shells instead of persistent dtach sessions
 --cert-ttl <secs>   certificate lifetime (default 43200)
 
 --workspace <dir>   where worktrees are created (default ~/workspace);
@@ -560,7 +573,7 @@ shell, or any command on the box) with its flags, and a prompt. The colour is
 the point of the thing: it tints the window, its title bar and its dock entry,
 so three roles running at once are distinguishable without reading anything. A
 role window also gets a taller header with the role's name at the top of the
-hierarchy and the tmux session name demoted beneath it.
+hierarchy and the session name demoted beneath it.
 
 **Quitting the harness closes the window.** A window opened as a role exists to
 run that role, so leaving Claude ends the session rather than dropping you into
@@ -621,7 +634,7 @@ Two switches are worth knowing the shape of:
   infrastructure. Passing it on a box with no Chrome is harmless either way; the
   session starts normally, just without browser tools.
 
-The harness runs as `<command> <args>; exec "$SHELL"`. The tail matters — tmux
+The harness runs as `<command> <args>; exec "$SHELL"`. The tail matters — dtach
 ends a session when its last pane exits, so without it, quitting Claude would
 take the desktop window with it. And because windows attach with
 `new-session -A`, which ignores a shell-command when it attaches, reloading the
@@ -731,12 +744,12 @@ The ⇗ button in a window's title bar offers two places to send that terminal:
 - **SSH session** — a real terminal on your own machine, over plain `ssh`.
 
 There is nothing clever underneath either one. Every route addresses the same
-window id, the server turns that into the same tmux session, and tmux is what
+window id, the server turns that into the same dtach session, and dtach is what
 actually holds the terminal — so popping out is just detaching one client and
 attaching another, and everything running carries on.
 
 The desktop shows a placeholder while a terminal is out, rather than mirroring
-it. tmux is perfectly happy with two clients on one session and would show the
+it. dtach is perfectly happy with two clients on one session and would show the
 same thing in both, but it sizes a session to its *smallest* client, so a
 mirrored pair drags itself down to whichever window is narrower. One client at a
 time means whatever picked the terminal up gets the size it actually has.
@@ -766,7 +779,7 @@ That URL answers with a three-line shell script that `exec`s an `ssh` command,
 so `curl` on its own shows you exactly what you are about to run. Everything is
 resolved server-side, so the box needs nothing installed for it. Use
 `sh -c "$(…)"` and not `curl … | sh`: a pipe makes the script's stdin the pipe,
-leaving `ssh -t` with no terminal to allocate, and tmux fails on arrival.
+leaving `ssh -t` with no terminal to allocate, and dtach fails on arrival.
 
 **Which one is listed first depends on the token gate.** The URL is the nicer
 answer right up until there is a token, because the token has to travel in the
@@ -801,14 +814,14 @@ started. Nothing is special-cased for terminals.
 **This grants no access.** The ssh connection authenticates with your own key in
 `~/.ssh/authorized_keys`, or with your tailnet identity under `tailscale up
 --ssh`; vibe-os is not in the auth path at all and `--token` does not gate it.
-Anyone who can ssh to the box as that user could already type `tmux attach`.
+Anyone who can ssh to the box as that user could already type `dtach -a`.
 What this adds is knowing what to attach *to*.
 
 Tailscale SSH is worth turning on for exactly this — it makes the command work
 with no key to distribute, and it coexists with the bridge, which dials
 `127.0.0.1:22` and is not intercepted.
 
-**Bring it back** runs `tmux detach-client` on the session, which is the
+**Bring it back** kills the attached dtach client, which is the
 server-side equivalent of closing a browser pop-out: your terminal drops back to
 its shell, and the desktop takes the window over. Nothing running is disturbed.
 
@@ -832,7 +845,7 @@ desktop.
 
 There are no keyboard chords. The terminal has focus nearly all the time, and
 every key the desktop took for itself was a key the session underneath could not
-have — `ctrl-b` belongs to tmux, and `alt` is how a terminal sends the characters
+have — `alt` is how a terminal sends the characters
 a Mac keyboard has no other way to type. Everything is a control you can see.
 
 **⊞ on the dock tiles the windows.** One fills the desktop, two go across, three
@@ -851,10 +864,6 @@ does. A hairline in each edge marks where.
 Closing a window ends the session behind it; **minimise** puts one away and
 keeps it running. Reloading or closing the tab keeps everything — persistence
 only gives way to an explicit dismissal.
-
-tmux's own status bar is hidden, because the window's title bar already shows
-the session name and state and the menu bar shows the host. `--tmux-status`
-brings it back, which is worth it if you split panes inside a window.
 
 ### Wallpaper
 
@@ -909,14 +918,12 @@ secure context — so copy-on-select and paste-on-right-click stop working. A
 profile's prompt is unaffected either way: its **Send** button writes into the
 session directly and never touches the clipboard.
 
-Copying *inside* a session — from Claude, from vim, from tmux's own copy mode —
-reaches the browser clipboard as well. Programs ask for that with OSC 52, and
-two things had to be true for it to arrive: tmux is told `set-clipboard on`,
-because its default of `external` sets the clipboard from tmux's own copy mode
-but ignores the same sequence coming from an application; and the browser side
-handles OSC 52, which xterm.js does not do on its own. Clipboard *reads* over
-OSC 52 are refused — anything running in a pane could otherwise ask what you
-last copied.
+Copying *inside* a session — from Claude, from vim — reaches the browser
+clipboard as well. Programs ask for that with OSC 52, which arrives here
+untouched because nothing sits between the program and the terminal; the browser
+side then has to handle it, which xterm.js does not do on its own. Clipboard
+*reads* over OSC 52 are refused — anything running in a session could otherwise
+ask what you last copied.
 
 There are two ways to get a secure origin, and the second is easier than the
 first: `--domain` and Let's Encrypt, or [`tailscale serve`](#behind-tailscale),
@@ -1002,8 +1009,8 @@ vibe-os discovers the host key with `ssh-keyscan` in that order, because pinning
 a key the server holds but does not present makes every window report the host key
 as **changed**, which reads like an attack rather than a misconfiguration.
 
-**tmux is detected on the machine vibe-os runs on**, which is the SSH target by
-default. If you point `--ssh-host` somewhere else, pass `--tmux` explicitly.
+**dtach is detected on the machine vibe-os runs on**, which is the SSH target by
+default. If you point `--ssh-host` somewhere else, pass `--sessions` explicitly.
 
 **Upstream prints a banner into every session** from `internal/start.go`, with
 no option to disable it. It is filtered in `SshTerminal.tsx` by wrapping the

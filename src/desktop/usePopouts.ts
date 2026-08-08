@@ -105,7 +105,7 @@ export function usePopoutHost() {
  * page the browser did not open by script refuses to close itself, which is
  * what happens if someone opens the pop-out URL by hand. The callback is how
  * this page then lets go of its SSH connection anyway, because a pop-out that
- * silently stayed attached would leave two clients on the tmux session and
+ * silently stayed attached would leave two clients on the session and
  * shrink it to whichever window is smaller.
  */
 export function usePopoutGuest(id: string, onReclaimed: () => void) {
@@ -120,7 +120,7 @@ export function usePopoutGuest(id: string, onReclaimed: () => void) {
     bc.onmessage = (event: MessageEvent<Message>) => {
       const msg = event.data;
       if (msg.type === 'who') announce({ type: 'claim', id });
-      // The desktop wants this terminal back. The tmux session outlives the
+      // The desktop wants this terminal back. The session outlives the
       // connection either way, so the desktop reattaches to exactly this state.
       if (msg.type === 'reclaim' && msg.id === id) {
         reclaimed.current();

@@ -12,7 +12,7 @@
 // browser that ever connected is deleting that one line.
 //
 // Certificates also carry a per-pane `force-command` critical option, which is
-// how each pane lands in its own persistent tmux session (see certificate.ts's
+// how each pane lands in its own persistent dtach session (see certificate.ts's
 // caller). sshd allocates the PTY because the client asks for a shell, then
 // runs the forced command inside it — so resize and job control behave.
 
@@ -40,7 +40,7 @@ export interface SignOptions {
   principal: string;
   /** Human-readable identity; sshd logs this on every login. */
   identity: string;
-  /** Optional forced command, e.g. `tmux new-session -A -s vibe-1`. */
+  /** Optional forced command, e.g. `dtach new-session -A -s vibe-1`. */
   forceCommand?: string;
   /** Certificate lifetime in seconds. */
   ttlSeconds: number;

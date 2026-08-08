@@ -6,7 +6,7 @@ import { writeClipboard } from '../clipboard';
  * What a window shows while its terminal belongs to a real terminal.
  *
  * The desktop is not mirroring the session here — it has let go of it entirely,
- * the same way it does for a browser pop-out, because tmux sizes a session to
+ * the same way it does for a browser pop-out, because dtach sizes the pty to
  * its smallest client and a desktop tile would drag a full-screen terminal down
  * to its own width. So this is a placeholder with the one thing you need next:
  * the command that gets you there.

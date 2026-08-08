@@ -6,7 +6,8 @@ export interface ServerConfig {
   hostname: string;
   user: string;
   workspaceRoot: string;
-  tmux: boolean;
+  /** Windows are dtach-backed and survive a reload. */
+  sessions: boolean;
   authRequired: boolean;
   endpoint: { name: string; url: string };
   hostKey: string | null;
@@ -38,13 +39,13 @@ export async function fetchServerConfig(): Promise<ServerConfig> {
  *
  * `autoConnect.command` is deliberately left unset. Setting it takes upstream's
  * `session.Run(command)` path, which requests no PTY and installs no resize
- * handler; tmux would fail outright and a shell would be unusable. The command
+ * handler; dtach would fail outright and a shell would be unusable. The command
  * travels in the certificate's force-command instead, so sshd runs it inside
  * the PTY it already allocated for the shell request.
  */
 export function windowSshConfig(server: ServerConfig, windowId: string): SshTermConfig {
   // Only the window id goes over the wire. The server looks up which workspace
-  // it belongs to and starts tmux in that worktree, so a browser cannot ask for
+  // it belongs to and starts the session in that worktree, so a browser cannot ask for
   // a session in a directory of its choosing.
   const identityProvider = new URL(
     `${server.certificateEndpoint}?window=${encodeURIComponent(windowId)}`,

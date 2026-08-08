@@ -1,21 +1,27 @@
 // Popping a terminal out to a real terminal.
 //
-// A window is a tmux session, and tmux does not care who attaches to it. The
+// A window is a dtach session, and dtach does not care who attaches to it. The
 // browser reaches it through the WASM/bridge/sshd path; someone on the tailnet
 // can reach the same session with plain `ssh`, and land in exactly the same
 // worktree running exactly the same thing — because both ask session.ts for the
 // command rather than composing one of their own.
 //
 // The only rule that has to survive is the one the pop-out already enforces:
-// **one client per session**. tmux sizes a session to its smallest client, so a
-// desktop window and a full-screen terminal attached at once drag each other
-// down. The browser pop-out solves that by unmounting the desktop's terminal
-// and gossiping over a BroadcastChannel. An SSH client cannot join that
-// conversation, so the handoff is recorded on the window row instead — durable
-// across a reload, and undone by `tmux detach-client`, which is the server-side
-// equivalent of closing the pop-out window.
+// **one client per session**. dtach lets several attach at once and sizes the
+// pty to whoever most recently arrived, so a desktop window and a full-screen
+// terminal attached together would fight over the size. The browser pop-out
+// solves that by unmounting the desktop's terminal and gossiping over a
+// BroadcastChannel. An SSH client cannot join that conversation, so the handoff
+// is recorded on the window row instead — durable across a reload, and undone
+// by killing the attached client, which is the server-side equivalent of
+// closing the pop-out window.
+//
+// Killing "the client" is safe because of how session.ts starts things: the
+// process that owns the pty is `dtach -n <socket> …` and every attachment is
+// `dtach -a <socket>`. They differ in argv, so the two are never confused.
 
 import { execFile } from 'node:child_process';
+import { readdir, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +30,7 @@ import { and, eq, desc } from 'drizzle-orm';
 import { type Db, windows, workspaces, projects, profiles } from './db.ts';
 import type { Config } from './config.ts';
 import { getProfile } from './profiles.ts';
-import { windowCommand, shellQuote } from './session.ts';
+import { windowCommand, shellQuote, socketPath } from './session.ts';
 import { IS_COMPILED } from './runtime.ts';
 import { log } from './log.ts';
 
@@ -36,7 +42,7 @@ const run = promisify(execFile);
  * This only applies before the first client shows up. A handoff is made the
  * moment you pick "SSH session", which is necessarily *before* you have pasted
  * the command anywhere — so for a while the row says the terminal is out there
- * and tmux says nobody is attached. Reaping on that would take the window back
+ * and nobody is attached yet. Reaping on that would take the window back
  * while the command is still on the clipboard, and then the terminal you
  * eventually paste into becomes a second client, which is the one thing the
  * handoff exists to prevent.
@@ -78,7 +84,7 @@ export interface SshEndpoint {
  * Both spellings are accepted because they serve different callers: the UI has
  * an opaque window id in hand, and a person at a shell prompt has the label off
  * the title bar. A ref is matched against the workspace name and window index
- * that produce the tmux session name, so what you type is what `tmux ls` shows.
+ * that produce the session name, so what you type is what the socket is called.
  */
 export function resolveTarget(db: Db, refOrId: string): AttachTarget | undefined {
   const rows = db
@@ -165,50 +171,81 @@ export function listTargets(db: Db): AttachTarget[] {
     }));
 }
 
-/** The tmux command for a target — the same one the certificate forces. */
+/** The session command for a target — the same one the certificate forces. */
 export function commandFor(db: Db, config: Config, target: AttachTarget): string | undefined {
   const profile = target.profileId ? getProfile(db, target.profileId) : undefined;
   return windowCommand(target.session, target.cwd, config, profile);
 }
 
-// ── talking to tmux ──────────────────────────────────────────────────────────
+// ── talking to dtach ─────────────────────────────────────────────────────────
 
-/** Sessions the tmux server currently holds. Empty when it is not running. */
-export async function liveSessions(): Promise<Set<string>> {
+/** Sessions with something still holding the other end of their socket. */
+export async function liveSessions(config: Config): Promise<Set<string>> {
   try {
-    const { stdout } = await run('tmux', ['list-sessions', '-F', '#{session_name}'], { timeout: 10_000 });
-    return new Set(stdout.split('\n').map((l) => l.trim()).filter(Boolean));
+    const dir = `${config.stateDir}/sessions`;
+    const names = await readdir(dir);
+    const live = new Set<string>();
+    await Promise.all(
+      names
+        .filter((n) => n.endsWith('.sock'))
+        .map(async (n) => {
+          // Writing nothing to the socket succeeds only if something is still
+          // holding the other end, which is what separates a live session from
+          // a socket a crashed one left behind.
+          const ok = await run('dtach', ['-p', `${dir}/${n}`], { timeout: 10_000 })
+            .then(() => true)
+            .catch(() => false);
+          if (ok) live.add(n.replace(/\.sock$/, ''));
+        }),
+    );
+    return live;
   } catch {
-    // "no server running on ..." exits non-zero, which is not an error here.
+    // No sessions directory yet: nothing has ever been opened.
     return new Set();
   }
 }
 
-/** Clients currently attached to a session. Empty when the session is gone. */
-export async function clientsOn(session: string): Promise<string[]> {
+/**
+ * Processes currently attached to a session.
+ *
+ * A client is `dtach -a <socket>`; the process that owns the pty is
+ * `dtach -n <socket> …`. They differ in argv precisely so this can tell them
+ * apart — matching too loosely here would mean "detach the clients" killing the
+ * session along with them.
+ */
+export async function clientsOn(config: Config, session: string): Promise<string[]> {
+  const sock = socketPath(config, session);
   try {
-    const { stdout } = await run('tmux', ['list-clients', '-t', session, '-F', '#{client_tty}'], {
-      timeout: 10_000,
-    });
+    const { stdout } = await run('pgrep', ['-f', `^dtach -a ${sock}`], { timeout: 10_000 });
     return stdout.split('\n').map((l) => l.trim()).filter(Boolean);
   } catch {
-    // No server running, or no such session — either way, nobody is attached.
+    // pgrep exits non-zero when nothing matches.
     return [];
   }
 }
 
 /**
- * Kicks every client off a session.
+ * Kicks every client off a session, leaving the session itself running.
  *
- * This is what "Bring it back" does to a terminal, and it is the exact
- * counterpart of `window.close()` on a browser pop-out: the tmux client exits,
- * the forced command it was running returns, and the ssh session ends. What was
- * running in the session is untouched — that is the whole point of tmux.
+ * This is what "Bring it back" does to a terminal, and the exact counterpart of
+ * closing a browser pop-out: the attached dtach exits, the forced command it
+ * was running returns, and the ssh session ends. What was running is untouched
+ * — the process that owns the pty is a different process and is left alone.
  */
-export async function detachClients(session: string): Promise<void> {
-  await run('tmux', ['detach-client', '-s', session], { timeout: 10_000 }).catch(() => {
-    // Nothing attached, or no such session. Both are the desired end state.
-  });
+export async function detachClients(config: Config, session: string): Promise<void> {
+  const pids = await clientsOn(config, session);
+  for (const pid of pids) {
+    await run('kill', [pid], { timeout: 10_000 }).catch(() => {
+      // Already gone between listing and killing; that is the desired state.
+    });
+  }
+}
+
+/** Ends a session outright: the program exits and the socket is removed. */
+export async function killSession(config: Config, session: string): Promise<void> {
+  const sock = socketPath(config, session);
+  await run('pkill', ['-f', `^dtach -n ${sock}`], { timeout: 10_000 }).catch(() => {});
+  await rm(sock, { force: true }).catch(() => {});
 }
 
 // ── where to point ssh ───────────────────────────────────────────────────────
@@ -300,7 +337,7 @@ export interface AttachInfo {
   /** Ways to reach this window, best first. See `attachForms`. */
   forms: AttachForm[];
   /**
-   * The whole ssh-and-tmux command, depending on nothing on the far side.
+   * The whole ssh-and-dtach command, depending on nothing on the far side.
    *
    * Not offered as a way to attach — it is far too long for anyone to want —
    * but it is what `/t/<ref>` executes, so it lives here with the rest.
@@ -382,7 +419,7 @@ export function attachInfo(
  * Written to be read before it is run: `curl <url>` on its own shows you a
  * commented three-line file, and the `sh -c "$(…)"` form runs exactly what you
  * just looked at. That form matters — `curl … | sh` makes the script's stdin
- * the pipe, so the `ssh -t` inside it has no terminal to attach to and tmux
+ * the pipe, so the `ssh -t` inside it has no terminal to attach to and dtach
  * fails on arrival.
  */
 export function attachScript(info: AttachInfo): string {
@@ -416,7 +453,7 @@ export async function setHandoff(db: Db, config: Config, windowId: string, mode:
   const target = resolveTarget(db, windowId);
   if (!target) return false;
 
-  if (config.tmux) {
+  if (config.sessions) {
     /*
      * Both directions detach every client, and the reason differs.
      *
@@ -427,7 +464,7 @@ export async function setHandoff(db: Db, config: Config, windowId: string, mode:
      *
      * Handing it out is the subtle one. The desktop that asked has already
      * unmounted its terminal — but any *other* desktop showing this workspace
-     * has not heard yet, and until it polls it is still a tmux client. The
+     * has not heard yet, and until it polls it is still a client. The
      * terminal would then arrive as a second one and the session would shrink
      * to whichever is smaller. Broadcasting to sibling tabs closes that for one
      * browser; only the server can close it for another machine, and it closes
@@ -435,7 +472,7 @@ export async function setHandoff(db: Db, config: Config, windowId: string, mode:
      * detaching is not a session ending, and the browsers reconnect or show the
      * handoff as soon as they catch up.
      */
-    await detachClients(target.session);
+    await detachClients(config, target.session);
     log.info(mode === 'ssh' ? `handed ${target.session} to a terminal` : `reclaimed ${target.session} from its terminal`);
   }
 
@@ -462,10 +499,10 @@ export async function setHandoff(db: Db, config: Config, windowId: string, mode:
  * their terminal window, and only the grace period settles it.
  *
  * Runs on the window list, which the desktop polls while anything is out, and
- * only ever does tmux work for windows that are actually handed off.
+ * only ever does session work for windows that are actually handed off.
  */
 export async function reapStaleHandoffs(db: Db, config: Config): Promise<void> {
-  if (!config.tmux) return;
+  if (!config.sessions) return;
   const outstanding = db.select().from(windows).where(eq(windows.handoff, 'ssh')).all();
   if (outstanding.length === 0) return;
 
@@ -474,7 +511,7 @@ export async function reapStaleHandoffs(db: Db, config: Config): Promise<void> {
     const target = resolveTarget(db, row.id);
     if (!target) continue;
 
-    if ((await clientsOn(target.session)).length > 0) {
+    if ((await clientsOn(config, target.session)).length > 0) {
       // First sighting. From here on, an empty client list means it left.
       if (!row.handoffSeen) {
         db.update(windows).set({ handoffSeen: 1 }).where(eq(windows.id, row.id)).run();

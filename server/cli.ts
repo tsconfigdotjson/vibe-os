@@ -47,9 +47,7 @@ const HELP = `
                         host to print in attach commands, when it is not the
                         one the browser reached the desktop on
     --user <name>       unix user to log in as (default: current user)
-    --no-tmux           plain login shells instead of persistent tmux sessions
-    --tmux-status       show tmux's own status bar inside each window
-    --no-tmux-theme     leave tmux's colours alone
+    --no-sessions       plain login shells instead of persistent dtach sessions
     --cert-ttl <secs>   certificate lifetime (default 43200)
 
     --workspace <dir>   root for projects and worktrees (default ~/workspace)
@@ -180,8 +178,8 @@ WantedBy=multi-user.target
  * Returns undefined when the person backs out, which must not be confused with
  * a failure — quitting the picker is a perfectly good outcome.
  */
-async function pickTarget(targets: AttachTarget[]): Promise<AttachTarget | undefined> {
-  const live = await liveSessions();
+async function pickTarget(config: Config, targets: AttachTarget[]): Promise<AttachTarget | undefined> {
+  const live = await liveSessions(config);
   console.log('');
   console.log(`  ${color.bold(color.cyan('vibe-os'))} ${color.dim(`· ${targets.length} window${targets.length === 1 ? '' : 's'}`)}`);
   console.log('');
@@ -193,7 +191,7 @@ async function pickTarget(targets: AttachTarget[]): Promise<AttachTarget | undef
   });
   console.log('');
 
-  // Closed before anything is spawned: tmux needs the terminal in raw mode and
+  // Closed before anything is spawned: dtach needs the terminal in raw mode and
   // readline holds it in canonical mode until it lets go.
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await rl.question(`  attach [1-${targets.length}, q to quit]: `);
@@ -210,12 +208,12 @@ async function pickTarget(targets: AttachTarget[]): Promise<AttachTarget | undef
  * The command comes from session.ts, which is the same place the certificate
  * signer gets it — so arriving over ssh puts you in the same session, in the
  * same worktree, running the same harness as the browser would. Composing a
- * tmux invocation here instead would be one line shorter and would drift away
+ * dtach invocation here instead would be one line shorter and would drift away
  * from the browser's the first time either changed.
  */
 async function attach(config: Config, ref: string | undefined): Promise<number> {
-  if (!config.tmux) {
-    log.error('attach needs tmux — this server runs plain login shells (--no-tmux)');
+  if (!config.sessions) {
+    log.error('attach needs dtach — this server runs plain login shells (--no-sessions)');
     return 1;
   }
 
@@ -230,7 +228,7 @@ async function attach(config: Config, ref: string | undefined): Promise<number> 
     return 1;
   }
 
-  const target = ref ? resolveTarget(db, ref) : await pickTarget(targets);
+  const target = ref ? resolveTarget(db, ref) : await pickTarget(config, targets);
   if (ref && !target) {
     log.error(`no window called ${ref}`);
     console.log('');
@@ -253,13 +251,13 @@ async function attach(config: Config, ref: string | undefined): Promise<number> 
    * separators and two layers of quoting included. Handing it to a shell here
    * is what makes the two paths identical rather than merely similar.
    *
-   * spawnSync rather than a detached child: tmux needs this terminal, and the
+   * spawnSync rather than a detached child: dtach needs this terminal, and the
    * exit code needs to be ours. There is no exec() to replace the process with
    * in a Bun binary, so this one stays resident and idle for the session.
    */
   const child = spawnSync('/bin/sh', ['-c', command], { stdio: 'inherit' });
   if (child.error) {
-    log.error(`could not start tmux: ${child.error.message}`);
+    log.error(`could not start the session: ${child.error.message}`);
     return 1;
   }
   return child.status ?? 0;
