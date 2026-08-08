@@ -276,9 +276,12 @@ export async function syncMcpMirrors(
     }
   }
 
-  await writeFile(path.join(dir, "README"), NOTE, { mode: 0o600 }).catch(
-    () => {},
-  );
+  // Compared first, like the json files beside it: this runs on every
+  // certificate request, and rewriting an unchanged file each time is a write
+  // for nothing.
+  const readmePath = path.join(dir, "README");
+  if ((await readFile(readmePath, "utf8").catch(() => null)) !== NOTE)
+    await writeFile(readmePath, NOTE, { mode: 0o600 }).catch(() => {});
 
   for (const entry of await readdir(dir).catch(() => [] as string[])) {
     if (!entry.endsWith(".json") || wanted.has(entry)) continue;

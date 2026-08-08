@@ -142,11 +142,37 @@ function userName(value: unknown, label: string): string {
 }
 
 function num(value: unknown, fallback: number, label: string): number {
-  if (value === undefined) return fallback;
+  if (value === undefined || value === "") return fallback;
   const n = Number(value);
-  if (!Number.isFinite(n) || n < 0)
+  // `Number("")` is 0, which used to pass this guard and make Bun bind a random
+  // ephemeral port — while the banner printed that port as the URL. Fractions
+  // and out-of-range values were accepted just as quietly.
+  if (!Number.isInteger(n) || n < 0)
     throw new Error(`invalid --${label}: ${String(value)}`);
   return n;
+}
+
+/** Ports specifically: the same rules, plus the range one can actually bind. */
+function port_(value: unknown, fallback: number, label: string): number {
+  const n = num(value, fallback, label);
+  if (n < 1 || n > 65535)
+    throw new Error(`invalid --${label}: ${String(value)} is not a port`);
+  return n;
+}
+
+/**
+ * A boolean from a flag or an environment variable.
+ *
+ * `Boolean(x)` is wrong for the environment half: every non-empty string is
+ * true, so `VIBE_OS_ACME_STAGING=0` and `=false` both turned staging *on* —
+ * which quietly points certificate issuance at Let's Encrypt's staging CA and
+ * produces a certificate no browser trusts.
+ */
+function flag(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (value === undefined || value === null) return false;
+  const v = String(value).trim().toLowerCase();
+  return !(v === "" || v === "0" || v === "false" || v === "no" || v === "off");
 }
 
 interface PersistedConfig {
@@ -197,7 +223,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
     token = values.token;
   } else if (process.env.VIBE_OS_TOKEN) {
     token = process.env.VIBE_OS_TOKEN;
-  } else if (values.token === "" || values.token === true) {
+  } else if (values.token === "") {
     token = persisted.token ?? randomBytes(24).toString("base64url");
   } else {
     token = persisted.token ?? null;
@@ -210,20 +236,24 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
       : await hasDtach();
 
   return {
-    port: num(values.port ?? process.env.VIBE_OS_PORT, 80, "port"),
+    port: port_(values.port ?? process.env.VIBE_OS_PORT, 80, "port"),
     host: String(values.host ?? process.env.VIBE_OS_HOST ?? "0.0.0.0"),
     domain:
       (values.domain as string) ?? process.env.VIBE_OS_DOMAIN ?? undefined,
-    tlsPort: num(values["tls-port"], 443, "tls-port"),
+    tlsPort: port_(
+      values["tls-port"] ?? process.env.VIBE_OS_TLS_PORT,
+      443,
+      "tls-port",
+    ),
     acmeEmail:
       (values.email as string) ?? process.env.VIBE_OS_ACME_EMAIL ?? undefined,
-    acmeStaging: Boolean(
+    acmeStaging: flag(
       values["acme-staging"] ?? process.env.VIBE_OS_ACME_STAGING,
     ),
     sshHost: String(
       values["ssh-host"] ?? process.env.VIBE_OS_SSH_HOST ?? "127.0.0.1",
     ),
-    sshPort: num(
+    sshPort: port_(
       values["ssh-port"] ?? process.env.VIBE_OS_SSH_PORT,
       22,
       "ssh-port",
@@ -250,7 +280,11 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
       ),
     ),
     token,
-    certTtlSeconds: num(values["cert-ttl"], 12 * 60 * 60, "cert-ttl"),
+    certTtlSeconds: num(
+      values["cert-ttl"] ?? process.env.VIBE_OS_CERT_TTL,
+      12 * 60 * 60,
+      "cert-ttl",
+    ),
     sessions,
   };
 }
