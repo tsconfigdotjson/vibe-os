@@ -282,6 +282,9 @@ export async function killSession(
     () => {},
   );
   await rm(sock, { force: true }).catch(() => {});
+  // The lock file the forced command serialises on. Harmless to leave behind —
+  // `liveSessions` only looks at `.sock` — but it is ours to clean up.
+  await rm(`${sock}.lock`, { force: true }).catch(() => {});
 }
 
 /**
@@ -334,8 +337,16 @@ export function publicHost(req: Request, url: URL): string {
 export function sshEndpoint(config: Config, requestHost: string): SshEndpoint {
   const advertised = config.sshAdvertise?.trim();
   if (advertised) {
-    const [host, port] = advertised.split(":");
-    return { user: config.user, host, port: port ? Number(port) : 22 };
+    // Splitting on every colon breaks IPv6: `::1` becomes host "" port "".
+    // A bracketed literal keeps its address, and a trailing `:port` is only a
+    // port when it is one — `--ssh-advertise host:abc` used to render
+    // `ssh -t -p NaN`.
+    const bracketed = /^\[(.+)\](?::(\d+))?$/.exec(advertised);
+    const plain = /^([^:]+)(?::(\d+))?$/.exec(advertised);
+    const m = bracketed ?? plain;
+    const host = m ? m[1] : advertised;
+    const port = m?.[2] ? Number(m[2]) : 22;
+    return { user: config.user, host, port };
   }
   // Strips the web port, which is rarely 22 and never relevant to ssh.
   return {

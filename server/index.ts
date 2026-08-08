@@ -13,6 +13,7 @@ import {
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
 import { discoverClaude } from "./harness.ts";
+import { json } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { ensureWasm, ensureWebRoot } from "./preflight.ts";
 import { scanProjects } from "./projects.ts";
@@ -31,6 +32,8 @@ export interface RunningServer {
   close: () => void;
 }
 
+/** Ceiling on an HTTP request body, sized for a wallpaper upload. */
+const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
 /** Below this, binding needs root or CAP_NET_BIND_SERVICE. */
 const FIRST_UNPRIVILEGED_PORT = 1024;
 /** Where we land when port 80 is refused, so a first run still gets a URL. */
@@ -207,8 +210,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
     }
 
     if (denied) {
-      if (url.pathname.startsWith("/api/"))
-        return Response.json({ error: denied }, { status: 401 });
+      if (url.pathname.startsWith("/api/")) return json({ error: denied }, 401);
       return new Response(UNAUTHORISED_PAGE, {
         status: 401,
         headers: { "content-type": "text/html; charset=utf-8" },
@@ -236,8 +238,10 @@ export async function startServer(config: Config): Promise<RunningServer> {
       port,
       hostname: config.host,
       ...(tls ? { tls } : {}),
-      // Terminal output can be bursty; let a single frame carry a screenful.
-      maxRequestBodySize: 32 * 1024 * 1024,
+      // Wallpaper uploads are the largest body any route accepts, and this is
+      // the ceiling before per-route checks see it. WebSocket framing is a
+      // different knob entirely — that is `backpressureLimit` in bridge.ts.
+      maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
       development: false,
       async fetch(req, server) {
         try {

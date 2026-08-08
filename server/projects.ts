@@ -210,7 +210,7 @@ async function remoteUrl(repo: string): Promise<string | null> {
  */
 async function walkForRepos(
   root: string,
-  found: Map<string, true>,
+  found: Set<string>,
   budget: { visits: number },
 ): Promise<void> {
   const queue: { dir: string; depth: number }[] = [{ dir: root, depth: 0 }];
@@ -223,7 +223,7 @@ async function walkForRepos(
     budget.visits += 1;
 
     if (await isDirectory(path.join(dir, ".git"))) {
-      found.set(dir, true);
+      found.add(dir);
       continue; // a repo's subdirectories are not separate projects
     }
     if (depth >= MAX_DEPTH) continue;
@@ -264,7 +264,7 @@ async function runScan(db: Db, config: Config): Promise<void> {
   const roots = [
     ...new Set([config.workspace, os.homedir(), "/srv", "/opt", "/var/www"]),
   ];
-  const found = new Map<string, true>();
+  const found = new Set<string>();
   const budget = { visits: 0 };
 
   for (const root of roots) {
@@ -277,7 +277,7 @@ async function runScan(db: Db, config: Config): Promise<void> {
     );
   }
 
-  for (const repo of found.keys()) {
+  for (const repo of found) {
     // Our own worktrees are checkouts of a project, not projects themselves.
     if (repo.includes(`${path.sep}${WORKTREE_DIR}${path.sep}`)) continue;
 

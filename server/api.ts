@@ -12,6 +12,13 @@ import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
 import { discoverClaude } from "./harness.ts";
+import {
+  badId,
+  IMMUTABLE_CACHE_CONTROL,
+  json,
+  methodNotAllowed,
+  readJson,
+} from "./http.ts";
 import { describeError, log } from "./log.ts";
 import {
   discoverMcp,
@@ -40,7 +47,6 @@ import {
 import { windowCommand } from "./session.ts";
 import type { SshCa } from "./ssh-ca.ts";
 import { fingerprint, MAX_PUBKEY_BYTES } from "./ssh-ca.ts";
-import { IMMUTABLE_CACHE_CONTROL } from "./static.ts";
 import {
   type DesktopPrefs,
   MAX_WALLPAPER_BYTES,
@@ -54,13 +60,6 @@ import {
   sessionNameFor,
   updateWindow,
 } from "./windows.ts";
-
-function json(body: unknown, status = 200): Response {
-  return Response.json(body, {
-    status,
-    headers: { "cache-control": "no-store" },
-  });
-}
 
 /**
  * Where to look for MCP servers, for one project or for all of them.
@@ -113,7 +112,7 @@ export interface ApiDeps {
 }
 
 export function createApi(deps: ApiDeps) {
-  const { config, ca, wallpapers, db } = deps;
+  const { ca, config, db, hostKey, wallpapers } = deps;
 
   return async function handleApi(
     req: Request,
@@ -139,8 +138,8 @@ export function createApi(deps: ApiDeps) {
         sessions: config.sessions,
         authRequired: config.token !== null,
         endpoint: { name: "local", url: "./websocket" },
-        hostKey: deps.hostKey,
-        hostKeyFingerprint: deps.hostKey ? fingerprint(deps.hostKey) : null,
+        hostKey,
+        hostKeyFingerprint: hostKey ? fingerprint(hostKey) : null,
         certificateEndpoint: "/api/ssh/certificate",
         maxWallpaperBytes: MAX_WALLPAPER_BYTES,
         palette: PALETTE,
@@ -168,8 +167,7 @@ export function createApi(deps: ApiDeps) {
     const mcpMatch = /^\/api\/projects\/([^/]+)\/mcp$/.exec(p);
     if (mcpMatch && req.method === "GET") {
       const projectId = decodeURIComponent(mcpMatch[1]);
-      if (!ID_PATTERN.test(projectId))
-        return json({ error: "invalid project id" }, 400);
+      if (!ID_PATTERN.test(projectId)) return badId("project");
       // Writes the files as a side effect of listing them, so that anything
       // offered in the editor is something a launch can actually point at.
       await refreshMcpMirrors(db, config.stateDir);
@@ -179,16 +177,13 @@ export function createApi(deps: ApiDeps) {
     const workspacesMatch = /^\/api\/projects\/([^/]+)\/workspaces$/.exec(p);
     if (workspacesMatch) {
       const projectId = decodeURIComponent(workspacesMatch[1]);
-      if (!ID_PATTERN.test(projectId))
-        return json({ error: "invalid project id" }, 400);
+      if (!ID_PATTERN.test(projectId)) return badId("project");
 
       if (req.method === "GET") return json(listWorkspaces(db, projectId));
 
       if (req.method === "POST") {
         try {
-          const body = (await req.json().catch(() => ({}))) as {
-            name?: string;
-          };
+          const body = await readJson<{ name?: string }>(req);
           const created = await createWorkspace(
             db,
             config.workspace,
@@ -202,44 +197,36 @@ export function createApi(deps: ApiDeps) {
           return json({ error: message }, 400);
         }
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     // ── profiles ─────────────────────────────────────────────────────────────
     const profilesMatch = /^\/api\/projects\/([^/]+)\/profiles$/.exec(p);
     if (profilesMatch) {
       const projectId = decodeURIComponent(profilesMatch[1]);
-      if (!ID_PATTERN.test(projectId))
-        return json({ error: "invalid project id" }, 400);
+      if (!ID_PATTERN.test(projectId)) return badId("project");
 
       if (req.method === "GET") return json(listProfiles(db, projectId));
 
       if (req.method === "POST") {
         try {
-          const body = (await req.json().catch(() => ({}))) as Record<
-            string,
-            unknown
-          >;
+          const body = await readJson<Record<string, unknown>>(req);
           return json(createProfile(db, projectId, body), 201);
         } catch (err) {
           return json({ error: describeError(err) }, 400);
         }
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     const profileMatch = /^\/api\/profiles\/([^/]+)$/.exec(p);
     if (profileMatch) {
       const id = decodeURIComponent(profileMatch[1]);
-      if (!ID_PATTERN.test(id))
-        return json({ error: "invalid profile id" }, 400);
+      if (!ID_PATTERN.test(id)) return badId("profile");
 
       if (req.method === "PATCH") {
         try {
-          const body = (await req.json().catch(() => ({}))) as Record<
-            string,
-            unknown
-          >;
+          const body = await readJson<Record<string, unknown>>(req);
           const updated = updateProfile(db, id, body);
           return updated
             ? json(updated)
@@ -256,14 +243,13 @@ export function createApi(deps: ApiDeps) {
           ? json({ ok: true })
           : json({ error: "unknown profile" }, 404);
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     const workspaceMatch = /^\/api\/workspaces\/([^/]+)$/.exec(p);
     if (workspaceMatch) {
       const id = decodeURIComponent(workspaceMatch[1]);
-      if (!ID_PATTERN.test(id))
-        return json({ error: "invalid workspace id" }, 400);
+      if (!ID_PATTERN.test(id)) return badId("workspace");
 
       if (req.method === "DELETE") {
         // Every window here has a live session; removing the worktree
@@ -285,15 +271,14 @@ export function createApi(deps: ApiDeps) {
         touchWorkspace(db, id);
         return json({ ok: true });
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     // ── windows ──────────────────────────────────────────────────────────────
     const windowsMatch = /^\/api\/workspaces\/([^/]+)\/windows$/.exec(p);
     if (windowsMatch) {
       const workspaceId = decodeURIComponent(windowsMatch[1]);
-      if (!ID_PATTERN.test(workspaceId))
-        return json({ error: "invalid workspace id" }, 400);
+      if (!ID_PATTERN.test(workspaceId)) return badId("workspace");
       const workspace = getWorkspace(db, workspaceId);
       if (!workspace) return json({ error: "unknown workspace" }, 404);
 
@@ -306,9 +291,7 @@ export function createApi(deps: ApiDeps) {
         return json(listWindows(db, workspaceId));
       }
       if (req.method === "POST") {
-        const body = (await req.json().catch(() => ({}))) as {
-          profileId?: unknown;
-        };
+        const body = await readJson<{ profileId?: unknown }>(req);
         let profileId: string | null = null;
         if (typeof body.profileId === "string" && body.profileId !== "") {
           const profile = getProfile(db, body.profileId);
@@ -322,7 +305,7 @@ export function createApi(deps: ApiDeps) {
         }
         return json(createWindow(db, workspaceId, profileId), 201);
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     // How to reach this window from a real terminal. Read-only: it composes
@@ -330,8 +313,7 @@ export function createApi(deps: ApiDeps) {
     const attachMatch = /^\/api\/windows\/([^/]+)\/attach$/.exec(p);
     if (attachMatch && req.method === "GET") {
       const id = decodeURIComponent(attachMatch[1]);
-      if (!ID_PATTERN.test(id))
-        return json({ error: "invalid window id" }, 400);
+      if (!ID_PATTERN.test(id)) return badId("window");
       if (!config.sessions)
         return json(
           { error: "this server runs plain login shells (--no-sessions)" },
@@ -346,9 +328,8 @@ export function createApi(deps: ApiDeps) {
     const handoffMatch = /^\/api\/windows\/([^/]+)\/handoff$/.exec(p);
     if (handoffMatch && req.method === "POST") {
       const id = decodeURIComponent(handoffMatch[1]);
-      if (!ID_PATTERN.test(id))
-        return json({ error: "invalid window id" }, 400);
-      const body = (await req.json().catch(() => ({}))) as { mode?: unknown };
+      if (!ID_PATTERN.test(id)) return badId("window");
+      const body = await readJson<{ mode?: unknown }>(req);
       if (body.mode !== "ssh" && body.mode !== null)
         return json({ error: 'mode must be "ssh" or null' }, 400);
       if (body.mode === "ssh" && !config.sessions) {
@@ -365,14 +346,10 @@ export function createApi(deps: ApiDeps) {
     const windowMatch = /^\/api\/windows\/([^/]+)$/.exec(p);
     if (windowMatch) {
       const id = decodeURIComponent(windowMatch[1]);
-      if (!ID_PATTERN.test(id))
-        return json({ error: "invalid window id" }, 400);
+      if (!ID_PATTERN.test(id)) return badId("window");
 
       if (req.method === "PATCH") {
-        const body = (await req.json().catch(() => ({}))) as Record<
-          string,
-          unknown
-        >;
+        const body = await readJson<Record<string, unknown>>(req);
         const updated = updateWindow(db, id, body);
         return updated ? json(updated) : json({ error: "unknown window" }, 404);
       }
@@ -391,17 +368,15 @@ export function createApi(deps: ApiDeps) {
           ? json({ ok: true })
           : json({ error: "unknown window" }, 404);
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     // ── certificates ─────────────────────────────────────────────────────────
     if (p === "/api/ssh/certificate") {
-      if (req.method !== "POST")
-        return json({ error: "method not allowed" }, 405);
+      if (req.method !== "POST") return methodNotAllowed();
 
       const windowId = url.searchParams.get("window") ?? "";
-      if (!ID_PATTERN.test(windowId))
-        return json({ error: "invalid window id" }, 400);
+      if (!ID_PATTERN.test(windowId)) return badId("window");
 
       const target = sessionNameFor(db, windowId);
       if (!target) return json({ error: "unknown window" }, 404);
@@ -476,7 +451,7 @@ export function createApi(deps: ApiDeps) {
           return json({ error: describeError(err) }, 400);
         }
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     // ── wallpapers ───────────────────────────────────────────────────────────
@@ -496,7 +471,7 @@ export function createApi(deps: ApiDeps) {
           return json({ error: describeError(err) }, 400);
         }
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     if (p.startsWith("/api/wallpapers/")) {
@@ -520,7 +495,7 @@ export function createApi(deps: ApiDeps) {
           ? json({ ok: true })
           : json({ error: "not found" }, 404);
       }
-      return json({ error: "method not allowed" }, 405);
+      return methodNotAllowed();
     }
 
     return json({ error: "not found" }, 404);

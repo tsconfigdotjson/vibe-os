@@ -1,5 +1,6 @@
 import path from "node:path";
 import { BUILD_ID, EMBEDDED } from "./assets.generated.ts";
+import { IMMUTABLE_CACHE_CONTROL } from "./http.ts";
 
 /**
  * Serves the built web app.
@@ -15,12 +16,6 @@ import { BUILD_ID, EMBEDDED } from "./assets.generated.ts";
  */
 
 /** Vite writes content-hashed filenames into assets/, so those cache forever. */
-/**
- * A year, the conventional "forever" for content-addressed assets. Shared with
- * the wallpaper route, which serves hash-named files under the same rule.
- */
-export const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
-
 const IMMUTABLE = /\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
 
 const MIME: Record<string, string> = {
@@ -90,6 +85,10 @@ export function createStaticServer(webRoot: string) {
 
     let relative = decoded === "/" ? "index.html" : decoded.replace(/^\/+/, "");
     let resolved = await locate(relative);
+    // What the cache policy is decided against. It follows the file actually
+    // served rather than the path asked for, so an SPA route gets index.html's
+    // `no-cache` instead of the extensionless default of `must-revalidate`.
+    let served = urlPath;
 
     // SPA fallback: anything that is not a real file and does not look like an
     // asset request gets index.html.
@@ -98,7 +97,7 @@ export function createStaticServer(webRoot: string) {
       relative = "index.html";
       resolved = await locate(relative);
       if (!resolved) return null;
-      urlPath = "/index.html";
+      served = "/index.html";
     }
 
     const type =
@@ -130,7 +129,7 @@ export function createStaticServer(webRoot: string) {
 
     const headers = new Headers({
       "content-type": type,
-      "cache-control": cacheControl(urlPath),
+      "cache-control": cacheControl(served),
       etag,
       vary: "Accept-Encoding",
     });

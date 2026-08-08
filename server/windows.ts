@@ -4,7 +4,7 @@
 // between browsers and machines, and so switching workspaces can restore an
 // arrangement rather than rebuild one.
 
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   DEFAULT_WINDOW_COLS,
   DEFAULT_WINDOW_ROWS,
@@ -226,7 +226,7 @@ export function sessionNameFor(
     })
     .from(windows)
     .innerJoin(workspaces, eq(windows.workspaceId, workspaces.id))
-    .where(and(eq(windows.id, windowId)))
+    .where(eq(windows.id, windowId))
     .get();
   if (!row) return undefined;
   return {
