@@ -62,20 +62,55 @@ export function harnessCommand(profile: Profile): string | undefined {
   return `export PATH="$HOME/.local/bin:$PATH"; exec ${argv}`;
 }
 
+/** Where a window's dtach socket lives. */
+export function socketPath(config: Config, session: string): string {
+  return `${config.stateDir}/sessions/${session}.sock`;
+}
+
 /**
  * Builds the command a window runs on login.
  *
- * `-c` is the point of the projects feature: the session starts in the worktree
- * of the workspace the window belongs to. That path is looked up server-side
- * from the window id — the browser never sends a directory, so there is nothing
- * to smuggle a path through. The same is true of the profile: the window row
- * says which one it was opened as, so the browser never sends a command either.
+ * The working directory is the point of the projects feature: the session
+ * starts in the worktree of the workspace the window belongs to. That path is
+ * looked up server-side from the window id — the browser never sends a
+ * directory, so there is nothing to smuggle a path through. The same is true of
+ * the profile: the window row says which one it was opened as, so the browser
+ * never sends a command either.
  *
- * `new-session -A` attaches if the session exists and creates it otherwise, so
- * a window reattaches to exactly what it was running before a reload. That also
- * makes the harness safe to pass here: tmux ignores a shell-command when it
- * attaches, so a reload rejoins the running Claude rather than starting a
- * second one on top of it.
+ * ── Why dtach and not tmux ───────────────────────────────────────────────────
+ * A window needs exactly two things from a session manager: survive a reload,
+ * and let a real terminal take over. tmux does both, and brings a full terminal
+ * emulator with it — a second screen model that it keeps in sync with the
+ * client by sending only the cells it believes have changed. Measured on one
+ * window: 48,998 cursor hops and 2,124 erase-character sequences in a single
+ * capture, in place of simply forwarding the program's output.
+ *
+ * That optimisation is the bug. If the client's grid and tmux's model ever
+ * disagree about one cell, tmux will not send that cell again — it is certain
+ * the client already has it right — so a momentary disagreement becomes
+ * permanent, and text arrives with fragments of older frames wedged into it.
+ * The pane itself stays perfect, which is why `capture-pane` always read
+ * correctly while the browser did not, and why resizing a window cleaned it up:
+ * a resize is the one thing that makes tmux throw the model away and repaint.
+ *
+ * dtach keeps no model. It holds the pty and moves bytes, so the program talks
+ * to the browser's terminal directly and there is nothing to fall out of sync.
+ * The scrollback that tmux would have kept was never worth anything here
+ * anyway: a full-screen program like Claude runs on the alternate screen, where
+ * nothing scrolls into history — measured `history_size=0` on every window.
+ *
+ * ── The shape of the command ─────────────────────────────────────────────────
+ * `-n` creates the session detached and `-a` attaches to it, deliberately kept
+ * as two invocations rather than one `-A`. It costs a liveness probe and buys
+ * the ability to tell a client from the process that owns the pty: they differ
+ * in argv, so "detach whoever is attached" is something the server can do
+ * without risking the session itself.
+ *
+ * `-E` disables the detach character, because every key dtach reserves is a key
+ * the program underneath cannot have — the same argument that ruled out
+ * tmux's prefix. `-z` lets the suspend key through for the same reason. `-r
+ * winch` asks the program to repaint on attach, which is how a reattached
+ * window fills itself in without a screen model to replay.
  */
 export function windowCommand(
   session: string,
@@ -83,58 +118,24 @@ export function windowCommand(
   config: Config,
   profile?: Profile | null,
 ): string | undefined {
-  if (!config.tmux) return undefined;
+  if (!config.sessions) return undefined;
+
+  const sock = socketPath(config, session);
   const harness = profile ? harnessCommand(profile) : undefined;
-  const parts = [
-    `tmux -u new-session -A -s ${shellQuote(session)} -c ${shellQuote(cwd)}` +
-      (harness ? ` ${shellQuote(harness)}` : ''),
-  ];
+  // Falls back to the login shell, so a window with no profile is still a
+  // session that survives a reload rather than a bare ssh command.
+  const inner = `cd ${shellQuote(cwd)} && ${harness ?? 'exec "$SHELL"'}`;
 
-  // Session options, never global (`set -g`): a vibe-os window must not restyle
-  // tmux sessions the user started themselves on the same server.
-  const cmds: string[] = [];
+  // `dtach -p` writes to a live socket and fails on a dead one, which makes it
+  // a liveness probe. A socket left behind by a crashed session would otherwise
+  // make every later attach fail with no way back except deleting it by hand.
+  const probe = `dtach -p ${shellQuote(sock)} < /dev/null > /dev/null 2>&1`;
+  const create = `dtach -n ${shellQuote(sock)} -E -z /bin/sh -c ${shellQuote(inner)}`;
+  const attach = `exec dtach -a ${shellQuote(sock)} -E -z -r winch`;
 
-  /*
-   * Let a program inside the pane put something on the browser's clipboard.
-   *
-   * When Claude copies, it emits OSC 52. tmux's default is `external`, which
-   * despite the name means it will set the outer clipboard from its *own* copy
-   * mode but ignores the same sequence coming from an application — so a copy
-   * inside Claude goes nowhere. `on` accepts it and passes it out to the
-   * terminal, where the browser side turns it into a real clipboard write.
-   *
-   * Measured rather than assumed: with `external` the sequence never reaches
-   * xterm at all; with `on` it arrives.
-   */
-  cmds.push('set set-clipboard on');
-
-  /*
-   * Deliberately *not* setting `window-size latest` here.
-   *
-   * It is the obvious fix for two clients of different sizes dragging a session
-   * down to the smaller of them, and it is the wrong layer to fix it at: a
-   * window is meant to have exactly one client, and both ways of popping one
-   * out unmount the desktop's terminal to keep that true. Adding the option
-   * would paper over a broken handoff rather than surface it, and it only
-   * exists in tmux 2.9 and later — an unknown option here would take the whole
-   * chained command with it, which means failing to open a window at all on an
-   * older box in exchange for a case that should not arise.
-   */
-
-  if (!config.tmuxStatus) {
-    // The window's own title bar already carries the session name and state.
-    cmds.push('set status off');
-  }
-  if (config.tmuxTheme) {
-    if (config.tmuxStatus) {
-      cmds.push(
-        'set status-style "bg=#10141c fg=#9aa3b6"',
-        'set status-left-style "fg=#56cfe1 bold"',
-        'set window-status-current-style "fg=#dfe5f0 bold"',
-        'set status-right "#[fg=#667085]#H"',
-      );
-    }
-    cmds.push('set pane-border-style "fg=#1b2230"', 'set pane-active-border-style "fg=#56cfe1"');
-  }
-  return [...parts, ...cmds].join(' \\; ');
+  return [
+    `mkdir -p ${shellQuote(`${config.stateDir}/sessions`)}`,
+    `{ ${probe} || { rm -f ${shellQuote(sock)}; ${create}; }; }`,
+    attach,
+  ].join('; ');
 }

@@ -22,9 +22,9 @@ const MIN_ROWS = MIN_WINDOW_ROWS;
 
 export interface WindowState {
   id: string;
-  /** Per-workspace index; forms the tmux session name with the workspace. */
+  /** Per-workspace index; forms the session name with the workspace. */
   idx: number;
-  /** Bumped to force a fresh SSH session without touching the tmux session. */
+  /** Bumped to force a fresh SSH session without touching the dtach session. */
   generation: number;
   col: number;
   row: number;
@@ -124,7 +124,7 @@ export const MAX_TILED = TILINGS.length;
  * Local state mirrors the server so dragging stays immediate; every mutation
  * applies locally first and PATCHes in the background. Switching workspaces
  * simply swaps the rows — the SSH sessions of the workspace you left are
- * detached, not killed, which is exactly what tmux is for.
+ * detached, not killed, which is exactly what dtach is for.
  */
 export function useWindows(workspaceId: string | null) {
   const { rows, mutate, isLoading } = useWindowRows(workspaceId);
@@ -205,7 +205,7 @@ export function useWindows(workspaceId: string | null) {
    * Closes a window and ends the session behind it.
    *
    * Window indices are reused and each window attaches with
-   * `tmux new-session -A`, so a lingering session would silently reappear in the
+   * an existing socket, so a lingering session would silently reappear in the
    * next window opened. Persistence across a reload is untouched; only an
    * explicit dismissal ends anything. Minimise puts one away and keeps it.
    */

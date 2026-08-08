@@ -44,12 +44,11 @@ export interface Config {
   /** null disables the gate entirely (with a loud warning at startup). */
   token: string | null;
   certTtlSeconds: number;
-  /** Wrap each pane in `tmux new-session -A`. Auto-detected unless forced. */
-  tmux: boolean;
-  /** Restyle the tmux status bar to match the desktop. Session-scoped. */
-  tmuxTheme: boolean;
-  /** Show tmux's own status bar inside each window. */
-  tmuxStatus: boolean;
+  /**
+   * Keep each window in a dtach session so it survives a reload. Auto-detected
+   * from whether dtach is installed, unless forced.
+   */
+  sessions: boolean;
 
   open: boolean;
 }
@@ -75,10 +74,8 @@ export const OPTION_SPEC = {
   token: { type: 'string' as const },
   'no-token': { type: 'boolean' as const },
   'cert-ttl': { type: 'string' as const },
-  tmux: { type: 'boolean' as const },
-  'no-tmux': { type: 'boolean' as const },
-  'no-tmux-theme': { type: 'boolean' as const },
-  'tmux-status': { type: 'boolean' as const },
+  sessions: { type: 'boolean' as const },
+  'no-sessions': { type: 'boolean' as const },
   open: { type: 'boolean' as const },
   help: { type: 'boolean' as const, short: 'h' },
   version: { type: 'boolean' as const, short: 'v' },
@@ -114,12 +111,14 @@ export function parseCliArgs(argv: string[]): { values: RawOptions; positionals:
   return { values: values as RawOptions, positionals };
 }
 
-async function hasTmux(): Promise<boolean> {
+async function hasDtach(): Promise<boolean> {
   try {
-    await run('tmux', ['-V'], { timeout: 5_000 });
+    // dtach exits non-zero with no mode, so its usage text is the liveness
+    // check; `--help` is not a flag it accepts either.
+    await run('dtach', ['--help'], { timeout: 5_000 });
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return (err as { stdout?: string })?.stdout?.includes('dtach - version') === true;
   }
 }
 
@@ -169,7 +168,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
     token = persisted.token ?? null;
   }
 
-  const tmux = values['no-tmux'] ? false : values.tmux ? true : await hasTmux();
+  const sessions = values['no-sessions'] ? false : values.sessions ? true : await hasDtach();
 
   return {
     port: num(values.port ?? process.env.VIBE_OS_PORT, 80, 'port'),
@@ -187,9 +186,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
     workspace: path.resolve(String(values.workspace ?? process.env.VIBE_OS_WORKSPACE ?? path.join(os.homedir(), 'workspace'))),
     token,
     certTtlSeconds: num(values['cert-ttl'], 12 * 60 * 60, 'cert-ttl'),
-    tmux,
-    tmuxTheme: !values['no-tmux-theme'],
-    tmuxStatus: Boolean(values['tmux-status']),
+    sessions,
     open: Boolean(values.open),
   };
 }

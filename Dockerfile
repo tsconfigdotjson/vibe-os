@@ -1,8 +1,8 @@
-# A blank Linux box with sshd, tmux and vibe-os on port 80 — the same shape as
+# A blank Linux box with sshd, dtach and vibe-os on port 80 — the same shape as
 # a fresh VPS, close enough to be a real rehearsal for one.
 #
 # The runtime stage deliberately contains no Bun, no Node and no npm. It is
-# plain Debian plus OpenSSH, tmux and one compiled executable. If anything the
+# plain Debian plus OpenSSH, dtach and one compiled executable. If anything the
 # server needs at runtime were not actually embedded in that binary, this image
 # would fail to start rather than quietly work because a source tree happened to
 # be lying around.
@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       # (to discover the host key to pin). Neither is guaranteed by the server
       # package, and without them the server refuses to start.
       openssh-client \
-      tmux \
+      dtach \
       git \
       # provides setcap, used below to let an unprivileged vibe-os bind port 80
       libcap2-bin \

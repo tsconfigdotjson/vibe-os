@@ -26,7 +26,7 @@ type Handle = (typeof HANDLES)[number];
  * Both destinations mean the same thing to the desktop — let go of the session,
  * show a placeholder — and differ only in who picks it up and how it comes
  * back. A browser pop-out is asked to close over a BroadcastChannel; a terminal
- * is detached by the server with `tmux detach-client`.
+ * is detached by the server, which kills the attached dtach client.
  */
 export type PopTarget = 'browser' | 'ssh';
 
@@ -306,8 +306,8 @@ export const TermWindow = memo(function TermWindow({
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={!server.tmux}
-                  title={server.tmux ? undefined : 'This server runs plain login shells (--no-tmux)'}
+                  disabled={!server.sessions}
+                  title={server.sessions ? undefined : 'This server runs plain login shells (--no-sessions)'}
                   onClick={() => {
                     setMenuOpen(false);
                     onHandoff(win.id, 'ssh');
@@ -348,8 +348,8 @@ export const TermWindow = memo(function TermWindow({
         {/*
           Unmounted while popped out, not merely hidden. The terminal owns an
           SSH connection, and leaving it mounted would put a second client on
-          the tmux session — which tmux would then size to whichever of the two
-          windows is smaller. The session itself is untouched: it lives on the
+          the session — which dtach would then size to whichever of the two
+          windows most recently arrived. The session itself is untouched: it lives on the
           server, and both views only ever attach to it.
         */}
         {poppedTo === 'ssh' ? (

@@ -56,7 +56,7 @@ function banner(config: Config, port: number, urls: string[], extras: string[]):
   console.log(`  ${color.bold('open')}      ${color.cyan(urls[0])}`);
   for (const extra of urls.slice(1, 4)) console.log(`            ${color.dim(extra)}`);
   console.log(`  ${color.dim('shell')}     ${config.user}@${config.sshHost}:${config.sshPort}`);
-  console.log(`  ${color.dim('windows')}   ${config.tmux ? 'tmux-backed (survive reload)' : 'plain login shell'}`);
+  console.log(`  ${color.dim('windows')}   ${config.sessions ? 'dtach-backed (survive reload)' : 'plain login shell'}`);
   for (const extra of extras) console.log(`  ${color.dim(extra)}`);
   console.log(`  ${line}`);
 
@@ -140,7 +140,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
     /*
      * `/t/<ref>` — a URL you type into a terminal.
      *
-     * It answers with a short shell script that execs `ssh -t … tmux …`, so
+     * It answers with a short shell script that execs `ssh -t … dtach …`, so
      * `sh -c "$(curl -sSL …/t/quiet-amber-otter-1)"` lands you in the session.
      * Everything is resolved here rather than on the far side, so the box needs
      * nothing installed for this to work — not even vibe-os on the PATH — and
@@ -162,7 +162,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
         });
 
       if (gate.checkAllowingParam(req, url)) return text('# unauthorized\n', 401);
-      if (!config.tmux) return text('# this server runs plain login shells (--no-tmux)\n', 409);
+      if (!config.sessions) return text('# this server runs plain login shells (--no-sessions)\n', 409);
 
       const ref = decodeURIComponent(attach[1]);
       const info = attachInfo(db, config, ref, publicOrigin(req, url), publicHost(req, url));

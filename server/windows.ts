@@ -102,8 +102,8 @@ function placement(index: number): Geometry {
 export function createWindow(db: Db, workspaceId: string, profileId?: string | null) {
   const existing = listWindows(db, workspaceId);
 
-  // Lowest unused index: it becomes part of the tmux session name, which people
-  // read in `tmux ls`, so it should stay short and get reused.
+  // Lowest unused index: it becomes part of the session name, which people read
+  // when picking a window to attach to, so it should stay short and get reused.
   const used = new Set(existing.map((w) => w.idx));
   let idx = 1;
   while (used.has(idx)) idx += 1;
@@ -175,9 +175,9 @@ export function deleteWindow(db: Db, id: string) {
 }
 
 /**
- * The tmux session name for a window, with everything else needed to launch it.
+ * The session name for a window, with everything else needed to launch it.
  *
- * Built from the workspace name and the window index so `tmux ls` reads as
+ * Built from the workspace name and the window index so the session list reads as
  * something a person recognises: `vibe-quiet-amber-otter-1`. The profile is
  * deliberately *not* folded into the name — renaming a role would then orphan
  * the session running it, for no gain a person would notice.
