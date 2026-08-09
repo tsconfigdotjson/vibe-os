@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import pkg from "../package.json" with { type: "json" };
@@ -11,13 +12,22 @@ import {
   resolveTarget,
 } from "./attach.ts";
 import {
+  archSupported,
+  BROWSER_COMMANDS,
+  browserServices,
+  browserUnits,
+  defaultBrowserOptions,
+  type Unit,
+} from "./browser.ts";
+import {
   type Config,
   parseCliArgs,
+  type RawOptions,
   resolveConfig,
   savePersisted,
 } from "./config.ts";
 import { openDb } from "./db.ts";
-import { type Check, homeFor, runDoctor } from "./doctor.ts";
+import { type Check, homeFor, onPath, runDoctor } from "./doctor.ts";
 import { startServer } from "./index.ts";
 import { color, describeError, log } from "./log.ts";
 import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
@@ -35,6 +45,7 @@ const HELP = `
     vibe-os attach [window]      attach a real terminal to a window's session
     vibe-os doctor               check this machine is ready
     vibe-os install-service      write and enable a systemd unit (needs root)
+    vibe-os install-browser      run one Chrome on a virtual display (needs root)
     vibe-os fetch-wasm           (re)download the SSH WASM runtime
 
   ${color.bold("Options")}
@@ -63,6 +74,15 @@ const HELP = `
 
     -h, --help          show this
     -v, --version       print the version
+
+  ${color.bold("install-browser")}
+    --geometry <WxH>    virtual screen size (default 1600x900)
+    --display <n>       X display number (default 99)
+    --vnc-port <n>      VNC port, bound to loopback (default 5900)
+    --cdp-port <n>      Chrome debug port, bound to loopback (default 9222)
+    --restart-at <expr> nightly restart, a systemd OnCalendar expression
+                        (default '*-*-* 02:00:00 America/New_York')
+    --no-restart        do not install the nightly restart timer
 `;
 
 function version(): string {
@@ -185,6 +205,147 @@ WantedBy=multi-user.target
   console.log(`  restart: ${color.cyan("systemctl restart vibe-os")}`);
   console.log("");
   return 0;
+}
+
+/**
+ * Installs the always-on browser.
+ *
+ * Separate from `install-service` on purpose. vibe-os runs perfectly well with
+ * no browser on the box, the packages this needs are large, and Chrome for
+ * Linux is x86_64 only — so this is opted into rather than arriving with
+ * everything else.
+ */
+async function installBrowser(
+  config: Config,
+  values: RawOptions,
+): Promise<number> {
+  if (process.getuid?.() !== 0) {
+    log.error(
+      "install-browser must run as root (try: sudo vibe-os install-browser …)",
+    );
+    return 1;
+  }
+
+  if (!archSupported()) {
+    log.error(
+      `Google publishes no Chrome for Linux on ${os.arch()} — only x86_64.`,
+    );
+    log.error(
+      "Chromium is not a substitute here: the Claude extension requires Chrome itself.",
+    );
+    return 1;
+  }
+
+  const user = process.env.SUDO_USER ?? config.user;
+  if (!user || user === "unknown" || user === "root") {
+    log.error(
+      `refusing to run a browser as ${user || "an unknown user"} — Chrome will ` +
+        "not start as root without --no-sandbox, and turning the sandbox off on " +
+        "a box that holds your credentials is not a trade worth making.",
+    );
+    log.error("run this with sudo from your own account.");
+    return 1;
+  }
+
+  const home = await homeFor(user);
+  if (!home) {
+    log.error(`could not resolve a home directory for ${user}`);
+    return 1;
+  }
+
+  // Every missing command at once. Finding out about them one install at a time
+  // is three round trips to a box you are probably ssh'd into.
+  const missing: string[] = [];
+  for (const entry of BROWSER_COMMANDS) {
+    if (!(await onPath(entry.command)))
+      missing.push(`${entry.command} (${entry.package}) — ${entry.why}`);
+  }
+  if (missing.length > 0) {
+    log.error("missing commands:");
+    for (const line of missing) console.log(`    ${line}`);
+    console.log("");
+    console.log(
+      `  ${color.cyan("sudo apt install -y tigervnc-standalone-server openbox x11-utils")}`,
+    );
+    console.log(
+      `  ${color.dim("Chrome is not in the distro repos; see the README for the Google apt repo.")}`,
+    );
+    console.log("");
+    return 1;
+  }
+
+  const opts = defaultBrowserOptions(user, home);
+  if (values.geometry) opts.geometry = String(values.geometry);
+  if (values.display) opts.display = numeric(values.display, "display");
+  if (values["vnc-port"])
+    opts.vncPort = numeric(values["vnc-port"], "vnc-port");
+  if (values["cdp-port"])
+    opts.cdpPort = numeric(values["cdp-port"], "cdp-port");
+  if (values["restart-at"]) opts.restartAt = String(values["restart-at"]);
+  if (values["no-restart"]) opts.restartAt = null;
+
+  let units: Unit[];
+  try {
+    units = browserUnits(opts);
+  } catch (err) {
+    log.error(describeError(err));
+    return 1;
+  }
+
+  // systemd is the authority on its own calendar syntax, and a timer that never
+  // fires is silent. Ask it before writing the unit rather than after.
+  if (opts.restartAt) {
+    try {
+      await run("systemd-analyze", ["calendar", opts.restartAt]);
+    } catch {
+      log.error(
+        `systemd cannot parse --restart-at ${JSON.stringify(opts.restartAt)}`,
+      );
+      log.error(
+        "try:  --restart-at '*-*-* 02:00:00 America/New_York'   (include the timezone)",
+      );
+      return 1;
+    }
+  }
+
+  await mkdir(opts.profileDir, { recursive: true });
+  await run("chown", ["-R", `${user}:`, opts.profileDir]).catch(() => {});
+
+  for (const unit of units) {
+    await writeFile(`/etc/systemd/system/${unit.name}`, unit.contents, {
+      mode: 0o644,
+    });
+    log.ok(`wrote /etc/systemd/system/${unit.name}`);
+  }
+
+  await run("systemctl", ["daemon-reload"]);
+  await run("systemctl", ["enable", "--now", ...browserServices(opts)]);
+  log.ok("enabled and started the browser");
+
+  console.log("");
+  console.log(
+    `  view it:  ${color.cyan(`ssh -L ${opts.vncPort}:127.0.0.1:${opts.vncPort} ${user}@<this-host>`)}`,
+  );
+  console.log(
+    `            ${color.dim(`then point any VNC viewer at 127.0.0.1:${opts.vncPort} (no password)`)}`,
+  );
+  console.log(`  logs:     ${color.cyan("journalctl -u vibe-os-chrome -f")}`);
+  console.log(`  restart:  ${color.cyan("systemctl restart vibe-os-chrome")}`);
+  if (opts.restartAt) console.log(`  nightly:  ${color.dim(opts.restartAt)}`);
+  console.log("");
+  console.log(
+    `  ${color.dim("Sign in to the extension once, through the viewer. The profile keeps it.")}`,
+  );
+  console.log("");
+  return 0;
+}
+
+/** A flag that must be a positive integer, rejected loudly when it is not. */
+function numeric(value: string | boolean, label: string): number {
+  const n = Number(String(value));
+  if (!Number.isInteger(n) || n < 0)
+    throw new Error(`invalid --${label}: ${String(value)}`);
+  return n;
 }
 
 /**
@@ -351,6 +512,8 @@ export async function main(argv: string[]): Promise<number> {
       return printChecks(await runDoctor(config));
     case "install-service":
       return installService(config, argv);
+    case "install-browser":
+      return installBrowser(config, values);
     case "fetch-wasm": {
       // A standalone binary carries the wasm inside it: there is no script on
       // disk to run (FETCH_WASM points into the virtual /$bunfs root) and

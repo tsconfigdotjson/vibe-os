@@ -46,6 +46,7 @@ edit, no `sshd_config` change, and no root.
   - [Behind Tailscale](#behind-tailscale)
   - [Firewall](#firewall)
   - [Running it as a service](#running-it-as-a-service)
+  - [An always-on browser](#an-always-on-browser)
   - [Giving the box a GitHub identity](#giving-the-box-a-github-identity)
   - [Updating a running box](#updating-a-running-box)
 - [Security](#security)
@@ -423,6 +424,122 @@ sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
 
 Otherwise vibe-os falls back to port 8080 and says so.
 
+### An always-on browser
+
+One Google Chrome, on a virtual display, running for as long as the box does.
+It is where a browser extension lives on a machine with no screen. Optional, and
+separate from `install-service`.
+
+x86\_64 only. Google publishes no arm64 Chrome for Linux, and Chromium is not a
+substitute if you want the Claude in Chrome extension.
+
+```bash
+sudo apt install -y tigervnc-standalone-server openbox x11-utils
+
+curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+  | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] \
+https://dl.google.com/linux/chrome/deb/ stable main" \
+  | sudo tee /etc/apt/sources.list.d/google-chrome.list
+sudo apt update && sudo apt install -y google-chrome-stable
+
+sudo vibe-os install-browser
+```
+
+That writes seven units: an X server with VNC built in, a window manager, Chrome
+itself, a liveness probe on a timer, and a nightly restart on a timer. All of
+them restart on failure.
+
+| Flag | Default |
+| --- | --- |
+| `--geometry <WxH>` | `1600x900` |
+| `--display <n>` | `99` |
+| `--vnc-port <n>` | `5900`, loopback only |
+| `--cdp-port <n>` | `9222`, loopback only |
+| `--restart-at <expr>` | `*-*-* 02:00:00 America/New_York` |
+| `--no-restart` | install no nightly timer |
+
+Include the timezone in `--restart-at`. systemd reads a bare time as UTC.
+
+Give it two gigabytes of headroom counting swap. Chrome idles near 0.5GB, and on
+a box without it the OOM killer takes terminal sessions rather than tabs.
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+#### Using it
+
+The display has no VNC password. It listens on loopback, so reach it through
+SSH, and `sudo vibe-os doctor` fails loudly if it is ever bound anywhere else.
+
+```bash
+ssh -L 5900:127.0.0.1:5900 you@host
+```
+
+Point any VNC viewer at `127.0.0.1:5900`. TigerVNC Viewer, RealVNC Viewer and
+Remmina all connect straight through.
+
+macOS Screen Sharing will not take a server with no authentication: it asks for
+a password that does not exist. Give it one, keeping the loopback bind as the
+layer that actually protects the box:
+
+```bash
+vncpasswd -f <<<'yourpass' > ~/.vibe-os/vncpasswd
+chmod 600 ~/.vibe-os/vncpasswd
+sudo sed -i 's|-SecurityTypes None|-SecurityTypes VncAuth -PasswordFile '"$HOME"'/.vibe-os/vncpasswd|' \
+  /etc/systemd/system/vibe-os-xvnc.service
+sudo systemctl daemon-reload && sudo systemctl restart vibe-os-xvnc
+```
+
+Then open `vnc://127.0.0.1:5900` and leave the username blank. VNC authentication
+is DES-based and truncates at 8 characters, so treat it as a second layer and
+not as the thing keeping the box shut. `install-browser` rewrites this unit, so
+reapply it after a reinstall.
+
+```bash
+systemctl restart vibe-os-chrome     # bounce it now
+journalctl -u vibe-os-chrome -f      # what it is saying
+sudo systemctl stop vibe-os-chrome vibe-os-wm vibe-os-xvnc    # stop all of it
+```
+
+Open a URL in the running instance from a terminal on the box:
+
+```bash
+DISPLAY=:99 google-chrome https://example.com
+```
+
+The nightly restart closes leftover tabs and returns the memory a day of
+browsing took. The profile lives in `~/.vibe-os/chrome` and carries sign-ins
+across a restart, so this does not log you out.
+
+#### Extensions
+
+Install by hand through the viewer, or force-install without any interaction:
+
+```bash
+sudo mkdir -p /etc/opt/chrome/policies/managed
+sudo tee /etc/opt/chrome/policies/managed/vibe-os.json <<'JSON'
+{
+  "ExtensionInstallForcelist": [
+    "fcoeoabgfenejglbffodgkkbkcdhcgfn;https://clients2.google.com/service/update2/crx"
+  ]
+}
+JSON
+sudo systemctl restart vibe-os-chrome
+```
+
+That ID is Claude in Chrome. Take any other from its Chrome Web Store URL.
+
+Signing in is interactive, including a captcha, so do it once through the
+viewer. Claude in Chrome needs a paid plan.
+
+Anyone who reaches this browser gets whatever it is signed in to. That is the
+same token and the same tailnet that already hand out shells, but it is a wider
+blast radius than a shell alone.
+
 ### Giving the box a GitHub identity
 
 Workspaces are branches, and pushing happens in the terminal, so a box with no
@@ -522,6 +639,7 @@ in a session could otherwise ask what you last copied.
 | `vibe-os attach [window]` | attach this terminal to a window's session |
 | `vibe-os doctor` | check this machine is ready, and say what is missing |
 | `sudo vibe-os install-service` | write and enable a systemd unit |
+| `sudo vibe-os install-browser` | run one Chrome on a virtual display |
 | `vibe-os fetch-wasm` | re-download the SSH WASM runtime |
 
 ```
@@ -547,6 +665,18 @@ in a session could otherwise ask what you last copied.
 --workspace <dir>   where worktrees are created (default ~/workspace)
 --state-dir <dir>   CA, TLS material and generated MCP configs
                     (default ~/.vibe-os)
+```
+
+`install-browser` takes its own flags:
+
+```
+--geometry <WxH>    virtual screen size (default 1600x900)
+--display <n>       X display number (default 99)
+--vnc-port <n>      VNC port, bound to loopback (default 5900)
+--cdp-port <n>      Chrome debug port, bound to loopback (default 9222)
+--restart-at <expr> nightly restart, a systemd OnCalendar expression
+                    (default '*-*-* 02:00:00 America/New_York')
+--no-restart        do not install the nightly restart timer
 ```
 
 Every option except `--tls-port` and `--cert-ttl` also reads a `VIBE_OS_`

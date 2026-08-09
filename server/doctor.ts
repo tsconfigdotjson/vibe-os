@@ -15,6 +15,14 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import {
+  archSupported,
+  BROWSER_COMMANDS,
+  memoryHeadroom,
+  parseMemInfo,
+  portsFromUnits,
+  vncExposure,
+} from "./browser.ts";
 import type { Config } from "./config.ts";
 import { IS_COMPILED } from "./runtime.ts";
 import { discoverHostKey, SshCa } from "./ssh-ca.ts";
@@ -112,6 +120,9 @@ async function firewallState(): Promise<FirewallState> {
   return { tool: null, unreadable: true, ...blank };
 }
 
+const CHROME_UNIT = "/etc/systemd/system/vibe-os-chrome.service";
+const XVNC_UNIT = "/etc/systemd/system/vibe-os-xvnc.service";
+
 export interface Check {
   label: string;
   ok: boolean;
@@ -191,13 +202,137 @@ function bindStatus(
  * built its script by interpolation, which no caller exploited but nothing
  * stopped either.
  */
-async function onPath(command: string): Promise<boolean> {
+export async function onPath(command: string): Promise<boolean> {
   try {
     await run("/bin/sh", ["-c", 'command -v "$1" > /dev/null', "sh", command]);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * The always-on browser, when there is one.
+ *
+ * Returns nothing at all unless the units are installed or Chrome is present,
+ * so this stays invisible on the boxes that never asked for it.
+ */
+async function browserChecks(): Promise<Check[]> {
+  const readIfPresent = (p: string) =>
+    readFile(p, "utf8").catch(() => null as string | null);
+  const [chromeUnit, xvncUnit] = await Promise.all([
+    readIfPresent(CHROME_UNIT),
+    readIfPresent(XVNC_UNIT),
+  ]);
+  const chromeInstalled = await onPath("google-chrome");
+  if (!chromeUnit && !xvncUnit && !chromeInstalled) return [];
+
+  const checks: Check[] = [];
+  const { vncPort, cdpPort } = portsFromUnits({
+    xvnc: xvncUnit,
+    chrome: chromeUnit,
+  });
+
+  if (!archSupported()) {
+    checks.push(
+      bad(
+        "browser",
+        `Chrome for Linux is x86_64 only, and this is ${os.arch()}`,
+        "there is no fix — the extension needs Chrome itself, not Chromium",
+      ),
+    );
+    return checks;
+  }
+
+  const missing = [];
+  for (const entry of BROWSER_COMMANDS) {
+    if (!(await onPath(entry.command))) missing.push(entry.package);
+  }
+  if (missing.length > 0) {
+    checks.push(
+      bad(
+        "browser",
+        `installed as a service, but missing: ${missing.join(", ")}`,
+        "vibe-os install-browser prints the apt line",
+      ),
+    );
+  }
+
+  // Is it actually up? A unit that exists and a browser that answers are
+  // different claims, and only the second one means you can use it.
+  if (chromeUnit) {
+    const answering = await probeTcp("127.0.0.1", cdpPort, 3000);
+    checks.push(
+      answering
+        ? ok("browser", `Chrome answering on 127.0.0.1:${cdpPort}`)
+        : bad(
+            "browser",
+            `installed, but nothing answers the debug port on 127.0.0.1:${cdpPort}`,
+            "systemctl status vibe-os-chrome && journalctl -u vibe-os-chrome -n 50",
+          ),
+    );
+  }
+
+  // Where the display is listening is the whole security model for it: served
+  // with no password, on the argument that only loopback can reach it.
+  const ss = await run("ss", ["-ltnH"], { timeout: 5_000 })
+    .then((r) => r.stdout)
+    .catch(() => null);
+
+  if (!ss) {
+    checks.push(
+      bad(
+        "display",
+        "could not read listening sockets, so nothing here can say where VNC is bound",
+        "install iproute2, or check by hand: ss -ltn | grep 5900",
+      ),
+    );
+  } else {
+    const exposure = vncExposure(ss, vncPort);
+    if (exposure === "loopback") {
+      checks.push(
+        ok(
+          "display",
+          `VNC on ${vncPort}, loopback only — reach it with ssh -L ${vncPort}:127.0.0.1:${vncPort}`,
+        ),
+      );
+    } else if (exposure === "exposed") {
+      checks.push(
+        fatal(
+          "display",
+          `VNC on ${vncPort} is bound beyond loopback, and it has no password — ` +
+            "anyone who can route here gets the browser and everything signed in to it",
+          "add -localhost to the Xtigervnc line in vibe-os-xvnc.service, then: systemctl restart vibe-os-xvnc",
+        ),
+      );
+    } else if (chromeUnit || xvncUnit) {
+      checks.push(
+        bad(
+          "display",
+          `nothing listening on ${vncPort} — the virtual display is not running`,
+          "systemctl status vibe-os-xvnc",
+        ),
+      );
+    }
+  }
+
+  const mem = parseMemInfo(
+    await readIfPresent("/proc/meminfo").then((t) => t ?? ""),
+  );
+  if (mem) {
+    const headroom = memoryHeadroom(mem);
+    checks.push(
+      headroom.ok
+        ? ok("browser memory", headroom.detail)
+        : bad(
+            "browser memory",
+            `${headroom.detail} — Chrome idles near 0.5GiB and the OOM killer takes terminals, not tabs`,
+            "sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile",
+          ),
+    );
+  }
+
+  return checks;
 }
 
 /** The home directory sshd will use for a user, which need not be ours. */
@@ -621,6 +756,13 @@ export async function runDoctor(config: Config): Promise<Check[]> {
           ),
     );
   }
+
+  // ── the always-on browser ────────────────────────────────────────────────
+  //
+  // Only reported when there is something to report. vibe-os is complete
+  // without a browser on the box, and a machine that never asked for one should
+  // not be told about four things it does not have.
+  checks.push(...(await browserChecks()));
 
   // ── exposure ─────────────────────────────────────────────────────────────
   //

@@ -84,6 +84,14 @@ export const OPTION_SPEC = {
   "theme-color": { type: "string" as const },
   sessions: { type: "boolean" as const },
   "no-sessions": { type: "boolean" as const },
+  // install-browser only. Kept here because parseArgs is strict, and a flag it
+  // has never heard of is an error rather than something a subcommand can read.
+  geometry: { type: "string" as const },
+  display: { type: "string" as const },
+  "vnc-port": { type: "string" as const },
+  "cdp-port": { type: "string" as const },
+  "restart-at": { type: "string" as const },
+  "no-restart": { type: "boolean" as const },
   help: { type: "boolean" as const, short: "h" },
   version: { type: "boolean" as const, short: "v" },
 };
