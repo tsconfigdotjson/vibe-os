@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parseNftOrIptables, parseUfw } from "../server/doctor.ts";
+import {
+  authorizedKeysPaths,
+  parseNftOrIptables,
+  parseUfw,
+} from "../server/doctor.ts";
 
 /**
  * Firewall parsing, against real output.
@@ -138,5 +142,81 @@ describe("parseNftOrIptables", () => {
     const r = parseNftOrIptables("");
     expect(r.active).toBe(false);
     expect(r.defaultDeny).toBe(false);
+  });
+});
+
+/**
+ * sshd's AuthorizedKeysFile tokens.
+ *
+ * The expansion parks `%%` on a sentinel first, so an escaped percent cannot be
+ * re-read as the start of a token. That sentinel used to be a raw NUL byte
+ * written straight into the source, which made doctor.ts binary to grep, ripgrep
+ * and diffs: searching the file returned nothing, and said nothing about why.
+ */
+describe("authorizedKeysPaths", () => {
+  const HOME = "/home/ubuntu";
+
+  test("expands %h and %u", () => {
+    expect(
+      authorizedKeysPaths("%h/.ssh/authorized_keys", HOME, "ubuntu"),
+    ).toEqual(["/home/ubuntu/.ssh/authorized_keys"]);
+    expect(authorizedKeysPaths("/etc/ssh/keys/%u", HOME, "ubuntu")).toEqual([
+      "/etc/ssh/keys/ubuntu",
+    ]);
+  });
+
+  /** What the sentinel is for: %%h is a literal %h, not the home directory. */
+  test("%% is an escaped percent and does not start a token", () => {
+    expect(authorizedKeysPaths("/etc/%%h", HOME, "ubuntu")).toEqual([
+      "/etc/%h",
+    ]);
+    expect(authorizedKeysPaths("/etc/%%u", HOME, "ubuntu")).toEqual([
+      "/etc/%u",
+    ]);
+    expect(authorizedKeysPaths("/etc/%%", HOME, "ubuntu")).toEqual(["/etc/%"]);
+  });
+
+  test("splits the several paths sshd allows", () => {
+    expect(
+      authorizedKeysPaths(
+        "%h/.ssh/authorized_keys .ssh/authorized_keys2",
+        HOME,
+        "ubuntu",
+      ),
+    ).toEqual([
+      "/home/ubuntu/.ssh/authorized_keys",
+      "/home/ubuntu/.ssh/authorized_keys2",
+    ]);
+  });
+
+  test("a relative path resolves against home, as sshd does", () => {
+    expect(authorizedKeysPaths(".ssh/authorized_keys", HOME, "ubuntu")).toEqual(
+      ["/home/ubuntu/.ssh/authorized_keys"],
+    );
+  });
+
+  test("an empty spec yields nothing", () => {
+    expect(authorizedKeysPaths("", HOME, "ubuntu")).toEqual([]);
+    expect(authorizedKeysPaths("   ", HOME, "ubuntu")).toEqual([]);
+  });
+});
+
+/**
+ * A NUL byte anywhere in the source makes that file binary to grep, ripgrep and
+ * GitHub diffs, and nothing announces it. Write the escape sequence instead of
+ * the byte.
+ */
+describe("source files are text", () => {
+  test("no source file contains a NUL byte", async () => {
+    const { Glob } = await import("bun");
+    const offenders: string[] = [];
+    for (const dir of ["server", "src", "shared", "test", "scripts"]) {
+      const glob = new Glob("**/*.{ts,tsx,js,mjs,json,css,html}");
+      for await (const file of glob.scan(dir)) {
+        const bytes = await Bun.file(`${dir}/${file}`).bytes();
+        if (bytes.includes(0)) offenders.push(`${dir}/${file}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
