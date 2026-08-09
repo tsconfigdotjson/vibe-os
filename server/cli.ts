@@ -1,6 +1,8 @@
 import { execFile, spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import pkg from "../package.json" with { type: "json" };
@@ -18,6 +20,9 @@ import {
   browserUnits,
   defaultBrowserOptions,
   type Unit,
+  VNC_PASSWORD_LENGTH,
+  vncPasswordFileFromUnit,
+  vncPasswordPath,
 } from "./browser.ts";
 import {
   type Config,
@@ -83,6 +88,11 @@ const HELP = `
     --restart-at <expr> nightly restart, a systemd OnCalendar expression
                         (default '*-*-* 02:00:00 America/New_York')
     --no-restart        do not install the nightly restart timer
+    --vnc-password [value]
+                        require a VNC password; generates and prints one if
+                        omitted. macOS Screen Sharing will not connect without
+                        this. An existing one is kept unless --no-vnc-password
+    --no-vnc-password   serve the display with no authentication
 `;
 
 function version(): string {
@@ -284,6 +294,41 @@ async function installBrowser(
   if (values["restart-at"]) opts.restartAt = String(values["restart-at"]);
   if (values["no-restart"]) opts.restartAt = null;
 
+  // VNC authentication, resolved before anything is written.
+  //
+  // The default is "whatever this box already had". install-browser rewrites
+  // every unit, so a reinstall is exactly when a password someone set by hand
+  // would disappear without a word.
+  const existing = vncPasswordFileFromUnit(
+    await readFile(XVNC_UNIT_PATH, "utf8").catch(() => null),
+  );
+  let generated: string | null = null;
+
+  if (values["no-vnc-password"]) {
+    opts.vncPasswordFile = null;
+  } else if (values["vnc-password"] !== undefined) {
+    const supplied = String(values["vnc-password"]);
+    // A bare --vnc-password means "make one up", and the caller has to be told
+    // what it was, so remember it for the summary rather than only writing it.
+    if (!supplied) generated = randomVncPassword();
+    const password = supplied || (generated as string);
+    const file = vncPasswordPath(home);
+    try {
+      await writeVncPassword(file, password, user);
+    } catch (err) {
+      log.error(`could not write ${file}: ${describeError(err)}`);
+      return 1;
+    }
+    opts.vncPasswordFile = file;
+    if (supplied.length > VNC_PASSWORD_LENGTH)
+      log.warn(
+        `VNC authentication truncates at ${VNC_PASSWORD_LENGTH} characters, so only the first ${VNC_PASSWORD_LENGTH} count`,
+      );
+  } else if (existing) {
+    opts.vncPasswordFile = existing;
+    log.info(`keeping the VNC password already set in ${existing}`);
+  }
+
   let units: Unit[];
   try {
     units = browserUnits(opts);
@@ -327,11 +372,26 @@ async function installBrowser(
     `  view it:  ${color.cyan(`ssh -L ${opts.vncPort}:127.0.0.1:${opts.vncPort} ${user}@<this-host>`)}`,
   );
   console.log(
-    `            ${color.dim(`then point any VNC viewer at 127.0.0.1:${opts.vncPort} (no password)`)}`,
+    `            ${color.dim(`then point any VNC viewer at 127.0.0.1:${opts.vncPort}`)}`,
   );
   console.log(`  logs:     ${color.cyan("journalctl -u vibe-os-chrome -f")}`);
   console.log(`  restart:  ${color.cyan("systemctl restart vibe-os-chrome")}`);
   if (opts.restartAt) console.log(`  nightly:  ${color.dim(opts.restartAt)}`);
+  console.log("");
+  if (generated) {
+    console.log(`  ${color.bold("VNC password:")} ${color.cyan(generated)}`);
+    console.log(
+      `            ${color.dim("shown once, and stored obfuscated in " + opts.vncPasswordFile)}`,
+    );
+  } else if (opts.vncPasswordFile) {
+    console.log(
+      `  ${color.dim(`VNC password from ${opts.vncPasswordFile}, username blank`)}`,
+    );
+  } else {
+    console.log(
+      `  ${color.dim("No VNC password. macOS Screen Sharing needs one: rerun with --vnc-password")}`,
+    );
+  }
   console.log("");
   console.log(
     `  ${color.dim("Sign in to the extension once, through the viewer. The profile keeps it.")}`,
@@ -346,6 +406,57 @@ function numeric(value: string | boolean, label: string): number {
   if (!Number.isInteger(n) || n < 0)
     throw new Error(`invalid --${label}: ${String(value)}`);
   return n;
+}
+
+const XVNC_UNIT_PATH = "/etc/systemd/system/vibe-os-xvnc.service";
+
+/**
+ * Eight characters, because VNC authentication silently ignores the rest.
+ *
+ * Alphanumeric only: this gets typed into a viewer's password box by hand, and
+ * a character that needs a modifier on somebody's keyboard layout is a support
+ * question rather than security.
+ */
+function randomVncPassword(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = randomBytes(VNC_PASSWORD_LENGTH * 2);
+  let out = "";
+  for (const byte of bytes) {
+    if (out.length === VNC_PASSWORD_LENGTH) break;
+    // Reject the tail of the byte range rather than modulo it, so every
+    // character stays equally likely.
+    if (byte >= 256 - (256 % alphabet.length)) continue;
+    out += alphabet[byte % alphabet.length];
+  }
+  return out.padEnd(VNC_PASSWORD_LENGTH, "x");
+}
+
+/**
+ * Writes TigerVNC's obfuscated password file.
+ *
+ * The plaintext goes in on stdin rather than as an argument: an argument would
+ * be visible in `ps` for as long as the call takes, on the one command whose
+ * entire purpose is to keep a secret.
+ */
+async function writeVncPassword(
+  file: string,
+  password: string,
+  user: string,
+): Promise<void> {
+  const result = spawnSync("vncpasswd", ["-f"], { input: password });
+  if (result.error) throw result.error;
+  if (result.status !== 0)
+    throw new Error(
+      `vncpasswd exited ${result.status}: ${String(result.stderr).trim()}`,
+    );
+  const obfuscated = result.stdout;
+  if (!obfuscated || obfuscated.length === 0)
+    throw new Error("vncpasswd produced an empty password file");
+
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, obfuscated, { mode: 0o600 });
+  // Written by root, read by the X server running as the login user.
+  await run("chown", [`${user}:`, file]).catch(() => {});
 }
 
 /**

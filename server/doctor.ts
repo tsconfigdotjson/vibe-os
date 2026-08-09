@@ -22,6 +22,7 @@ import {
   parseMemInfo,
   portsFromUnits,
   vncExposure,
+  vncPasswordFileFromUnit,
 } from "./browser.ts";
 import type { Config } from "./config.ts";
 import { IS_COMPILED } from "./runtime.ts";
@@ -289,11 +290,14 @@ async function browserChecks(): Promise<Check[]> {
     );
   } else {
     const exposure = vncExposure(ss, vncPort);
+    const auth = vncPasswordFileFromUnit(xvncUnit)
+      ? "password set"
+      : "no password, so SSH is the only gate";
     if (exposure === "loopback") {
       checks.push(
         ok(
           "display",
-          `VNC on ${vncPort}, loopback only — reach it with ssh -L ${vncPort}:127.0.0.1:${vncPort}`,
+          `VNC on ${vncPort}, loopback only, ${auth} — reach it with ssh -L ${vncPort}:127.0.0.1:${vncPort}`,
         ),
       );
     } else if (exposure === "exposed") {

@@ -92,6 +92,8 @@ export const OPTION_SPEC = {
   "cdp-port": { type: "string" as const },
   "restart-at": { type: "string" as const },
   "no-restart": { type: "boolean" as const },
+  "vnc-password": { type: "string" as const },
+  "no-vnc-password": { type: "boolean" as const },
   help: { type: "boolean" as const, short: "h" },
   version: { type: "boolean" as const, short: "v" },
 };
@@ -99,6 +101,15 @@ export const OPTION_SPEC = {
 export type RawOptions = Partial<
   Record<keyof typeof OPTION_SPEC, string | boolean>
 >;
+
+/**
+ * Flags that mean "generate one" when given no value.
+ *
+ * `--vnc-password` joins `--token` here for a reason beyond symmetry: a password
+ * typed on a command line lands in shell history and in `ps`, so the bare form
+ * that generates and prints one is the form worth reaching for.
+ */
+const OPTIONAL_VALUE_FLAGS = ["--token", "--vnc-password"];
 
 /**
  * Makes a bare `--token` mean "generate one".
@@ -112,9 +123,9 @@ export type RawOptions = Partial<
  */
 function allowBareToken(argv: string[]): string[] {
   return argv.map((arg, i) => {
-    if (arg !== "--token") return arg;
+    if (!OPTIONAL_VALUE_FLAGS.includes(arg)) return arg;
     const next = argv[i + 1];
-    return next === undefined || next.startsWith("-") ? "--token=" : arg;
+    return next === undefined || next.startsWith("-") ? `${arg}=` : arg;
   });
 }
 

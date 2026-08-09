@@ -8,7 +8,10 @@ import {
   parseGeometry,
   parseMemInfo,
   portsFromUnits,
+  VNC_PASSWORD_LENGTH,
   vncExposure,
+  vncPasswordFileFromUnit,
+  vncPasswordPath,
 } from "../server/browser.ts";
 
 /**
@@ -258,6 +261,83 @@ describe("portsFromUnits", () => {
     expect(portsFromUnits({ xvnc: "[Unit]\nDescription=x\n" })).toEqual({
       vncPort: 5900,
       cdpPort: 9222,
+    });
+  });
+});
+
+/**
+ * macOS Screen Sharing refuses a server offering no authentication and asks for
+ * a password that does not exist, which is the only reason VncAuth is here.
+ */
+describe("VNC authentication", () => {
+  const opts = defaultBrowserOptions("ubuntu", "/home/ubuntu");
+  const xvnc = (o: typeof opts) =>
+    browserUnits(o).find((u) => u.name === "vibe-os-xvnc.service")?.contents ??
+    "";
+
+  test("no password file means no authentication", () => {
+    const unit = xvnc(opts);
+    expect(unit).toContain("-SecurityTypes None");
+    expect(unit).not.toContain("-PasswordFile");
+  });
+
+  test("a password file switches the unit to VncAuth", () => {
+    const unit = xvnc({
+      ...opts,
+      vncPasswordFile: "/home/ubuntu/.vibe-os/vncpasswd",
+    });
+    expect(unit).toContain(
+      "-SecurityTypes VncAuth -PasswordFile /home/ubuntu/.vibe-os/vncpasswd",
+    );
+    expect(unit).not.toContain("-SecurityTypes None");
+  });
+
+  /** Authentication is a second layer. It never replaces the loopback bind. */
+  test("keeps the loopback bind either way", () => {
+    expect(xvnc(opts)).toContain("-localhost");
+    expect(xvnc({ ...opts, vncPasswordFile: "/x/y" })).toContain("-localhost");
+  });
+
+  test("the password path is under the state directory", () => {
+    expect(vncPasswordPath("/home/ubuntu")).toBe(
+      "/home/ubuntu/.vibe-os/vncpasswd",
+    );
+  });
+
+  test("VNC truncates past eight, so that is what is generated", () => {
+    expect(VNC_PASSWORD_LENGTH).toBe(8);
+  });
+
+  /**
+   * install-browser rewrites every unit, so this round trip is what stops a
+   * reinstall from silently turning authentication back off.
+   */
+  describe("vncPasswordFileFromUnit", () => {
+    test("reads back the file a generated unit uses", () => {
+      const file = "/home/ubuntu/.vibe-os/vncpasswd";
+      expect(
+        vncPasswordFileFromUnit(xvnc({ ...opts, vncPasswordFile: file })),
+      ).toBe(file);
+    });
+
+    test("null for a unit with no authentication", () => {
+      expect(vncPasswordFileFromUnit(xvnc(opts))).toBeNull();
+    });
+
+    test("null when there is no unit at all", () => {
+      expect(vncPasswordFileFromUnit(null)).toBeNull();
+      expect(vncPasswordFileFromUnit(undefined)).toBeNull();
+      expect(vncPasswordFileFromUnit("")).toBeNull();
+    });
+
+    /** The hand-edited unit that was on the VPS before this flag existed. */
+    test("reads a path out of a unit written by hand", () => {
+      const handEdited =
+        "ExecStart=/usr/bin/Xtigervnc :99 -geometry 1600x900 -depth 24 \\\n" +
+        "  -localhost -SecurityTypes VncAuth -PasswordFile /home/ubuntu/.vibe-os/vncpasswd -rfbport 5900 -AlwaysShared\n";
+      expect(vncPasswordFileFromUnit(handEdited)).toBe(
+        "/home/ubuntu/.vibe-os/vncpasswd",
+      );
     });
   });
 });

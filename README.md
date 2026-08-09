@@ -458,6 +458,8 @@ them restart on failure.
 | `--cdp-port <n>` | `9222`, loopback only |
 | `--restart-at <expr>` | `*-*-* 02:00:00 America/New_York` |
 | `--no-restart` | install no nightly timer |
+| `--vnc-password [value]` | none, and an existing one is kept |
+| `--no-vnc-password` | serve the display with no authentication |
 
 Include the timezone in `--restart-at`. systemd reads a bare time as UTC.
 
@@ -487,17 +489,21 @@ a password that does not exist. Give it one, keeping the loopback bind as the
 layer that actually protects the box:
 
 ```bash
-vncpasswd -f <<<'yourpass' > ~/.vibe-os/vncpasswd
-chmod 600 ~/.vibe-os/vncpasswd
-sudo sed -i 's|-SecurityTypes None|-SecurityTypes VncAuth -PasswordFile '"$HOME"'/.vibe-os/vncpasswd|' \
-  /etc/systemd/system/vibe-os-xvnc.service
-sudo systemctl daemon-reload && sudo systemctl restart vibe-os-xvnc
+sudo vibe-os install-browser --vnc-password        # generates and prints one
+sudo vibe-os install-browser --vnc-password hunter2
 ```
 
-Then open `vnc://127.0.0.1:5900` and leave the username blank. VNC authentication
-is DES-based and truncates at 8 characters, so treat it as a second layer and
-not as the thing keeping the box shut. `install-browser` rewrites this unit, so
-reapply it after a reinstall.
+Then open `vnc://127.0.0.1:5900` and leave the username blank. VNC
+authentication is password-only.
+
+Later runs of `install-browser` keep a password that is already set, so a
+reinstall does not quietly drop you back to no authentication. `--no-vnc-password`
+turns it off on purpose.
+
+VNC authentication is DES-based and truncates at 8 characters, so treat it as a
+second layer and not as the thing keeping the box shut. Prefer the bare
+`--vnc-password`: a password passed as an argument is visible in shell history
+and, briefly, in `ps`.
 
 ```bash
 systemctl restart vibe-os-chrome     # bounce it now
@@ -677,6 +683,11 @@ in a session could otherwise ask what you last copied.
 --restart-at <expr> nightly restart, a systemd OnCalendar expression
                     (default '*-*-* 02:00:00 America/New_York')
 --no-restart        do not install the nightly restart timer
+--vnc-password [value]
+                    require a VNC password; generates and prints one if
+                    omitted. macOS Screen Sharing will not connect without
+                    this. An existing one is kept unless --no-vnc-password
+--no-vnc-password   serve the display with no authentication
 ```
 
 Every option except `--tls-port` and `--cert-ttl` also reads a `VIBE_OS_`

@@ -54,6 +54,20 @@ export interface BrowserOptions {
   restartAt: string | null;
   /** Where Chrome's profile lives. Losing it means signing in again. */
   profileDir: string;
+  /**
+   * A TigerVNC password file, or null for no authentication at all.
+   *
+   * Null is the default and is not the hole it reads as: the display listens on
+   * loopback, so SSH is the authentication step, and anyone who can open that
+   * tunnel has a shell here anyway.
+   *
+   * It is set for one reason. macOS Screen Sharing refuses a server offering no
+   * authentication and asks for a password that does not exist, so a box driven
+   * from a Mac needs VncAuth to be reachable at all. VNC authentication is
+   * DES-based and truncates at 8 characters, which makes it a second layer
+   * behind SSH and never the thing keeping the box shut.
+   */
+  vncPasswordFile: string | null;
 }
 
 export const DEFAULT_DISPLAY = 99;
@@ -61,6 +75,11 @@ export const DEFAULT_GEOMETRY = "1600x900";
 export const DEFAULT_VNC_PORT = 5900;
 export const DEFAULT_CDP_PORT = 9222;
 export const DEFAULT_RESTART_AT = "*-*-* 02:00:00 America/New_York";
+
+/** VNC authentication truncates silently past this, so generate exactly this. */
+export const VNC_PASSWORD_LENGTH = 8;
+
+export const vncPasswordPath = (home: string) => `${home}/.vibe-os/vncpasswd`;
 
 export function defaultBrowserOptions(
   user: string,
@@ -75,6 +94,7 @@ export function defaultBrowserOptions(
     cdpPort: DEFAULT_CDP_PORT,
     restartAt: DEFAULT_RESTART_AT,
     profileDir: `${home}/.vibe-os/chrome`,
+    vncPasswordFile: null,
   };
 }
 
@@ -150,6 +170,9 @@ export function browserUnits(opts: BrowserOptions): Unit[] {
   if (!size) throw new Error(`unusable geometry: ${opts.geometry}`);
 
   const d = opts.display;
+  const security = opts.vncPasswordFile
+    ? `-SecurityTypes VncAuth -PasswordFile ${opts.vncPasswordFile}`
+    : "-SecurityTypes None";
   const units: Unit[] = [
     {
       name: "vibe-os-xvnc.service",
@@ -164,7 +187,7 @@ User=${opts.user}
 # number rather than reusing it. Leading '-' so a first run does not fail here.
 ExecStartPre=-/bin/rm -f /tmp/.X${d}-lock /tmp/.X11-unix/X${d}
 ExecStart=/usr/bin/Xtigervnc :${d} -geometry ${opts.geometry} -depth 24 \\
-  -localhost -SecurityTypes None -rfbport ${opts.vncPort} -AlwaysShared
+  -localhost ${security} -rfbport ${opts.vncPort} -AlwaysShared
 Restart=always
 RestartSec=2
 
@@ -361,6 +384,21 @@ export function portsFromUnits(units: {
     vncPort: rfb ? Number(rfb[1]) : DEFAULT_VNC_PORT,
     cdpPort: cdp ? Number(cdp[1]) : DEFAULT_CDP_PORT,
   };
+}
+
+/**
+ * The password file an installed unit is already using, if any.
+ *
+ * Read before writing, so a reinstall cannot quietly turn authentication off on
+ * a box that had it. Losing a setting you asked for is bad; losing it silently,
+ * on the one command whose whole job is to rewrite these units, is worse.
+ */
+export function vncPasswordFileFromUnit(
+  unit: string | null | undefined,
+): string | null {
+  if (!unit) return null;
+  const match = /-PasswordFile\s+(\S+)/.exec(unit);
+  return match ? match[1] : null;
 }
 
 export interface MemInfo {
