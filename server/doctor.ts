@@ -390,8 +390,19 @@ async function sshdEffectiveConfig(
   return null;
 }
 
-/** Expands sshd's AuthorizedKeysFile tokens into real paths. */
-function authorizedKeysPaths(
+/**
+ * Expands sshd's AuthorizedKeysFile tokens into real paths.
+ *
+ * `%%` is an escaped percent, so it has to stop what follows being read as a
+ * token: `%%h` is the literal `%h`, not the home directory. Parking it on a
+ * character the input cannot contain, expanding the real tokens, then putting
+ * the percent back is what keeps those two apart in a single pass.
+ *
+ * The sentinel is spelled `\u0000` rather than written as a raw NUL byte. Same
+ * value, but a NUL in the source makes the entire file binary to grep, ripgrep
+ * and diffs, which silently breaks searching it.
+ */
+export function authorizedKeysPaths(
   spec: string,
   home: string,
   user: string,
@@ -401,10 +412,10 @@ function authorizedKeysPaths(
     .filter(Boolean)
     .map((entry) =>
       entry
-        .replaceAll("%%", " ")
+        .replaceAll("%%", "\u0000")
         .replaceAll("%h", home)
         .replaceAll("%u", user)
-        .replaceAll(" ", "%"),
+        .replaceAll("\u0000", "%"),
     )
     .map((entry) => (path.isAbsolute(entry) ? entry : path.join(home, entry)));
 }
