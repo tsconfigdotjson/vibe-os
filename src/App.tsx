@@ -98,6 +98,9 @@ function Desktop() {
   const [scanning, setScanning] = useState(false);
   const [wsBusy, setWsBusy] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
+  // Something the last creation wants to admit to — a stale base, say — which
+  // is not an error, because the workspace is there either way.
+  const [wsNote, setWsNote] = useState<string | null>(null);
 
   // Which project and workspace you were last looking at is a per-device view
   // preference, not shared state, so it stays local. Everything it points *at*
@@ -297,12 +300,23 @@ function Desktop() {
     }
   }, [rescan]);
 
+  // Both say something about one project's workspaces, so neither survives a
+  // move to another one: a warning about a stale base is a false claim once it
+  // is sitting above a list it was not written about.
+  const onSelectProject = useCallback((id: string) => {
+    setProjectId(id);
+    setWsError(null);
+    setWsNote(null);
+  }, []);
+
   const onCreateWorkspace = useCallback(async () => {
     setWsBusy(true);
     setWsError(null);
+    setWsNote(null);
     try {
       const created = await create();
       setWorkspaceId(created.id);
+      setWsNote(created.warning);
     } catch (err) {
       setWsError(describeError(err));
     } finally {
@@ -369,7 +383,7 @@ function Desktop() {
           projects={projects}
           current={currentProject}
           scanning={scanning}
-          onSelect={setProjectId}
+          onSelect={onSelectProject}
           onRescan={onRescan}
         />
 
@@ -411,6 +425,7 @@ function Desktop() {
           projectName={currentProject?.name ?? null}
           busy={wsBusy}
           error={wsError}
+          note={wsNote}
           onSelect={setWorkspaceId}
           onCreate={onCreateWorkspace}
           onRemove={onRemoveWorkspace}
@@ -483,7 +498,14 @@ function Desktop() {
                       onClick={onCreateWorkspace}
                       disabled={wsBusy}
                     >
-                      Create a workspace
+                      {wsBusy ? (
+                        <>
+                          <span className="spinner" aria-hidden="true" />
+                          Fetching origin…
+                        </>
+                      ) : (
+                        "Create a workspace"
+                      )}
                     </button>
                   </>
                 ) : (

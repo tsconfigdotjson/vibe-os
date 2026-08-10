@@ -51,6 +51,22 @@ export interface Workspace {
   lastOpenedAt: number;
 }
 
+/**
+ * What creating one answers with, which is not a workspace row: it also says
+ * where the branch was cut from, because that involves a fetch that can be slow
+ * and can fail without stopping the creation.
+ */
+export interface CreatedWorkspace {
+  id: string;
+  name: string;
+  branch: string;
+  path: string;
+  /** The ref the branch starts at, "origin/main" for a normal project. */
+  base: string;
+  /** Set when the base may be stale, e.g. origin could not be reached. */
+  warning: string | null;
+}
+
 export interface WindowRow {
   id: string;
   workspaceId: string;
@@ -178,7 +194,7 @@ export function useWorkspaces(projectId: string | null) {
 
   const create = async (name?: string) => {
     if (!projectId) throw new Error("no project selected");
-    const created = await send<Workspace>(
+    const created = await send<CreatedWorkspace>(
       `/api/projects/${projectId}/workspaces`,
       "POST",
       name ? { name } : {},
