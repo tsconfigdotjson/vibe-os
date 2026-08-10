@@ -157,7 +157,12 @@ The picker in the top-left switches between git repositories on the machine.
 only on that button.
 
 Each project has **workspaces** in the sidebar. A workspace is a git worktree on
-its own branch, named with three random words. Terminals belong to a workspace:
+its own branch, named with three random words. Creating one fetches `origin` and
+branches from its default branch, so it starts level with `origin/main` instead
+of with whatever the project's own checkout was left on. That fetch is what the
+spinner is waiting for. With no `origin`, or none that can be reached, the
+workspace is still created from the last fetch or from the checkout, and the
+sidebar says which. Terminals belong to a workspace:
 switching swaps which windows are on screen and restores their placement, while
 the sessions you left keep running. Only ✕ ends anything.
 

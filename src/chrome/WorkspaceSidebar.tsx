@@ -7,6 +7,8 @@ export interface WorkspaceSidebarProps {
   projectName: string | null;
   busy: boolean;
   error: string | null;
+  /** Something the last creation should own up to. Not a failure. */
+  note: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onRemove: (id: string) => void;
@@ -44,6 +46,7 @@ export function WorkspaceSidebar({
   projectName,
   busy,
   error,
+  note,
   onSelect,
   onCreate,
   onRemove,
@@ -59,20 +62,38 @@ export function WorkspaceSidebar({
           className="sidebar-new"
           onClick={onCreate}
           disabled={busy || !projectName}
-          title="Create a git worktree on a new branch"
+          title="Create a git worktree on a new branch off origin"
         >
-          {busy ? "…" : "+"}
+          {busy ? <span className="spinner" aria-hidden="true" /> : "+"}
         </button>
       </header>
 
+      {/* Creating one fetches origin first, which is the slow part and the part
+          worth naming: seconds of nothing happening reads as a broken button,
+          and "fetching origin" is also the reason the branch is worth having. */}
+      {busy ? (
+        <p className="sidebar-busy" role="status">
+          Fetching origin, then branching from its default branch…
+        </p>
+      ) : null}
+
       {error ? <p className="sidebar-error">{error}</p> : null}
+      {note ? <p className="sidebar-note">{note}</p> : null}
 
       {!projectName ? (
         <p className="sidebar-empty">Choose a project to see its workspaces.</p>
       ) : workspaces.length === 0 ? (
         <p className="sidebar-empty">
           No workspaces yet.{" "}
-          <button type="button" className="linkish" onClick={onCreate}>
+          {/* Disabled while busy for the same reason as the "+" above it: the
+              wait is a fetch now, and this is the button shown during the
+              longest one, so an impatient second click is two worktrees. */}
+          <button
+            type="button"
+            className="linkish"
+            onClick={onCreate}
+            disabled={busy}
+          >
             Create one
           </button>{" "}
           to get a worktree and a branch.

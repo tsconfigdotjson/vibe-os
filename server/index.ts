@@ -34,6 +34,18 @@ export interface RunningServer {
 
 /** Ceiling on an HTTP request body, sized for a wallpaper upload. */
 const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
+/**
+ * How long a request may go quiet before Bun hangs up, in seconds.
+ *
+ * Bun's default is 10, and it counts a request that is still being handled as
+ * idle, not just a socket between requests. Creating a workspace fetches origin
+ * before it branches, so on a large repo or a slow link the browser got
+ * `ERR_EMPTY_RESPONSE` while the server carried on and made the workspace
+ * anyway: the one thing here that is slow was the one thing that could not
+ * finish. Bun's maximum, because the budget it has to cover is git's own
+ * timeouts in projects.ts plus checking out a worktree at the end of them.
+ */
+const REQUEST_IDLE_TIMEOUT_S = 255;
 /** Below this, binding needs root or CAP_NET_BIND_SERVICE. */
 const FIRST_UNPRIVILEGED_PORT = 1024;
 /** Where we land when port 80 is refused, so a first run still gets a URL. */
@@ -292,6 +304,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
       // the ceiling before per-route checks see it. WebSocket framing is a
       // different knob entirely — that is `backpressureLimit` in bridge.ts.
       maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
+      idleTimeout: REQUEST_IDLE_TIMEOUT_S,
       development: false,
       async fetch(req, server) {
         try {

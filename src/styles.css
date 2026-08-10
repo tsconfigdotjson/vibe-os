@@ -1312,9 +1312,44 @@ legend.field-label {
   color: var(--text);
   border: 1px solid rgb(255 255 255 / 14%);
   background: rgb(255 255 255 / 6%);
+  /* Inline-flex so a label can be joined by a spinner without the two
+     baselines drifting apart. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   transition:
     border-color 130ms ease,
     background-color 130ms ease;
+}
+
+.ghost:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/*
+ * The one thing here that takes real time.
+ *
+ * Creating a workspace fetches origin before it branches, which on a large
+ * repo or a slow link is seconds of a button doing nothing. A ring that turns
+ * says the wait is the work; the reduced-motion block below stops it turning
+ * for anyone who asked for that, and the text beside it carries the meaning.
+ */
+.spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid rgb(255 255 255 / 20%);
+  border-top-color: var(--accent);
+  animation: spin 720ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .empty .ghost {
@@ -1644,6 +1679,19 @@ legend.field-label {
   font-size: 11px;
   color: var(--err);
   background: color-mix(in oklab, var(--err) 14%, transparent);
+}
+
+/* Said, not shouted: the workspace exists, something about it is just worth
+   knowing. Hence the muted text where an error would be red. */
+.sidebar-note,
+.sidebar-busy {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  background: rgb(255 255 255 / 5%);
 }
 
 .sidebar-list {

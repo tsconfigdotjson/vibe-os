@@ -132,12 +132,70 @@ export function threeWordName(): string {
   return `${pick(ADJECTIVES)}-${pick(COLOURS)}-${pick(ANIMALS)}`;
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
+/**
+ * Ceilings on the two things that touch the network, in milliseconds.
+ *
+ * They are what the server's request timeout is sized around, so raising one
+ * without the other is how a workspace comes into being on a request the
+ * browser was already told had failed. See REQUEST_IDLE_TIMEOUT_S in index.ts.
+ */
+const FETCH_TIMEOUT_MS = 120_000;
+const ASK_TIMEOUT_MS = 30_000;
+
+async function git(
+  cwd: string,
+  args: string[],
+  timeout = 60_000,
+): Promise<string> {
   const { stdout } = await run("git", ["-C", cwd, ...args], {
-    timeout: 60_000,
+    timeout,
     maxBuffer: 8 * 1024 * 1024,
+    env: {
+      ...process.env,
+      // Nothing on this side can answer a credential prompt, so a remote that
+      // asks for one has to fail rather than sit there holding the request
+      // open. Only the prompt is disabled, not ssh: `GIT_SSH_COMMAND` would
+      // take precedence over a repo's own `core.sshCommand`, and a project
+      // cloned with a per-repo deploy key would stop being able to fetch at
+      // all. A key that wants a passphrase is bounded by the timeout instead.
+      GIT_TERMINAL_PROMPT: "0",
+    },
   });
   return stdout.trim();
+}
+
+/**
+ * The one line of a failed git command worth showing a person.
+ *
+ * The rest is scaffolding: "Command failed: git -C /home/lee/src/api fetch
+ * origin" names what we ran, which the reader already knows, while the line
+ * git put on stderr is the part they can act on. An expired token says to go
+ * and re-authenticate, and that is a different afternoon from being offline.
+ */
+function gitReason(err: unknown): string {
+  const failure = err as { stderr?: unknown; killed?: boolean };
+  const stderr = typeof failure?.stderr === "string" ? failure.stderr : "";
+  const lines = stderr
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const best =
+    lines.find(
+      (line) => line.startsWith("fatal:") || line.startsWith("error:"),
+    ) ?? lines[0];
+  if (!best) {
+    // A timeout is a kill, and it leaves nothing on stderr to quote.
+    return failure?.killed ? "timed out" : describeError(err).split("\n")[0];
+  }
+  const reason = best.replace(/^(fatal|error):\s*/, "");
+  // Capped because git will happily quote a whole remote URL, and this ends up
+  // in a sidebar. The ellipsis is there so a cut does not read as a typo.
+  return reason.length > 160 ? `${reason.slice(0, 159)}…` : reason;
+}
+
+async function hasOrigin(repo: string): Promise<boolean> {
+  const remotes = await git(repo, ["remote"]).catch(() => "");
+  return remotes.split("\n").some((r) => r.trim() === "origin");
 }
 
 async function currentBranch(repo: string): Promise<string | null> {
@@ -372,10 +430,7 @@ async function enableAutoSetupRemote(
   projectName: string,
 ): Promise<void> {
   try {
-    const remotes = (await git(repo, ["remote"]))
-      .split("\n")
-      .map((r) => r.trim());
-    if (!remotes.includes("origin")) return;
+    if (!(await hasOrigin(repo))) return;
 
     // `config --get` exits non-zero when unset, which is the "not configured"
     // signal — a set value, including a deliberate false, means hands off.
@@ -401,17 +456,143 @@ async function enableAutoSetupRemote(
 }
 
 /**
+ * origin's default branch, as a ref that exists locally — "origin/main".
+ *
+ * Read from `refs/remotes/origin/HEAD`, which is only as good as the last time
+ * something asked the remote — see `askOriginHead`, which is what keeps it
+ * current. What it names is verified rather than trusted, because a symbolic
+ * ref goes on naming a branch that has been deleted, and the two conventional
+ * names are the last resort for a clone that never had one.
+ */
+async function originHead(repo: string): Promise<string | null> {
+  // --verify exits non-zero for a ref that is not there, which is the question.
+  const exists = (ref: string) =>
+    git(repo, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).then(
+      () => true,
+      () => false,
+    );
+
+  const known = await git(repo, [
+    "symbolic-ref",
+    "--short",
+    "refs/remotes/origin/HEAD",
+  ]).catch(() => "");
+  if (known && (await exists(known))) return known;
+
+  for (const guess of ["origin/main", "origin/master"]) {
+    if (await exists(guess)) return guess;
+  }
+  return null;
+}
+
+/**
+ * Asks origin which branch it calls default, and writes down the answer.
+ *
+ * A round trip on top of the fetch, and worth it: nothing about a fetch tells
+ * a clone that the default branch moved. `refs/remotes/origin/HEAD` is written
+ * once at clone time and never again, so a repo cloned when the default was
+ * `master` goes on reporting `origin/master` for as long as that branch exists
+ * — which after a `master` to `main` switch is forever, since the old branch is
+ * usually left behind rather than deleted. Verifying the ref cannot catch that:
+ * the branch it names is real, it is just not the default any more.
+ *
+ * Best effort. It fails when origin is unreachable, and then the last known
+ * answer is the one used.
+ */
+async function askOriginHead(repo: string): Promise<void> {
+  await git(
+    repo,
+    ["remote", "set-head", "origin", "--auto"],
+    ASK_TIMEOUT_MS,
+  ).catch((err: unknown) => {
+    log.debug(`could not ask origin for its default branch: ${gitReason(err)}`);
+  });
+}
+
+/**
+ * Where a new workspace's branch starts.
+ *
+ * Left alone, `worktree add -b` branches from the project checkout's HEAD —
+ * whatever that clone was last left sitting on, which after a while is a stale
+ * branch, a detached commit, or someone's abandoned merge. A workspace is
+ * meant to start from the current state of the project, so origin is fetched
+ * first and the branch is cut from origin's default branch.
+ *
+ * Every step degrades to the old behaviour instead of failing. No origin, an
+ * unreachable one, a default branch that cannot be worked out: all of them end
+ * at HEAD, because a workspace from a stale base is worth more than an error
+ * where a workspace should have been. But every degradation that a person
+ * would want to know about comes back as a warning for the sidebar, because
+ * "branched from origin/main" and "branched from something I could not check"
+ * are different claims and only one of them is safe to work on top of.
+ *
+ * What it deliberately does not do is prune. Pruning would make this the only
+ * thing in the app that rewrites refs in the project's own checkout, and a
+ * remote-tracking ref deleted from under a terminal open in that repo is a
+ * `git rebase origin/topic` failing somewhere nobody would connect to having
+ * clicked "+".
+ */
+async function baseForWorkspace(
+  repo: string,
+  projectName: string,
+): Promise<{ ref: string; warning: string | null }> {
+  if (!(await hasOrigin(repo))) return { ref: "HEAD", warning: null };
+
+  let failure: string | null = null;
+  try {
+    await git(repo, ["fetch", "origin"], FETCH_TIMEOUT_MS);
+    await askOriginHead(repo);
+  } catch (err) {
+    failure = gitReason(err);
+    log.warn(`could not fetch origin for ${projectName}: ${failure}`);
+  }
+
+  const ref = (await originHead(repo)) ?? "HEAD";
+  const where = ref === "HEAD" ? "the project checkout" : ref;
+  if (ref === "HEAD") {
+    log.warn(
+      `no default branch on origin for ${projectName} — branching from the checkout`,
+    );
+  }
+
+  if (failure) {
+    return {
+      ref,
+      warning: `Could not fetch origin (${failure}). This branch starts from ${where} as it was at the last fetch.`,
+    };
+  }
+  // Fetched fine and still no default branch: a single-branch clone, or one
+  // whose default is named something nobody guesses. Silence here would be the
+  // exact stale base this function exists to avoid, with nothing said about it.
+  if (ref === "HEAD") {
+    return {
+      ref,
+      warning:
+        "Could not work out origin's default branch. This branch starts from the project checkout, which may be behind.",
+    };
+  }
+  return { ref, warning: null };
+}
+
+/**
  * Creates a git worktree and records it as a workspace.
  *
- * The worktree gets its own branch named after the workspace, branched from
- * wherever the project's main checkout currently is.
+ * The worktree gets its own branch named after the workspace, branched from a
+ * freshly fetched origin — see `baseForWorkspace`.
  */
 export async function createWorkspace(
   db: Db,
   workspaceRoot: string,
   projectId: string,
   requested?: string,
-): Promise<{ id: string; name: string; branch: string; path: string }> {
+): Promise<{
+  id: string;
+  name: string;
+  branch: string;
+  path: string;
+  base: string;
+  warning: string | null;
+}> {
   const project = db
     .select()
     .from(projects)
@@ -434,9 +615,26 @@ export async function createWorkspace(
   const target = path.join(workspaceRoot, WORKTREE_DIR, project.name, name);
   await mkdir(path.dirname(target), { recursive: true });
 
+  const base = await baseForWorkspace(project.path, project.name);
+
   // -b creates the branch; git refuses if it already exists, which is the
   // behaviour we want rather than silently reusing someone else's work.
-  await git(project.path, ["worktree", "add", "-b", name, target]);
+  //
+  // --no-track because branching from a remote-tracking ref otherwise makes
+  // origin/main this branch's upstream, and then `git push` stops with "the
+  // upstream branch of your current branch does not match the name of your
+  // current branch" and a command to copy — the same papercut, on the same
+  // first push, that `push.autoSetupRemote` below exists to remove. Leaving
+  // the branch without an upstream is what lets push set the right one.
+  await git(project.path, [
+    "worktree",
+    "add",
+    "--no-track",
+    "-b",
+    name,
+    target,
+    base.ref,
+  ]);
   await enableAutoSetupRemote(project.path, project.name);
 
   const now = Date.now();
@@ -453,8 +651,15 @@ export async function createWorkspace(
     })
     .run();
 
-  log.info(`created workspace ${project.name}/${name}`);
-  return { id, name, branch: name, path: target };
+  log.info(`created workspace ${project.name}/${name} from ${base.ref}`);
+  return {
+    id,
+    name,
+    branch: name,
+    path: target,
+    base: base.ref,
+    warning: base.warning,
+  };
 }
 
 export async function removeWorkspace(
