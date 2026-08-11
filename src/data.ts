@@ -4,6 +4,7 @@ import type {
   AttachInfo,
   Harness,
   HarnessInfo,
+  HermesInfo,
   McpServer,
   Profile,
   ProfileInput,
@@ -287,6 +288,22 @@ export function useHarness() {
 }
 
 /**
+ * What Hermes on the box is set up for.
+ *
+ * Read from the server for a different reason than the Claude side: not because
+ * the list changes faster than this project ships, but because the answers are
+ * that box's own configuration. Which providers it has, and which browser its
+ * tools will drive, are things only the server can see.
+ */
+export function useHermes() {
+  const { data } = useSWR<HermesInfo>("/api/harness/hermes", fetcher, {
+    revalidateOnFocus: false,
+    refreshInterval: 0,
+  });
+  return data ?? null;
+}
+
+/**
  * MCP servers this project's profiles can be given.
  *
  * Project-scoped because a repo's `.mcp.json` is, and because a server added
@@ -383,6 +400,7 @@ export type {
   AttachInfo,
   Harness,
   HarnessInfo,
+  HermesInfo,
   McpServer,
   Profile,
   ProfileInput,

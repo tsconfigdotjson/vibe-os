@@ -11,7 +11,7 @@ import {
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
-import { discoverClaude } from "./harness.ts";
+import { discoverClaude, discoverHermes } from "./harness.ts";
 import {
   badId,
   IMMUTABLE_CACHE_CONTROL,
@@ -127,6 +127,12 @@ export function createApi(deps: ApiDeps) {
     // dropdowns rather than asking people to remember flag spellings.
     if (p === "/api/harness/claude" && req.method === "GET") {
       return json(await discoverClaude());
+    }
+
+    // The same question for Hermes, which answers a narrower version of it:
+    // configured providers, its own defaults, and where its browser tools land.
+    if (p === "/api/harness/hermes" && req.method === "GET") {
+      return json(await discoverHermes());
     }
 
     if (p === "/api/config" && req.method === "GET") {

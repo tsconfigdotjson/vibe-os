@@ -125,3 +125,54 @@ describe("windowCommand forDisplay", () => {
     expect(real).toContain("flock");
   });
 });
+
+/**
+ * The pty's baud rate, which is not cosmetic.
+ *
+ * SSH carries ispeed and ospeed in its pty-req, and the browser's Go client
+ * sends 14400 — a rate Linux cannot encode. sshd writes it in raw, so the pty
+ * reads back a speed that cannot be written again, and the first program to do
+ * an ordinary tcgetattr/tcsetattr raw-mode dance gets EINVAL. Hermes died there
+ * before painting anything; Claude survived only because Node swallows it.
+ */
+describe("terminal speed", () => {
+  test("the created session normalises the pty speed", () => {
+    const cmd = windowCommand("vibe-w-1", "/tmp", config()) as string;
+    expect(cmd).toContain("stty 38400");
+  });
+
+  /**
+   * It has to be inside the string dtach runs, not beside it. That is the pty
+   * the harness runs on; fixing any other one fixes nothing.
+   */
+  test("it is set on the session, not on the attachment", () => {
+    const cmd = windowCommand("vibe-w-1", "/tmp", config()) as string;
+    const create = cmd.slice(cmd.indexOf("dtach -n"));
+    const attach = create.slice(create.indexOf("exec dtach -a"));
+    expect(create).toContain("stty 38400");
+    expect(attach).not.toContain("stty 38400");
+  });
+
+  /** Before the harness, or the harness has already read the broken value. */
+  test("it runs before the harness starts", () => {
+    const cmd = windowCommand("vibe-w-1", "/tmp", config(), {
+      id: "p",
+      projectId: "x",
+      color: "cyan",
+      name: "R",
+      harness: "hermes",
+      command: null,
+      args: [],
+      prompt: "",
+      position: 0,
+      createdAt: 0,
+    }) as string;
+    expect(cmd.indexOf("stty 38400")).toBeLessThan(cmd.indexOf("hermes"));
+  });
+
+  /** A box with no stty should still open a window. */
+  test("a missing stty is not fatal", () => {
+    const cmd = windowCommand("vibe-w-1", "/tmp", config()) as string;
+    expect(cmd).toContain("stty 38400 2>/dev/null;");
+  });
+});

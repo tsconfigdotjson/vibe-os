@@ -159,6 +159,18 @@ export interface Unit {
 }
 
 /**
+ * Where the units are written, named once.
+ *
+ * `install-browser` writes them and three readers go looking: doctor, the Hermes
+ * discovery in `harness.ts`, and `connect-hermes`. They had a path literal each
+ * until the third one wanted the same file, which is one copy past the point
+ * where they can be trusted to stay in step.
+ */
+export const UNIT_DIR = "/etc/systemd/system";
+export const CHROME_UNIT_PATH = `${UNIT_DIR}/vibe-os-chrome.service`;
+export const XVNC_UNIT_PATH = `${UNIT_DIR}/vibe-os-xvnc.service`;
+
+/**
  * The units, in the order they must be written.
  *
  * Returned rather than written so the shape can be tested without a machine to
@@ -399,6 +411,67 @@ export function vncPasswordFileFromUnit(
   if (!unit) return null;
   const match = /-PasswordFile\s+(\S+)/.exec(unit);
   return match ? match[1] : null;
+}
+
+/**
+ * What Hermes has to be told so its browser tools drive this Chrome.
+ *
+ * Hermes reads its CDP target from `browser.cdp_url` in `~/.hermes/config.yaml`
+ * and offers no flag for it, so this is set once for the box rather than per
+ * profile. `browser-use` is named explicitly even though it is already the
+ * default, because the default is conditional on the CLI being runnable and a
+ * config that says what it means survives someone else reading it.
+ *
+ * `cloud_provider: local` is what stops a Browserbase or Firecrawl key, set
+ * later for something else, from quietly taking the browser back.
+ *
+ * Returned as pairs rather than written here: they are handed to
+ * `hermes config set`, which owns that file and knows where a secret goes.
+ */
+export function hermesBrowserSettings(
+  cdpPort: number,
+): { key: string; value: string }[] {
+  return [
+    { key: "browser.cdp_url", value: `http://127.0.0.1:${cdpPort}` },
+    { key: "browser.backend", value: "browser-use" },
+    { key: "browser.cloud_provider", value: "local" },
+  ];
+}
+
+/**
+ * Whether a configured `cdp_url` names this box's Chrome.
+ *
+ * Written by hand as often as by `connect-hermes`, so the comparison is on what
+ * the URL means rather than on its spelling: `localhost` and `127.0.0.1` are the
+ * same host, and `ws://` and `http://` are the same endpoint to a CDP client.
+ * A bare `127.0.0.1:9222` is accepted too, because it is what people type.
+ *
+ * The port has to be explicit. A URL with no port is not a CDP endpoint that
+ * would ever have worked, and inferring 80 from `http://` would report a
+ * misconfigured box as connected.
+ */
+export function cdpUrlMatches(
+  configured: string | null | undefined,
+  cdpPort: number,
+): boolean {
+  const raw = configured?.trim();
+  if (!raw) return false;
+  // A scheme is optional in what people write but not in what URL will parse.
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)
+    ? raw
+    : `http://${raw}`;
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return false;
+  }
+  if (!/^(https?|wss?):$/.test(url.protocol)) return false;
+  if (url.port !== String(cdpPort)) return false;
+  // Chrome binds the debug port to loopback, so anything else is a different
+  // browser on a different machine and saying "connected" would be a guess.
+  const host = url.hostname.replace(/^\[/, "").replace(/\]$/, "");
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
 }
 
 export interface MemInfo {

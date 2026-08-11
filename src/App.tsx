@@ -7,6 +7,7 @@ import {
   describeError,
   type ProfileInput,
   useHarness,
+  useHermes,
   useMcpServers,
   useProfiles,
   useProjects,
@@ -120,6 +121,7 @@ function Desktop() {
   const wallpaper = useWallpaper();
   const popouts = usePopoutHost();
   const harnessInfo = useHarness();
+  const hermesInfo = useHermes();
   const { servers: mcpServers } = useMcpServers(projectId);
 
   const {
@@ -569,6 +571,7 @@ function Desktop() {
           }
           palette={server.palette}
           harnessInfo={harnessInfo}
+          hermesInfo={hermesInfo}
           mcpServers={mcpServers}
           onSave={(input: ProfileInput) =>
             editing === "new"

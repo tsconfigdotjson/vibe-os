@@ -25,6 +25,7 @@ import {
   vncPasswordFileFromUnit,
 } from "./browser.ts";
 import type { Config } from "./config.ts";
+import { discoverHermes, HERMES_INSTALL, UV_INSTALL } from "./harness.ts";
 import { IS_COMPILED } from "./runtime.ts";
 import { discoverHostKey, SshCa } from "./ssh-ca.ts";
 
@@ -339,6 +340,69 @@ async function browserChecks(): Promise<Check[]> {
   return checks;
 }
 
+/**
+ * Hermes, and whether its browser tools land anywhere useful.
+ *
+ * Three questions, and the second two only make sense once the first is yes.
+ * None of them is fatal: a box that never installs Hermes is a working box, the
+ * same way one without Claude is.
+ */
+async function hermesChecks(): Promise<Check[]> {
+  // Cheap when it is missing — this returns as soon as the binary is not found,
+  // which is the answer on most boxes.
+  const hermes = await discoverHermes();
+  if (!hermes.available) {
+    return [
+      bad(
+        "hermes",
+        "not on PATH — profiles using the Hermes harness fall back to a shell",
+        HERMES_INSTALL,
+      ),
+    ];
+  }
+
+  const checks: Check[] = [
+    ok(
+      "hermes",
+      `${hermes.version ?? "installed"} — the Hermes harness will run`,
+    ),
+  ];
+
+  // Without the CLI, Browser Use mode silently does not engage. Hermes keeps
+  // working with its twelve built-in browser tools, so nothing looks wrong;
+  // you just pay for a dozen tool schemas in every request and never find out.
+  checks.push(
+    hermes.browser.browserUse
+      ? ok("browser-use", "runnable — Hermes gets the single browser_exec tool")
+      : bad(
+          "browser-use",
+          "no browser-use or uvx on PATH — Hermes keeps its twelve built-in browser tools",
+          UV_INSTALL,
+        ),
+  );
+
+  // Only worth asking when there is a browser here to be pointed at. On a box
+  // with no `install-browser`, an unset cdp_url is the correct configuration.
+  if (hermes.browser.cdpPort !== null) {
+    checks.push(
+      hermes.browser.connected
+        ? ok(
+            "hermes browser",
+            `driving this box's Chrome on 127.0.0.1:${hermes.browser.cdpPort}`,
+          )
+        : bad(
+            "hermes browser",
+            hermes.browser.cdpUrl
+              ? `browser.cdp_url is ${hermes.browser.cdpUrl}, not this box's Chrome on ${hermes.browser.cdpPort}`
+              : "browser.cdp_url is unset — Hermes will not use the browser running here",
+            "vibe-os connect-hermes",
+          ),
+    );
+  }
+
+  return checks;
+}
+
 /** The home directory sshd will use for a user, which need not be ours. */
 export async function homeFor(user: string): Promise<string | null> {
   if (user === os.userInfo().username) return os.homedir();
@@ -524,6 +588,8 @@ export async function runDoctor(config: Config): Promise<Check[]> {
           "curl -fsSL https://claude.ai/install.sh | bash",
         ),
   );
+
+  checks.push(...(await hermesChecks()));
 
   // ── can a browser actually log in? ───────────────────────────────────────
   const sshdUp = await probeTcp(config.sshHost, config.sshPort);

@@ -43,11 +43,23 @@ export function harnessCommand(profile: Profile): string | undefined {
   const executable =
     profile.harness === "claude"
       ? "claude"
-      : profile.harness === "custom"
-        ? profile.command
-        : null;
+      : profile.harness === "hermes"
+        ? "hermes"
+        : profile.harness === "custom"
+          ? profile.command
+          : null;
   if (!executable) return undefined;
-  const argv = [executable, ...profile.args].map(shellQuote).join(" ");
+  /*
+   * `hermes` on its own opens a chat, but `--model` and `--provider` belong to
+   * the `chat` subcommand rather than to the top-level command, so a profile
+   * that picks a model has to name it. It is prepended here rather than stored
+   * in the profile's argv because it is not a flag anyone should be able to
+   * delete in the editor: without it every model selection is silently ignored.
+   */
+  const leading = profile.harness === "hermes" ? ["chat"] : [];
+  const argv = [executable, ...leading, ...profile.args]
+    .map(shellQuote)
+    .join(" ");
 
   /*
    * The PATH a forced command gets is not the PATH you get when you log in.
@@ -146,7 +158,36 @@ export function windowCommand(
    * reason the working directory belongs here too.
    */
   const env = "export TERM=xterm-256color COLORTERM=truecolor;";
-  const inner = `cd ${shellQuote(cwd)} && ${env} ${harness ?? 'exec "$SHELL"'}`;
+
+  /*
+   * Give the pty a baud rate Linux will accept back.
+   *
+   * SSH carries terminal modes in its pty-req, `TTY_OP_ISPEED` and
+   * `TTY_OP_OSPEED` among them, and sshd writes whatever it is sent straight
+   * into the pty. The browser's client is Go, and the Go SSH example every
+   * project copies from hardcodes 14400 — a rate Linux has no encoding for, and
+   * one `stty 14400` will not even set by hand. sshd sets it anyway, because it
+   * writes the raw termios fields rather than going through cfsetspeed.
+   *
+   * A pty then exists whose speed cannot be written back. Reading it works, so
+   * nothing looks wrong until a program does the ordinary raw-mode dance —
+   * tcgetattr, flip some flags, tcsetattr — at which point the unchanged speed
+   * field comes back as EINVAL. Hermes dies exactly there, inside
+   * prompt_toolkit, before it paints anything. Claude survives the same pty
+   * because Node's setRawMode swallows the error, which is why this went
+   * unnoticed until a second harness arrived.
+   *
+   * Set on the session rather than the attachment: the harness reads it once at
+   * startup, and this is the pty the harness actually runs on. dtach copies
+   * termios from the sshd pty when it creates its own, so the bad value is
+   * inherited here and has to be corrected here.
+   *
+   * 38400 is the conventional pty speed and what every other path already
+   * reports. Failure is ignored on purpose — a box where `stty` is missing
+   * should still open a window.
+   */
+  const baud = "stty 38400 2>/dev/null;";
+  const inner = `cd ${shellQuote(cwd)} && ${baud} ${env} ${harness ?? 'exec "$SHELL"'}`;
 
   // `dtach -p` writes to a live socket and fails on a dead one, which makes it
   // a liveness probe. A socket left behind by a crashed session would otherwise
