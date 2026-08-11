@@ -12,6 +12,18 @@ That await is raced against a timeout, because a panicked runtime never settles
 `done` at all. `onRuntimeDead` exists so the app can rebuild every window rather
 than leaving you with terminals that look fine and accept no input.
 
+### The browser asks sshd for a pty at 14400 baud, which Linux cannot encode
+
+SSH carries `TTY_OP_ISPEED` and `TTY_OP_OSPEED` in its pty-req and sshd writes
+them in raw. The Go SSH example every project copies hardcodes 14400, so every
+browser window gets a pty whose speed reads back fine and cannot be written
+again. The first program to do the ordinary tcgetattr, flip flags, tcsetattr
+raw-mode dance gets `EINVAL`. `stty 38400` in the session command fixes it.
+
+Nothing showed this for months: Node's `setRawMode` swallows the error, so
+Claude was fine. Python's prompt_toolkit raises, so Hermes died before painting
+anything. A harness that renders nothing and exits is the symptom.
+
 ### flock locks a file descriptor, and descriptors are inherited
 
 The session command serialises its probe-then-create with `flock -o`. Without
