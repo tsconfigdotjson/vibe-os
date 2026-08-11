@@ -641,6 +641,37 @@ export function ProfilePanel({
             </div>
 
             <div className="field">
+              <label htmlFor="hermes-reasoning">Thinking</label>
+              <select
+                id="hermes-reasoning"
+                className="text-input select"
+                value={hermes.reasoning}
+                onChange={(event) =>
+                  patchHermes({ reasoning: event.target.value })
+                }
+              >
+                <option value="">Default — whatever Hermes picks</option>
+                {(hermesInfo?.reasoningLevels ?? []).map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+                {/* Same round-trip guarantee the Claude side makes: a level
+                    this build has not heard of is offered back, not reset. */}
+                {hermes.reasoning &&
+                !(hermesInfo?.reasoningLevels ?? []).includes(
+                  hermes.reasoning,
+                ) ? (
+                  <option value={hermes.reasoning}>{hermes.reasoning}</option>
+                ) : null}
+              </select>
+              <p className="field-hint">
+                Read off <code>hermes chat --help</code> on the box, so the
+                ladder follows Hermes' releases.
+              </p>
+            </div>
+
+            <div className="field">
               <label htmlFor="hermes-interface">Interface</label>
               <select
                 id="hermes-interface"

@@ -200,16 +200,14 @@ installed on the server, so the list follows Claude's releases.
 #### Hermes
 
 Picking the Hermes harness runs `hermes chat` in the worktree, and the editor
-offers a model, a provider, an interface (`--cli` or `--tui`) and the same kind
-of switches, `--yolo` among them.
+offers a model, a provider, a thinking dropdown (`--reasoning`), an interface
+(`--cli` or `--tui`) and the same kind of switches, `--yolo` among them.
 
 Models are typed rather than picked. `hermes model` is an interactive wizard
 with no listing mode, so there is nothing to read off the box. The provider list
 is real: it is whatever `~/.hermes/config.yaml` has been set up with, so adding
-one with `hermes model` makes it appear here.
-
-A Hermes profile is a separate `~/.hermes`, which is how two roles can run on
-two different providers without sharing one config file.
+one with `hermes model` makes it appear here. Reasoning levels are read off
+`hermes chat --help`, so that ladder follows Hermes' releases.
 
 #### Hermes and the browser
 

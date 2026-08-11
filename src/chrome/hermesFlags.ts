@@ -19,15 +19,27 @@ import { detokenize } from "../../shared/args";
  * Flags whose value is the next token, for the ones that fall through to
  * `extra`.
  *
- * `--model`, `--provider` and `--profile` are absent for the same reason they
+ * Taken from `hermes chat --help` on a real install rather than from the
+ * documentation, which lists a `-p/--profile` that the CLI does not accept:
+ * `profile` is a subcommand there, not a flag, and a control offering it built
+ * a command line argparse rejects before the session ever started.
+ *
+ * `--model`, `--provider` and `--reasoning` are absent for the same reason they
  * are in the Claude file: they have their own branch, which always `continue`s.
  */
 const VALUED = new Set([
   "--in",
   "--resume",
   "-r",
-  "--append-system-prompt",
-  "--usage-file",
+  "--toolsets",
+  "-t",
+  "--skills",
+  "-s",
+  "--max-turns",
+  "--source",
+  "--image",
+  "--query",
+  "-q",
 ]);
 
 /** Which terminal interface Hermes puts up. Empty means whatever it defaults to. */
@@ -38,14 +50,8 @@ export interface HermesSettings {
   model: string;
   /** Provider id, which is Hermes' own configuration rather than a fixed list. */
   provider: string;
-  /**
-   * A Hermes profile, which is a whole isolated `~/.hermes`.
-   *
-   * Nothing to do with a vibe-os profile, and the name collision is Hermes'.
-   * It is what keeps two roles on two different providers from sharing one
-   * config file.
-   */
-  hermesProfile: string;
+  /** How hard the session thinks. Empty for whatever Hermes defaults to. */
+  reasoning: string;
   interface: Interface;
   toggles: Record<string, boolean>;
   /** Everything the controls above do not own, as the user typed it. */
@@ -90,6 +96,16 @@ export const TOGGLES: {
     hint: "Disable every customisation at once. The reproducible-run switch.",
   },
   {
+    flag: "--checkpoints",
+    label: "Checkpoints",
+    hint: "Snapshot files before destructive edits, so /rollback can undo them.",
+  },
+  {
+    flag: "--verbose",
+    label: "Verbose output",
+    hint: "Show full tool output rather than the collapsed form.",
+  },
+  {
     flag: "--pass-session-id",
     label: "Pass session id",
     hint: "Put the session id in the system prompt, so the agent can name its own session.",
@@ -124,7 +140,7 @@ export function parseSettings(args: string[]): HermesSettings {
   const leftovers: string[] = [];
   let model = "";
   let provider = "";
-  let hermesProfile = "";
+  let reasoning = "";
   let iface: Interface = "";
 
   for (let i = 0; i < args.length; i += 1) {
@@ -159,8 +175,7 @@ export function parseSettings(args: string[]): HermesSettings {
       token === "--model" ||
       token === "-m" ||
       token === "--provider" ||
-      token === "--profile" ||
-      token === "-p"
+      token === "--reasoning"
     ) {
       const value = args[i + 1];
       // A trailing valued flag with nothing after it is malformed; keep it in
@@ -172,7 +187,7 @@ export function parseSettings(args: string[]): HermesSettings {
       i += 1;
       if (token === "--model" || token === "-m") model = value;
       else if (token === "--provider") provider = value;
-      else hermesProfile = value;
+      else reasoning = value;
       continue;
     }
     leftovers.push(token);
@@ -190,7 +205,7 @@ export function parseSettings(args: string[]): HermesSettings {
   return {
     model,
     provider,
-    hermesProfile,
+    reasoning,
     interface: iface,
     toggles,
     extra: detokenize(leftovers),
@@ -203,7 +218,7 @@ export function buildArgs(settings: HermesSettings): string {
 
   if (settings.model) tokens.push("--model", settings.model);
   if (settings.provider) tokens.push("--provider", settings.provider);
-  if (settings.hermesProfile) tokens.push("--profile", settings.hermesProfile);
+  if (settings.reasoning) tokens.push("--reasoning", settings.reasoning);
   // The two are mutually exclusive by construction: `interface` holds one value,
   // so there is no state in which both flags can be written.
   if (settings.interface === "tui") tokens.push(TUI);

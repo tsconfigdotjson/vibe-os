@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { hermesVersion, reasoningLevels } from "../server/harness.ts";
 import { tokenize } from "../server/profiles.ts";
 import {
   buildArgs,
@@ -38,7 +39,7 @@ describe("round trip", () => {
         "--pass-session-id",
       ],
     ],
-    ["a hermes profile", ["--profile", "deepseek"]],
+    ["a reasoning level", ["--reasoning", "xhigh"]],
     ["the full-screen interface", ["--tui"]],
     ["the classic interface", ["--cli"]],
     [
@@ -48,8 +49,8 @@ describe("round trip", () => {
         "deepseek-v4-flash",
         "--provider",
         "deepseek",
-        "--profile",
-        "work",
+        "--reasoning",
+        "high",
         "--tui",
         "--yolo",
         "--continue",
@@ -57,11 +58,7 @@ describe("round trip", () => {
     ],
     // Short forms are understood on the way in and normalised on the way out,
     // so `-m opus` typed into the advanced field becomes a model selection.
-    [
-      "short forms normalise",
-      ["-m", "opus", "-p", "work"],
-      ["--model", "opus", "--profile", "work"],
-    ],
+    ["the short model form normalises", ["-m", "opus"], ["--model", "opus"]],
     ["bare -c is the continue switch", ["-c"], ["--continue"]],
     // Order is the composer's, not the input's: controls first, then extra.
     [
@@ -140,7 +137,7 @@ describe("the interface segment", () => {
     const settings: HermesSettings = {
       model: "",
       provider: "",
-      hermesProfile: "",
+      reasoning: "",
       interface: "",
       toggles: {},
       extra: "",
@@ -165,5 +162,106 @@ describe("values that need quoting", () => {
       "--append-system-prompt",
       "don't guess",
     ]);
+  });
+});
+
+/**
+ * `hermes --version` prints a block, not a line.
+ *
+ * The fixture is verbatim from the VPS. The first version of this took the last
+ * token of the whole output and reported the agent as version "status.", which
+ * is what the last line of that block ends with.
+ */
+describe("hermesVersion", () => {
+  const REAL = `Hermes Agent v0.20.0 (2026.8.3)
+Install directory: /home/ubuntu/.hermes/hermes-agent
+Python: 3.11.15
+OpenAI SDK: 2.24.0
+Run 'hermes version' for update status.
+`;
+
+  test("reads the agent's own version, not the last thing printed", () => {
+    expect(hermesVersion(REAL)).toBe("0.20.0");
+  });
+
+  test("ignores the Python and SDK versions below it", () => {
+    expect(hermesVersion(REAL)).not.toBe("3.11.15");
+    expect(hermesVersion(REAL)).not.toBe("2.24.0");
+  });
+
+  test("a bare version is still a version", () => {
+    expect(hermesVersion("1.2.3\n")).toBe("1.2.3");
+    expect(hermesVersion("v1.2.3")).toBe("1.2.3");
+  });
+
+  test("a prerelease suffix survives", () => {
+    expect(hermesVersion("Hermes Agent v1.2.3-rc1 (x)")).toBe("1.2.3-rc1");
+  });
+
+  /** Better no version than a wrong one: the label falls back to "installed". */
+  test("nothing version-shaped is null", () => {
+    expect(hermesVersion("")).toBeNull();
+    expect(hermesVersion("Hermes Agent\n1.2.3\n")).toBeNull();
+  });
+});
+
+/**
+ * `--reasoning` levels, read off the box rather than hardcoded.
+ *
+ * The fixture is verbatim from `hermes chat --help` on the VPS, wrapped exactly
+ * as argparse wrapped it. That wrapping is the whole difficulty: the list spans
+ * two lines and ends with "or ultra." rather than a comma.
+ */
+describe("reasoningLevels", () => {
+  const REAL = `  -m MODEL, --model MODEL
+                        Model to use (e.g., anthropic/claude-sonnet-4)
+  --reasoning LEVEL     Reasoning effort for this session: none, minimal, low,
+                        medium, high, xhigh, max, or ultra. Overrides
+                        agent.reasoning_effort for this run only (same levels
+                        as the /reasoning slash command).
+  --provider PROVIDER   Inference provider (default: auto).
+`;
+
+  test("reads the ladder across a wrapped line", () => {
+    expect(reasoningLevels(REAL)).toEqual([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+  });
+
+  /** The order is the scale, so it has to survive in the order it was written. */
+  test("keeps them weakest first", () => {
+    const levels = reasoningLevels(REAL);
+    expect(levels[0]).toBe("none");
+    expect(levels[levels.length - 1]).toBe("ultra");
+  });
+
+  test("no flag means no answer, and the caller uses its own ladder", () => {
+    expect(reasoningLevels("")).toEqual([]);
+    expect(reasoningLevels("  --model MODEL   Model to use\n")).toEqual([]);
+  });
+
+  /**
+   * Half a list read out of a paragraph is worse than no list. If any token
+   * fails to look like a level the whole match is discarded.
+   */
+  test("a sentence is discarded rather than half-parsed", () => {
+    expect(
+      reasoningLevels(
+        "  --reasoning LEVEL   Set this however you like, it is your call.\n",
+      ),
+    ).toEqual([]);
+  });
+
+  test("a single token is not a ladder", () => {
+    expect(reasoningLevels("  --reasoning LEVEL   Levels: high.\n")).toEqual(
+      [],
+    );
   });
 });

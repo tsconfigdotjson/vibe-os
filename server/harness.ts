@@ -84,6 +84,21 @@ const HERMES_PATHS = [
 ];
 
 /**
+ * And again for the two commands that make Browser Use mode engage.
+ *
+ * `uv`'s installer writes to `~/.local/bin` and nowhere else, which is the same
+ * directory that neither a systemd service nor an `ssh host 'command'` has on
+ * PATH. Without this the check reported a missing uvx on a box that had one, and
+ * offered to install what was already installed.
+ */
+const home = process.env.HOME ?? "";
+const BROWSER_USE_PATHS = [
+  `${home}/.local/bin/browser-use`,
+  "/usr/local/bin/browser-use",
+];
+const UVX_PATHS = [`${home}/.local/bin/uvx`, "/usr/local/bin/uvx"];
+
+/**
  * The commands that install what Hermes needs, named where they are checked.
  *
  * doctor prints them under a failed check and `connect-hermes` prints the first
@@ -266,12 +281,31 @@ export function discoverClaude(): Promise<HarnessInfo> {
 
 // ── Hermes ───────────────────────────────────────────────────────────────────
 
+/**
+ * The reasoning ladder as of writing, used only when the help cannot be read.
+ *
+ * Not merged with what was discovered, for the reason `KNOWN_EFFORT` gives: the
+ * list is the scale, so a union of two sources would put a newly-added level in
+ * the wrong place and mislabel how hard a role thinks.
+ */
+const KNOWN_REASONING = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
+
 const NO_HERMES: HermesInfo = {
   available: false,
   version: null,
   providers: [],
   defaultProvider: null,
   defaultModel: null,
+  reasoningLevels: KNOWN_REASONING,
   browser: {
     cdpUrl: null,
     backend: null,
@@ -305,6 +339,46 @@ async function hermesConfig(
   } catch {
     return null;
   }
+}
+
+/**
+ * The levels `--reasoning` lists in its own help output.
+ *
+ * The same job `effortLevels` does for Claude, against a different sentence:
+ * Hermes writes "Reasoning effort for this session: none, minimal, low, medium,
+ * high, xhigh, max, or ultra." across two wrapped lines, so the anchor is the
+ * first colon after the flag and the terminator is the full stop.
+ *
+ * Same shape check, for the same reason. That anchor is loose enough to catch a
+ * paragraph in some future release, so every token has to look like a level or
+ * the whole match is discarded and the caller falls back to the known ladder.
+ */
+export function reasoningLevels(help: string): string[] {
+  const section = /--reasoning[\s\S]{0,200}?:\s*([\s\S]{0,200}?)\./.exec(help);
+  if (!section) return [];
+  const levels = section[1]
+    .split(/,|\bor\b/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (levels.length < 2 || !levels.every((l) => /^[a-z][a-z0-9-]*$/.test(l)))
+    return [];
+  return levels;
+}
+
+/**
+ * The version out of `hermes --version`, which is not one line.
+ *
+ * Claude prints `1.2.3 (Claude Code)` and the first token is the answer. Hermes
+ * prints a five-line block — its own version, the install directory, the Python
+ * it built against, the OpenAI SDK, and a sentence suggesting `hermes version` —
+ * so taking the last token of the whole thing yields "status." and taking the
+ * first yields "Hermes". Only the first line is about the agent, and the answer
+ * is the version-shaped token in it.
+ */
+export function hermesVersion(stdout: string): string | null {
+  const first = stdout.split("\n")[0] ?? "";
+  const match = /\bv?(\d+(?:\.\d+)+[^\s()]*)/.exec(first);
+  return match ? match[1] : null;
 }
 
 /** A field of a config block, when it is a non-empty string. */
@@ -356,11 +430,19 @@ export function discoverHermes(): Promise<HermesInfo> {
 
     // Concurrently: `hermes` is Python, so each invocation costs seconds of
     // interpreter and import time before it does anything.
-    const [version, model, browser, providers, browserUse, cdpPort] =
+    const [version, help, model, browser, providers, browserUse, cdpPort] =
       await Promise.all([
         run(binary, ["--version"], { timeout: 30_000 })
-          .then(({ stdout }) => stdout.trim().split(/\s+/).pop() ?? null)
+          .then(({ stdout }) => hermesVersion(stdout))
           .catch(() => null),
+        // `chat`, not the bare command: `--reasoning` is a flag of that
+        // subcommand, which is also the one a profile actually launches.
+        run(binary, ["chat", "--help"], {
+          timeout: 30_000,
+          maxBuffer: 4 * 1024 * 1024,
+        })
+          .then(({ stdout }) => stdout)
+          .catch(() => ""),
         hermesConfig(binary, "model"),
         hermesConfig(binary, "browser"),
         hermesConfig(binary, "providers"),
@@ -368,8 +450,8 @@ export function discoverHermes(): Promise<HermesInfo> {
         // before it prints anything, which would hold up startup for minutes on
         // the one box where the answer matters least.
         Promise.all([
-          resolveBinary("browser-use", []),
-          resolveBinary("uvx", []),
+          resolveBinary("browser-use", BROWSER_USE_PATHS),
+          resolveBinary("uvx", UVX_PATHS),
         ]).then(([direct, viaUvx]) => Boolean(direct || viaUvx)),
         installedCdpPort(),
       ]);
@@ -380,9 +462,11 @@ export function discoverHermes(): Promise<HermesInfo> {
       ...(defaultProvider ? [defaultProvider] : []),
     ];
     const cdpUrl = str(browser, "cdp_url");
+    const reasoning = reasoningLevels(help);
 
     log.debug(
       `hermes ${version ?? "?"}: ${names.length} providers, ` +
+        `${reasoning.length > 0 ? reasoning.join("/") : "no"} reasoning levels, ` +
         `browser ${cdpUrl ?? "unset"}, browser-use ${browserUse ? "runnable" : "missing"}`,
     );
 
@@ -392,6 +476,7 @@ export function discoverHermes(): Promise<HermesInfo> {
       providers: [...new Set(names)].sort(),
       defaultProvider,
       defaultModel: str(model, "default"),
+      reasoningLevels: reasoning.length > 0 ? reasoning : KNOWN_REASONING,
       browser: {
         cdpUrl,
         backend: str(browser, "backend"),

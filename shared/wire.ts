@@ -109,6 +109,8 @@ export interface HermesInfo {
   defaultProvider: string | null;
   /** The model `hermes chat` would use with no `--model`, if readable. */
   defaultModel: string | null;
+  /** Values `--reasoning` accepts, weakest first — the order is the scale. */
+  reasoningLevels: string[];
   browser: HermesBrowser;
 }
 
