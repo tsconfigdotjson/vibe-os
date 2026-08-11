@@ -1,21 +1,27 @@
-// What the Claude CLI on this machine can be told to do.
+// What the agent CLIs on this machine can be told to do.
 //
 // The profile editor offers models and permission modes as dropdowns, which
 // means something has to know what the valid values are. Hardcoding them would
 // be wrong within a release or two — Claude ships new models faster than this
 // project ships anything — so they are read off the binary that is actually
 // installed. Update Claude Code and the dropdowns follow.
+//
+// Hermes answers a narrower version of the same question. It has no listing
+// mode at all (`hermes model` is an interactive wizard), so what is discoverable
+// is its own configuration: which providers it has been set up with, what it
+// would use by default, and where its browser tools will land.
 
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { promisify } from "node:util";
+import { CHROME_UNIT_PATH, cdpUrlMatches, portsFromUnits } from "./browser.ts";
 import { log } from "./log.ts";
 
 const run = promisify(execFile);
 
-import type { HarnessInfo } from "../shared/wire.ts";
+import type { HarnessInfo, HermesInfo } from "../shared/wire.ts";
 
-export type { HarnessInfo };
+export type { HarnessInfo, HermesInfo };
 
 /**
  * The effort ladder as of writing, used only when the binary cannot be read.
@@ -60,24 +66,51 @@ const KNOWN_ALIASES = [
  * harness runs under a login shell and the server does not — so the dropdowns
  * come up empty on exactly the deployment the docs recommend.
  */
-const EXTRA_PATHS = [
+const CLAUDE_PATHS = [
   `${process.env.HOME ?? ""}/.local/bin/claude`,
   "/usr/local/bin/claude",
   "/opt/claude/.local/bin/claude",
 ];
 
-/** Resolves `claude` through any symlinks to the real executable. */
-async function resolveBinary(): Promise<string | null> {
+/**
+ * The same problem for Hermes, whose installer offers two layouts.
+ *
+ * `/usr/local/bin/hermes` is its FHS default, chosen to match Claude Code and
+ * the Codex CLI; `~/.local/bin` is what it uses when it cannot write there.
+ */
+const HERMES_PATHS = [
+  `${process.env.HOME ?? ""}/.local/bin/hermes`,
+  "/usr/local/bin/hermes",
+];
+
+/**
+ * The commands that install what Hermes needs, named where they are checked.
+ *
+ * doctor prints them under a failed check and `connect-hermes` prints the first
+ * one when there is nothing to configure. Both used to be about to grow their
+ * own copy of a URL that has to be right.
+ */
+export const HERMES_INSTALL =
+  "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
+export const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";
+
+/** Resolves a command through any symlinks to the real executable. */
+async function resolveBinary(
+  command: string,
+  extraPaths: string[],
+): Promise<string | null> {
   const candidates: string[] = [];
   try {
-    const { stdout } = await run("/bin/sh", ["-c", "command -v claude"], {
-      timeout: 5_000,
-    });
+    const { stdout } = await run(
+      "/bin/sh",
+      ["-c", 'command -v "$1"', "sh", command],
+      { timeout: 5_000 },
+    );
     if (stdout.trim()) candidates.push(stdout.trim());
   } catch {
     // not on PATH — the explicit locations below may still have it
   }
-  candidates.push(...EXTRA_PATHS.filter(Boolean));
+  candidates.push(...extraPaths.filter(Boolean));
 
   for (const candidate of candidates) {
     try {
@@ -189,7 +222,7 @@ let cached: Promise<HarnessInfo> | null = null;
  */
 export function discoverClaude(): Promise<HarnessInfo> {
   cached ??= (async (): Promise<HarnessInfo> => {
-    const binary = await resolveBinary();
+    const binary = await resolveBinary("claude", CLAUDE_PATHS);
     if (!binary) {
       log.debug(
         "claude is not on PATH — the profile editor will offer aliases only",
@@ -229,4 +262,144 @@ export function discoverClaude(): Promise<HarnessInfo> {
     };
   })();
   return cached;
+}
+
+// ── Hermes ───────────────────────────────────────────────────────────────────
+
+const NO_HERMES: HermesInfo = {
+  available: false,
+  version: null,
+  providers: [],
+  defaultProvider: null,
+  defaultModel: null,
+  browser: {
+    cdpUrl: null,
+    backend: null,
+    cdpPort: null,
+    connected: false,
+    browserUse: false,
+  },
+};
+
+/**
+ * One `hermes config get <key> --json`, parsed, or null.
+ *
+ * The one machine-readable read Hermes offers. Everything downstream treats a
+ * null as "could not tell", never as "not set": a key that has never been
+ * written, a build that spells it differently and a Python traceback all arrive
+ * here the same way, and only the first of those is worth reporting as a fact.
+ */
+async function hermesConfig(
+  binary: string,
+  key: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const { stdout } = await run(binary, ["config", "get", key, "--json"], {
+      timeout: 20_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    const parsed: unknown = JSON.parse(stdout);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A field of a config block, when it is a non-empty string. */
+function str(
+  block: Record<string, unknown> | null,
+  key: string,
+): string | null {
+  const value = block?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * The CDP port the installed Chrome unit actually opened.
+ *
+ * Read from the unit rather than from a default, for the same reason doctor
+ * does it: `install-browser` may have been given `--cdp-port` months ago, and
+ * comparing a configured URL against a port nothing is listening on would call a
+ * working box broken.
+ */
+async function installedCdpPort(): Promise<number | null> {
+  const unit = await readFile(CHROME_UNIT_PATH, "utf8").catch(() => null);
+  if (!unit) return null;
+  return portsFromUnits({ chrome: unit }).cdpPort;
+}
+
+let hermesCached: Promise<HermesInfo> | null = null;
+
+/**
+ * Everything the Hermes side of the editor needs, discovered once.
+ *
+ * Deliberately thinner than the Claude side. There is no model list here and
+ * there is not going to be one: `hermes model` is an interactive wizard, and a
+ * hardcoded list would be a guess about somebody else's account. What is real is
+ * what the box is configured for, so that is what is offered, and the model and
+ * provider fields stay free text with the discovered values as suggestions.
+ *
+ * No floor of well-known provider names either, unlike `KNOWN_ALIASES` above.
+ * A Claude alias works wherever Claude is installed; a Hermes provider id is
+ * account configuration, so offering one that is not on this box would suggest a
+ * choice that can only fail at launch.
+ */
+export function discoverHermes(): Promise<HermesInfo> {
+  hermesCached ??= (async (): Promise<HermesInfo> => {
+    const binary = await resolveBinary("hermes", HERMES_PATHS);
+    if (!binary) {
+      log.debug("hermes is not on PATH — Hermes profiles will not launch");
+      return NO_HERMES;
+    }
+
+    // Concurrently: `hermes` is Python, so each invocation costs seconds of
+    // interpreter and import time before it does anything.
+    const [version, model, browser, providers, browserUse, cdpPort] =
+      await Promise.all([
+        run(binary, ["--version"], { timeout: 30_000 })
+          .then(({ stdout }) => stdout.trim().split(/\s+/).pop() ?? null)
+          .catch(() => null),
+        hermesConfig(binary, "model"),
+        hermesConfig(binary, "browser"),
+        hermesConfig(binary, "providers"),
+        // Presence, never a run. A cold `uvx browser-use` downloads the package
+        // before it prints anything, which would hold up startup for minutes on
+        // the one box where the answer matters least.
+        Promise.all([
+          resolveBinary("browser-use", []),
+          resolveBinary("uvx", []),
+        ]).then(([direct, viaUvx]) => Boolean(direct || viaUvx)),
+        installedCdpPort(),
+      ]);
+
+    const defaultProvider = str(model, "provider");
+    const names = [
+      ...Object.keys(providers ?? {}).filter((n) => n.trim()),
+      ...(defaultProvider ? [defaultProvider] : []),
+    ];
+    const cdpUrl = str(browser, "cdp_url");
+
+    log.debug(
+      `hermes ${version ?? "?"}: ${names.length} providers, ` +
+        `browser ${cdpUrl ?? "unset"}, browser-use ${browserUse ? "runnable" : "missing"}`,
+    );
+
+    return {
+      available: true,
+      version,
+      providers: [...new Set(names)].sort(),
+      defaultProvider,
+      defaultModel: str(model, "default"),
+      browser: {
+        cdpUrl,
+        backend: str(browser, "backend"),
+        cdpPort,
+        connected: cdpPort !== null && cdpUrlMatches(cdpUrl, cdpPort),
+        browserUse,
+      },
+    };
+  })();
+  return hermesCached;
 }

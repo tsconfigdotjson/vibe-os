@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Harness,
   HarnessInfo,
+  HermesInfo,
   McpServer,
   Profile,
   ProfileInput,
@@ -18,6 +19,14 @@ import {
   parseSettings,
   TOGGLES,
 } from "./claudeFlags";
+import {
+  buildArgs as buildHermesArgs,
+  TOGGLES as HERMES_TOGGLES,
+  type HermesSettings,
+  type Interface,
+  interfaceLabel,
+  parseSettings as parseHermesSettings,
+} from "./hermesFlags";
 
 export interface ProfilePanelProps {
   /** The profile being edited, or null when creating a new one. */
@@ -25,6 +34,8 @@ export interface ProfilePanelProps {
   palette: readonly string[];
   /** What the installed CLI accepts, or null while it is still being read. */
   harnessInfo: HarnessInfo | null;
+  /** What Hermes on the box is configured for, or null while it is read. */
+  hermesInfo: HermesInfo | null;
   /** MCP servers configured on the box, for this project. */
   mcpServers: McpServer[];
   onSave: (input: ProfileInput) => Promise<unknown>;
@@ -34,9 +45,16 @@ export interface ProfilePanelProps {
 
 const HARNESSES: { value: Harness; label: string; hint: string }[] = [
   { value: "claude", label: "Claude", hint: "runs `claude` in the worktree" },
+  {
+    value: "hermes",
+    label: "Hermes",
+    hint: "runs `hermes chat` in the worktree",
+  },
   { value: "shell", label: "Shell", hint: "a plain shell, tinted and named" },
   { value: "custom", label: "Custom", hint: "any command on the box" },
 ];
+
+const INTERFACES: Interface[] = ["", "cli", "tui"];
 
 const MCP_MODES: { value: McpMode; label: string }[] = [
   { value: "all", label: "Everything configured on this box" },
@@ -55,6 +73,7 @@ export function ProfilePanel({
   profile,
   palette,
   harnessInfo,
+  hermesInfo,
   mcpServers,
   onSave,
   onDelete,
@@ -83,8 +102,20 @@ export function ProfilePanel({
   // The dropdowns and the advanced field are two views of one argv list. State
   // is held in the structured shape and flattened on save, so the raw text can
   // never drift out of step with the controls above it.
+  //
+  // Two shapes rather than one, because a profile stores one argv list and the
+  // two harnesses share no flags. Each reads the stored list only when the
+  // profile is already of its own kind: parsing a Claude profile's flags as
+  // Hermes ones would dump the lot into the advanced field, and switching the
+  // segment back would then have destroyed them. The other side seeds with its
+  // own sensible default instead, which is what a switch should land you on.
+  const argsFor = (kind: Harness, fallback: string[]) =>
+    profile?.harness === kind ? profile.args : fallback;
   const [settings, setSettings] = useState<ClaudeSettings>(() =>
-    parseSettings(profile?.args ?? ["--dangerously-skip-permissions"]),
+    parseSettings(argsFor("claude", ["--dangerously-skip-permissions"])),
+  );
+  const [hermes, setHermes] = useState<HermesSettings>(() =>
+    parseHermesSettings(argsFor("hermes", ["--yolo"])),
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -114,6 +145,8 @@ export function ProfilePanel({
   };
   const patch = (next: Partial<ClaudeSettings>) =>
     setSettings((s) => ({ ...s, ...next }));
+  const patchHermes = (next: Partial<HermesSettings>) =>
+    setHermes((s) => ({ ...s, ...next }));
 
   /**
    * Selections whose server is not on the box.
@@ -150,6 +183,7 @@ export function ProfilePanel({
   const [customArgs, setCustomArgs] = useState(detokenize(profile?.args ?? []));
 
   const composed = useMemo(() => buildArgs(settings), [settings]);
+  const composedHermes = useMemo(() => buildHermesArgs(hermes), [hermes]);
   const blanks = useMemo(() => countBlanks(prompt), [prompt]);
 
   const submit = async () => {
@@ -164,9 +198,11 @@ export function ProfilePanel({
         args:
           harness === "claude"
             ? composed
-            : harness === "custom"
-              ? customArgs
-              : "",
+            : harness === "hermes"
+              ? composedHermes
+              : harness === "custom"
+                ? customArgs
+                : "",
         prompt,
       });
       // onClose unmounts this panel, so clearing `busy` afterwards would write
@@ -543,6 +579,185 @@ export function ProfilePanel({
                   </p>
                   <p className="field-hint mono command-preview">
                     claude {composed || "(no arguments)"}
+                  </p>
+                </>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+
+        {harness === "hermes" ? (
+          <>
+            {/* Typed, not picked. `hermes model` is an interactive wizard with
+                no listing mode, so there is nothing authoritative to read off
+                the box — the datalists carry what it is already configured for
+                and everything else is free text. */}
+            <div className="field">
+              <label htmlFor="hermes-model">Model</label>
+              <input
+                id="hermes-model"
+                className="text-input mono"
+                list="hermes-models"
+                value={hermes.model}
+                placeholder={
+                  hermesInfo?.defaultModel
+                    ? `Default — ${hermesInfo.defaultModel}`
+                    : "Default — whatever Hermes is set to"
+                }
+                onChange={(event) => patchHermes({ model: event.target.value })}
+              />
+              <datalist id="hermes-models">
+                {hermesInfo?.defaultModel ? (
+                  <option value={hermesInfo.defaultModel} />
+                ) : null}
+              </datalist>
+            </div>
+
+            <div className="field">
+              <label htmlFor="hermes-provider">Provider</label>
+              <input
+                id="hermes-provider"
+                className="text-input mono"
+                list="hermes-providers"
+                value={hermes.provider}
+                placeholder={
+                  hermesInfo?.defaultProvider
+                    ? `Default — ${hermesInfo.defaultProvider}`
+                    : "Default — whatever Hermes is set to"
+                }
+                onChange={(event) =>
+                  patchHermes({ provider: event.target.value })
+                }
+              />
+              <datalist id="hermes-providers">
+                {(hermesInfo?.providers ?? []).map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              <p className="field-hint">
+                Providers this box is set up with. Add one with{" "}
+                <code>hermes model</code> on the box and it appears here.
+              </p>
+            </div>
+
+            <div className="field">
+              <label htmlFor="hermes-interface">Interface</label>
+              <select
+                id="hermes-interface"
+                className="text-input select"
+                value={hermes.interface}
+                onChange={(event) =>
+                  patchHermes({ interface: event.target.value as Interface })
+                }
+              >
+                {INTERFACES.map((value) => (
+                  <option key={value || "default"} value={value}>
+                    {interfaceLabel(value)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Where the browser tools land is a property of the box, not of
+                this profile: Hermes reads its CDP target from config.yaml and
+                has no flag for it. Said rather than offered as a switch, so the
+                editor cannot imply a choice it does not have. */}
+            <div className="field">
+              <span className="field-label">Browser tools</span>
+              <p className="field-hint">
+                {hermesInfo?.browser.connected ? (
+                  <>
+                    Driving the box's Chrome on{" "}
+                    <code>127.0.0.1:{hermesInfo.browser.cdpPort}</code>. Watch
+                    it over VNC.
+                    {hermesInfo.browser.browserUse ? null : (
+                      <>
+                        {" "}
+                        <span className="field-warn">
+                          No browser-use CLI, so this falls back to the twelve
+                          built-in tools.
+                        </span>
+                      </>
+                    )}
+                  </>
+                ) : hermesInfo?.available ? (
+                  <span className="field-warn">
+                    Not pointed at this box's browser. Run{" "}
+                    <code>vibe-os connect-hermes</code> on the box.
+                  </span>
+                ) : (
+                  <span className="field-warn">
+                    Hermes is not installed here, so this profile opens a window
+                    that closes immediately. <code>vibe-os doctor</code> has the
+                    install line.
+                  </span>
+                )}
+              </p>
+            </div>
+
+            <fieldset className="field">
+              <legend className="field-label">Options</legend>
+              <div className="switches">
+                {HERMES_TOGGLES.map((toggle) => (
+                  <label
+                    key={toggle.flag}
+                    className="check"
+                    title={toggle.hint}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(hermes.toggles[toggle.flag])}
+                      onChange={(event) =>
+                        patchHermes({
+                          toggles: {
+                            ...hermes.toggles,
+                            [toggle.flag]: event.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    {toggle.label}
+                  </label>
+                ))}
+              </div>
+              {hermes.toggles["--yolo"] ? (
+                <p className="field-hint field-warn">
+                  This session will not ask before running anything. Reasonable
+                  on a box that is already a sandbox; think twice anywhere else.
+                </p>
+              ) : null}
+            </fieldset>
+
+            <div className="field">
+              <button
+                type="button"
+                className="disclosure"
+                aria-expanded={showAdvanced}
+                onClick={() => setShowAdvanced((open) => !open)}
+              >
+                <span className="disclosure-caret" aria-hidden="true">
+                  {showAdvanced ? "▾" : "▸"}
+                </span>
+                Advanced
+              </button>
+              {showAdvanced ? (
+                <>
+                  <input
+                    className="text-input mono"
+                    value={hermes.extra}
+                    placeholder="--append-system-prompt &quot;…&quot;"
+                    onChange={(event) =>
+                      patchHermes({ extra: event.target.value })
+                    }
+                  />
+                  <p className="field-hint">
+                    Anything else to pass through. The controls above own their
+                    own flags; whatever you put here is kept exactly as typed.
+                  </p>
+                  {/* `chat` is not part of the stored flags. The server puts it
+                      there, because --model belongs to that subcommand. */}
+                  <p className="field-hint mono command-preview">
+                    hermes chat {composedHermes || "(no arguments)"}
                   </p>
                 </>
               ) : null}

@@ -16,7 +16,7 @@
  */
 
 /** Which program a profile launches. */
-export type Harness = "claude" | "shell" | "custom";
+export type Harness = "claude" | "hermes" | "shell" | "custom";
 
 /** Whether a window has been handed off to a real terminal. */
 export type Handoff = "ssh" | null;
@@ -65,6 +65,51 @@ export interface HarnessInfo {
   permissionModes: string[];
   /** Values `--effort` accepts, weakest first — the order is the scale. */
   effortLevels: string[];
+}
+
+/**
+ * Where Hermes' browser tools will land, and whether they will be the good ones.
+ *
+ * Hermes takes its CDP target from `browser.cdp_url` in `~/.hermes/config.yaml`
+ * and offers no per-invocation flag for it, so this is a property of the box
+ * rather than of a profile. The editor reads it to say which browser a role will
+ * drive instead of implying a choice it does not have.
+ */
+export interface HermesBrowser {
+  /** `browser.cdp_url` as configured, or null when nothing is set. */
+  cdpUrl: string | null;
+  /** `browser.backend`, or null when unset, which means Browser Use mode. */
+  backend: string | null;
+  /** The port the installed Chrome unit actually opened, when there is one. */
+  cdpPort: number | null;
+  /** Whether `cdpUrl` names that port. False is the whole reason this exists. */
+  connected: boolean;
+  /**
+   * Whether the `browser-use` CLI could run, directly or through `uvx`.
+   *
+   * Without it Hermes quietly keeps its twelve built-in browser tools, which
+   * works but costs the token saving that Browser Use mode is for.
+   */
+  browserUse: boolean;
+}
+
+/** `GET /api/harness/hermes` — what the installed Hermes CLI is set up for. */
+export interface HermesInfo {
+  available: boolean;
+  version: string | null;
+  /**
+   * Providers to offer in the datalist.
+   *
+   * A floor of the ones Hermes ships support for, merged with whatever its own
+   * config reports. `hermes model` is an interactive wizard with no listing
+   * mode, so unlike the Claude harness there is nothing authoritative to read.
+   */
+  providers: string[];
+  /** The provider `hermes chat` would use with no `--provider`, if readable. */
+  defaultProvider: string | null;
+  /** The model `hermes chat` would use with no `--model`, if readable. */
+  defaultModel: string | null;
+  browser: HermesBrowser;
 }
 
 /**

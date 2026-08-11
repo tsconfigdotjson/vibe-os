@@ -3,7 +3,9 @@ import {
   archSupported,
   browserServices,
   browserUnits,
+  cdpUrlMatches,
   defaultBrowserOptions,
+  hermesBrowserSettings,
   memoryHeadroom,
   parseGeometry,
   parseMemInfo,
@@ -390,5 +392,120 @@ SwapFree:              0 kB
     expect(memoryHeadroom({ totalKb: 16 * 1024 * 1024, swapKb: 0 }).ok).toBe(
       true,
     );
+  });
+});
+
+/**
+ * The Hermes side of the browser: what it is told, and whether it took.
+ *
+ * `connect-hermes` writes these and doctor reads them back, so a disagreement
+ * between the two shows up as a box that says it is wired when it is not.
+ */
+describe("hermesBrowserSettings", () => {
+  test("names the port it was given", () => {
+    const settings = hermesBrowserSettings(9223);
+    expect(settings).toContainEqual({
+      key: "browser.cdp_url",
+      value: "http://127.0.0.1:9223",
+    });
+  });
+
+  /** Browser Use mode is the default, but only when the CLI happens to run. */
+  test("forces browser-use rather than relying on the default", () => {
+    expect(hermesBrowserSettings(9222)).toContainEqual({
+      key: "browser.backend",
+      value: "browser-use",
+    });
+  });
+
+  /** What stops a cloud key set later from quietly taking the browser back. */
+  test("pins the provider to local", () => {
+    expect(hermesBrowserSettings(9222)).toContainEqual({
+      key: "browser.cloud_provider",
+      value: "local",
+    });
+  });
+
+  /** Everything written here has to be readable back as connected. */
+  test("what it writes is what cdpUrlMatches accepts", () => {
+    const url = hermesBrowserSettings(9222).find(
+      (s) => s.key === "browser.cdp_url",
+    )?.value;
+    expect(cdpUrlMatches(url, 9222)).toBe(true);
+  });
+});
+
+describe("cdpUrlMatches", () => {
+  test("the url connect-hermes writes", () => {
+    expect(cdpUrlMatches("http://127.0.0.1:9222", 9222)).toBe(true);
+  });
+
+  /** Same host, and the form people type by hand. */
+  test("localhost is 127.0.0.1", () => {
+    expect(cdpUrlMatches("http://localhost:9222", 9222)).toBe(true);
+  });
+
+  /** `/browser connect ws://host:port` is the documented spelling. */
+  test("a websocket url is the same endpoint", () => {
+    expect(cdpUrlMatches("ws://127.0.0.1:9222", 9222)).toBe(true);
+  });
+
+  test("a trailing slash makes no difference", () => {
+    expect(cdpUrlMatches("http://127.0.0.1:9222/", 9222)).toBe(true);
+  });
+
+  test("surrounding whitespace makes no difference", () => {
+    expect(cdpUrlMatches("  http://127.0.0.1:9222  ", 9222)).toBe(true);
+  });
+
+  test("no scheme is still an endpoint", () => {
+    expect(cdpUrlMatches("127.0.0.1:9222", 9222)).toBe(true);
+  });
+
+  test("the ipv6 loopback literal", () => {
+    expect(cdpUrlMatches("http://[::1]:9222", 9222)).toBe(true);
+  });
+
+  test("a different port is a different browser", () => {
+    expect(cdpUrlMatches("http://127.0.0.1:9223", 9222)).toBe(false);
+  });
+
+  /**
+   * Chrome binds the debug port to loopback, so a routable address is some
+   * other machine's browser. Reporting that as connected would be a guess.
+   */
+  test("another host is not this box", () => {
+    expect(cdpUrlMatches("http://10.0.0.4:9222", 9222)).toBe(false);
+  });
+
+  /**
+   * A URL with no port never worked as a CDP endpoint. Inferring 80 from the
+   * scheme would report a misconfigured box as connected.
+   */
+  test("no port is not a match", () => {
+    expect(cdpUrlMatches("http://127.0.0.1", 9222)).toBe(false);
+  });
+
+  test("nothing configured is not a match", () => {
+    expect(cdpUrlMatches(null, 9222)).toBe(false);
+    expect(cdpUrlMatches(undefined, 9222)).toBe(false);
+    expect(cdpUrlMatches("", 9222)).toBe(false);
+    expect(cdpUrlMatches("   ", 9222)).toBe(false);
+  });
+
+  test("nonsense is not a match", () => {
+    expect(cdpUrlMatches("not a url", 9222)).toBe(false);
+    expect(cdpUrlMatches("http://:9222", 9222)).toBe(false);
+  });
+
+  /** A port that merely contains the digits is a different port. */
+  test("does not match on a substring of the port", () => {
+    expect(cdpUrlMatches("http://127.0.0.1:19222", 9222)).toBe(false);
+    expect(cdpUrlMatches("http://127.0.0.1:92220", 9222)).toBe(false);
+  });
+
+  /** file:// and friends are not endpoints, whatever the rest of it says. */
+  test("an unusable scheme is not a match", () => {
+    expect(cdpUrlMatches("file://127.0.0.1:9222", 9222)).toBe(false);
   });
 });

@@ -18,11 +18,16 @@ import {
   BROWSER_COMMANDS,
   browserServices,
   browserUnits,
+  CHROME_UNIT_PATH,
+  DEFAULT_CDP_PORT,
   defaultBrowserOptions,
+  hermesBrowserSettings,
+  portsFromUnits,
   type Unit,
   VNC_PASSWORD_LENGTH,
   vncPasswordFileFromUnit,
   vncPasswordPath,
+  XVNC_UNIT_PATH,
 } from "./browser.ts";
 import {
   type Config,
@@ -33,6 +38,7 @@ import {
 } from "./config.ts";
 import { openDb } from "./db.ts";
 import { type Check, homeFor, onPath, runDoctor } from "./doctor.ts";
+import { HERMES_INSTALL } from "./harness.ts";
 import { startServer } from "./index.ts";
 import { color, describeError, log } from "./log.ts";
 import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
@@ -51,6 +57,7 @@ const HELP = `
     vibe-os doctor               check this machine is ready
     vibe-os install-service      write and enable a systemd unit (needs root)
     vibe-os install-browser      run one Chrome on a virtual display (needs root)
+    vibe-os connect-hermes       point Hermes' browser tools at that Chrome
     vibe-os fetch-wasm           (re)download the SSH WASM runtime
 
   ${color.bold("Options")}
@@ -93,6 +100,10 @@ const HELP = `
                         omitted. macOS Screen Sharing will not connect without
                         this. An existing one is kept unless --no-vnc-password
     --no-vnc-password   serve the display with no authentication
+
+  ${color.bold("connect-hermes")}
+    --cdp-port <n>      the debug port to point Hermes at, when there is no
+                        installed browser unit to read it from
 `;
 
 function version(): string {
@@ -396,6 +407,143 @@ async function installBrowser(
   console.log(
     `  ${color.dim("Sign in to the extension once, through the viewer. The profile keeps it.")}`,
   );
+
+  // Last, and quietly. Hermes usually arrives after the browser, so not finding
+  // it is the common case rather than a failure worth interrupting the summary.
+  if (await connectHermes(user, home, opts.cdpPort, true)) {
+    console.log("");
+    console.log(
+      `  ${color.dim(`Hermes browser tools point at 127.0.0.1:${opts.cdpPort}.`)}`,
+    );
+  } else {
+    console.log("");
+    console.log(
+      `  ${color.dim("For Hermes browser tools, install it and run: vibe-os connect-hermes")}`,
+    );
+  }
+  console.log("");
+  return 0;
+}
+
+/**
+ * Points Hermes' browser tools at this box's Chrome.
+ *
+ * Every setting goes through `hermes config set` rather than into the YAML
+ * directly. Hermes owns that file, knows which of its keys are secrets and
+ * belong in `.env` instead, and migrates its own schema between versions —
+ * three things a hand-written merge here would have to keep guessing at.
+ *
+ * ── Why this is a box-wide setting and not a profile one ─────────────────────
+ * The CDP target lives at `browser.cdp_url` in `~/.hermes/config.yaml` and has
+ * no command-line equivalent, so there is nothing a profile could carry. Doing
+ * it per launch would mean two Python startups before every window and a global
+ * file rewritten by whichever window opened last.
+ *
+ * Returns false when Hermes is not installed, which is not an error: plenty of
+ * boxes run the browser for the Claude extension and nothing else.
+ */
+async function connectHermes(
+  user: string,
+  home: string,
+  cdpPort: number,
+  /** True when this process is root and has to drop to the login user. */
+  asUser: boolean,
+): Promise<boolean> {
+  /*
+   * A login shell, deliberately.
+   *
+   * Hermes installs to `/usr/local/bin` when it can write there and
+   * `~/.local/bin` when it cannot, and root's PATH reaches neither reliably
+   * under systemd. `runuser -l` runs `.profile`, which is what put the second
+   * one on PATH in the first place. runuser is util-linux, the same package
+   * `flock` comes from, so it is present wherever the session lock already is.
+   */
+  const asLoginUser = (script: string): [string, string[]] =>
+    asUser
+      ? ["runuser", ["-u", user, "--", "/bin/sh", "-lc", script]]
+      : ["/bin/sh", ["-lc", script]];
+
+  const [probe, probeArgs] = asLoginUser("command -v hermes");
+  const installed = await run(probe, probeArgs, {
+    timeout: 10_000,
+    env: { ...process.env, HOME: home },
+  })
+    .then(({ stdout }) => Boolean(stdout.trim()))
+    .catch(() => false);
+  if (!installed) return false;
+
+  for (const { key, value } of hermesBrowserSettings(cdpPort)) {
+    // Quoted as a single argument: a value never contains a space today, and
+    // the day one does is not the day to find out this was a bare expansion.
+    const [cmd, args] = asLoginUser(
+      `hermes config set ${JSON.stringify(key)} ${JSON.stringify(value)}`,
+    );
+    try {
+      await run(cmd, args, {
+        timeout: 60_000,
+        env: { ...process.env, HOME: home },
+      });
+      log.ok(`hermes ${key} = ${value}`);
+    } catch (err) {
+      log.error(`could not set hermes ${key}: ${describeError(err)}`);
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * `vibe-os connect-hermes` — the same thing, for a Hermes installed later.
+ *
+ * `install-browser` does this as its last step, but it is the browser's
+ * installer and Hermes usually arrives after it. No root: it writes one file in
+ * your own home directory, through a command you own.
+ */
+async function connectHermesCommand(
+  config: Config,
+  values: RawOptions,
+): Promise<number> {
+  const user = process.env.SUDO_USER ?? config.user;
+  const home = (await homeFor(user)) ?? os.homedir();
+
+  // What the unit actually opened, not what the default is. install-browser may
+  // have been given --cdp-port long ago, and writing the default into Hermes
+  // would point it at a port nothing is listening on.
+  const unit = await readFile(CHROME_UNIT_PATH, "utf8").catch(() => null);
+  const cdpPort = values["cdp-port"]
+    ? numeric(values["cdp-port"], "cdp-port")
+    : unit
+      ? portsFromUnits({ chrome: unit }).cdpPort
+      : DEFAULT_CDP_PORT;
+
+  if (!unit && !values["cdp-port"]) {
+    log.warn(
+      `no browser installed here, so this assumes the default port ${cdpPort}`,
+    );
+    log.warn("run sudo vibe-os install-browser first, or pass --cdp-port");
+  }
+
+  const connected = await connectHermes(
+    user,
+    home,
+    cdpPort,
+    process.getuid?.() === 0,
+  );
+  if (!connected) {
+    log.error(`hermes is not installed for ${user}`);
+    console.log("");
+    console.log(`  ${color.cyan(HERMES_INSTALL)}`);
+    console.log("");
+    return 1;
+  }
+
+  console.log("");
+  console.log(
+    `  Hermes browser tools will drive the box's Chrome on 127.0.0.1:${cdpPort}.`,
+  );
+  console.log(
+    `  ${color.dim("Watch it work: ssh -L 5900:127.0.0.1:5900, then any VNC viewer.")}`,
+  );
   console.log("");
   return 0;
 }
@@ -407,8 +555,6 @@ function numeric(value: string | boolean, label: string): number {
     throw new Error(`invalid --${label}: ${String(value)}`);
   return n;
 }
-
-const XVNC_UNIT_PATH = "/etc/systemd/system/vibe-os-xvnc.service";
 
 /**
  * Eight characters, because VNC authentication silently ignores the rest.
@@ -625,6 +771,8 @@ export async function main(argv: string[]): Promise<number> {
       return installService(config, argv);
     case "install-browser":
       return installBrowser(config, values);
+    case "connect-hermes":
+      return connectHermesCommand(config, values);
     case "fetch-wasm": {
       // A standalone binary carries the wasm inside it: there is no script on
       // disk to run (FETCH_WASM points into the virtual /$bunfs root) and

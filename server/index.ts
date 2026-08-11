@@ -12,7 +12,7 @@ import {
 } from "./bridge.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
-import { discoverClaude } from "./harness.ts";
+import { discoverClaude, discoverHermes } from "./harness.ts";
 import { json } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { ensureWasm, ensureWebRoot } from "./preflight.ts";
@@ -193,6 +193,9 @@ export async function startServer(config: Config): Promise<RunningServer> {
   // the first time someone opens the profile editor. Doing it now means it is
   // ready by then; doing it there would make the panel hang on first open.
   void discoverClaude();
+  // Hermes is Python and answers three `config get` calls, so it is slower
+  // still. Same reasoning, more of it.
+  void discoverHermes();
 
   const gate = createGate(config.token);
   const serveStatic = createStaticServer(config.webRoot);

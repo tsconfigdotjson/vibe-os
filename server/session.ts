@@ -43,11 +43,23 @@ export function harnessCommand(profile: Profile): string | undefined {
   const executable =
     profile.harness === "claude"
       ? "claude"
-      : profile.harness === "custom"
-        ? profile.command
-        : null;
+      : profile.harness === "hermes"
+        ? "hermes"
+        : profile.harness === "custom"
+          ? profile.command
+          : null;
   if (!executable) return undefined;
-  const argv = [executable, ...profile.args].map(shellQuote).join(" ");
+  /*
+   * `hermes` on its own opens a chat, but `--model` and `--provider` belong to
+   * the `chat` subcommand rather than to the top-level command, so a profile
+   * that picks a model has to name it. It is prepended here rather than stored
+   * in the profile's argv because it is not a flag anyone should be able to
+   * delete in the editor: without it every model selection is silently ignored.
+   */
+  const leading = profile.harness === "hermes" ? ["chat"] : [];
+  const argv = [executable, ...leading, ...profile.args]
+    .map(shellQuote)
+    .join(" ");
 
   /*
    * The PATH a forced command gets is not the PATH you get when you log in.

@@ -37,6 +37,8 @@ edit, no `sshd_config` change, and no root.
 - [Using it](#using-it)
   - [Projects and workspaces](#projects-and-workspaces)
   - [Profiles](#profiles)
+    - [Hermes](#hermes)
+    - [Hermes and the browser](#hermes-and-the-browser)
   - [Popping a terminal out](#popping-a-terminal-out)
   - [The desktop](#the-desktop)
   - [Installing it as an app](#installing-it-as-an-app)
@@ -176,9 +178,9 @@ If two pieces of work need to proceed independently, give them a workspace each.
 
 ### Profiles
 
-A profile is a name, a colour, a harness (`claude`, a shell, or any command on
-the box) with its flags, and a standing prompt. Profiles belong to a project and
-appear in every workspace of it.
+A profile is a name, a colour, a harness (`claude`, `hermes`, a shell, or any
+command on the box) with its flags, and a standing prompt. Profiles belong to a
+project and appear in every workspace of it.
 
 The colour is the point: it tints the window, its title bar and its dock entry,
 so three roles running at once are distinguishable without reading anything.
@@ -194,6 +196,44 @@ The editor gives you a model dropdown, a thinking dropdown (`--effort`), a
 permission dropdown and a few switches, with the generated flags and a preview
 behind **Advanced**. Models and permission modes are read off the Claude binary
 installed on the server, so the list follows Claude's releases.
+
+#### Hermes
+
+Picking the Hermes harness runs `hermes chat` in the worktree, and the editor
+offers a model, a provider, an interface (`--cli` or `--tui`) and the same kind
+of switches, `--yolo` among them.
+
+Models are typed rather than picked. `hermes model` is an interactive wizard
+with no listing mode, so there is nothing to read off the box. The provider list
+is real: it is whatever `~/.hermes/config.yaml` has been set up with, so adding
+one with `hermes model` makes it appear here.
+
+A Hermes profile is a separate `~/.hermes`, which is how two roles can run on
+two different providers without sharing one config file.
+
+#### Hermes and the browser
+
+Hermes' Browser Use mode replaces its twelve browser tools with one that drives
+a browser over CDP. Pointed at the always-on browser below, that is the Chrome
+you can watch over VNC.
+
+```bash
+vibe-os connect-hermes
+```
+
+That sets `browser.cdp_url`, `browser.backend` and `browser.cloud_provider` in
+`~/.hermes/config.yaml`. `install-browser` does it as its last step; run it by
+hand when Hermes arrives after the browser did. It is a box-wide setting, not a
+per-profile one: Hermes reads the CDP target from its config file and has no
+flag for it.
+
+The agent shares that browser with whatever is signed in to it, including the
+Claude extension. That is the point (it inherits your sessions) and it is the
+cost (it acts inside your accounts).
+
+Browser Use mode needs the `browser-use` CLI, or `uvx` to run it on demand.
+Without either, Hermes keeps its twelve built-in browser tools and says nothing.
+`vibe-os doctor` is where that shows up.
 
 #### MCP servers
 
@@ -319,10 +359,17 @@ installation without one.
 | `git` | projects and worktrees | no projects |
 | `gh` | PRs, issues and reviews (optional) | git works, the GitHub API does not |
 | `claude` | the Claude harness | those profiles open a window that closes immediately |
+| `hermes` | the Hermes harness (optional) | those profiles open a window that closes immediately |
+| `uv` | `uvx browser-use`, for Hermes' Browser Use mode (optional) | Hermes keeps its twelve built-in browser tools |
 
 ```bash
 sudo apt update && sudo apt install -y openssh-server openssh-client dtach git gh
 curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
+
+# Optional, for the Hermes harness
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+hermes setup                                        # pick a provider
 ```
 
 Verified on Debian 12 and 13, Ubuntu 24.04 and 26.04 LTS, x86\_64.
@@ -651,6 +698,7 @@ in a session could otherwise ask what you last copied.
 | `vibe-os doctor` | check this machine is ready, and say what is missing |
 | `sudo vibe-os install-service` | write and enable a systemd unit |
 | `sudo vibe-os install-browser` | run one Chrome on a virtual display |
+| `vibe-os connect-hermes` | point Hermes' browser tools at that Chrome |
 | `vibe-os fetch-wasm` | re-download the SSH WASM runtime |
 
 ```
@@ -693,6 +741,13 @@ in a session could otherwise ask what you last copied.
                     omitted. macOS Screen Sharing will not connect without
                     this. An existing one is kept unless --no-vnc-password
 --no-vnc-password   serve the display with no authentication
+```
+
+`connect-hermes` takes one:
+
+```
+--cdp-port <n>      the debug port to point Hermes at, when there is no
+                    installed browser unit to read it from
 ```
 
 Every option except `--tls-port` and `--cert-ttl` also reads a `VIBE_OS_`
@@ -763,6 +818,10 @@ Known gaps:
   something that does not steal keys from the terminal is worth having.
 - **MCP servers can be picked but not added.** Adding them is `claude mcp` on
   the box.
+- **Hermes models are typed, not listed.** `hermes model` is interactive and
+  has no listing mode, so there is nothing to read off the box.
+- **Hermes' browser is a box-wide setting.** Every Hermes profile drives the
+  same Chrome, because that is where Hermes reads the CDP target from.
 - **No branch operations.** Pushing, PRs and merging happen in the terminal.
 - **Deleting a workspace keeps its branch**, so work is recoverable. Nothing
   prunes them for you.
