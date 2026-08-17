@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  CursorInfo,
   Harness,
   HarnessInfo,
   HermesInfo,
@@ -20,6 +21,12 @@ import {
   TOGGLES,
 } from "./claudeFlags";
 import {
+  buildArgs as buildCursorArgs,
+  TOGGLES as CURSOR_TOGGLES,
+  type CursorSettings,
+  parseSettings as parseCursorSettings,
+} from "./cursorFlags";
+import {
   buildArgs as buildHermesArgs,
   TOGGLES as HERMES_TOGGLES,
   type HermesSettings,
@@ -36,6 +43,8 @@ export interface ProfilePanelProps {
   harnessInfo: HarnessInfo | null;
   /** What Hermes on the box is configured for, or null while it is read. */
   hermesInfo: HermesInfo | null;
+  /** What Cursor on the box is set up for, or null while it is read. */
+  cursorInfo: CursorInfo | null;
   /** MCP servers configured on the box, for this project. */
   mcpServers: McpServer[];
   onSave: (input: ProfileInput) => Promise<unknown>;
@@ -49,6 +58,11 @@ const HARNESSES: { value: Harness; label: string; hint: string }[] = [
     value: "hermes",
     label: "Hermes",
     hint: "runs `hermes chat` in the worktree",
+  },
+  {
+    value: "cursor",
+    label: "Cursor",
+    hint: "runs `cursor-agent` in the worktree",
   },
   { value: "shell", label: "Shell", hint: "a plain shell, tinted and named" },
   { value: "custom", label: "Custom", hint: "any command on the box" },
@@ -74,6 +88,7 @@ export function ProfilePanel({
   palette,
   harnessInfo,
   hermesInfo,
+  cursorInfo,
   mcpServers,
   onSave,
   onDelete,
@@ -117,6 +132,12 @@ export function ProfilePanel({
   const [hermes, setHermes] = useState<HermesSettings>(() =>
     parseHermesSettings(argsFor("hermes", ["--yolo"])),
   );
+  // The Cursor seed carries --trust as well: every workspace is a fresh
+  // worktree, which to Cursor is an untrusted directory, and a role window
+  // should open on the conversation rather than on the trust prompt.
+  const [cursor, setCursor] = useState<CursorSettings>(() =>
+    parseCursorSettings(argsFor("cursor", ["--force", "--trust"])),
+  );
   const [showAdvanced, setShowAdvanced] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -147,6 +168,8 @@ export function ProfilePanel({
     setSettings((s) => ({ ...s, ...next }));
   const patchHermes = (next: Partial<HermesSettings>) =>
     setHermes((s) => ({ ...s, ...next }));
+  const patchCursor = (next: Partial<CursorSettings>) =>
+    setCursor((s) => ({ ...s, ...next }));
 
   /**
    * Selections whose server is not on the box.
@@ -184,6 +207,7 @@ export function ProfilePanel({
 
   const composed = useMemo(() => buildArgs(settings), [settings]);
   const composedHermes = useMemo(() => buildHermesArgs(hermes), [hermes]);
+  const composedCursor = useMemo(() => buildCursorArgs(cursor), [cursor]);
   const blanks = useMemo(() => countBlanks(prompt), [prompt]);
 
   const submit = async () => {
@@ -200,9 +224,11 @@ export function ProfilePanel({
             ? composed
             : harness === "hermes"
               ? composedHermes
-              : harness === "custom"
-                ? customArgs
-                : "",
+              : harness === "cursor"
+                ? composedCursor
+                : harness === "custom"
+                  ? customArgs
+                  : "",
         prompt,
       });
       // onClose unmounts this panel, so clearing `busy` afterwards would write
@@ -789,6 +815,144 @@ export function ProfilePanel({
                       there, because --model belongs to that subcommand. */}
                   <p className="field-hint mono command-preview">
                     hermes chat {composedHermes || "(no arguments)"}
+                  </p>
+                </>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+
+        {harness === "cursor" ? (
+          <>
+            {/* Typed with real suggestions. `cursor-agent models` is a proper
+                listing mode — the first harness to have one — but the list is
+                the account's and needs a login to read, so the field stays
+                free text with whatever the box could discover behind it. */}
+            <div className="field">
+              <label htmlFor="cursor-model">Model</label>
+              <input
+                id="cursor-model"
+                className="text-input mono"
+                list="cursor-models"
+                value={cursor.model}
+                placeholder={
+                  cursorInfo?.defaultModel
+                    ? `Default — ${cursorInfo.defaultModel}`
+                    : "Default — whatever Cursor picks"
+                }
+                onChange={(event) => patchCursor({ model: event.target.value })}
+              />
+              <datalist id="cursor-models">
+                {(cursorInfo?.models ?? []).map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              <p className="field-hint">
+                {(cursorInfo?.models.length ?? 0) > 0 ? (
+                  <>
+                    Read off <code>cursor-agent models</code>, so the list
+                    follows your account.
+                  </>
+                ) : (
+                  <>
+                    Nothing to suggest — <code>cursor-agent models</code> could
+                    not be read, which usually means the box is not logged in.
+                    Typed ids still work.
+                  </>
+                )}
+              </p>
+            </div>
+
+            {/* Login is a property of the box, not of this profile: the CLI
+                holds one credential per user. Said rather than offered as a
+                control, like the Hermes browser note above. */}
+            {cursorInfo?.available && cursorInfo.loggedIn === false ? (
+              <div className="field">
+                <span className="field-label">Account</span>
+                <p className="field-hint">
+                  <span className="field-warn">
+                    Not logged in, so this profile opens a window that sits at
+                    the login prompt. Run <code>cursor-agent login</code> on the
+                    box.
+                  </span>
+                </p>
+              </div>
+            ) : null}
+            {cursorInfo && !cursorInfo.available ? (
+              <div className="field">
+                <span className="field-label">Account</span>
+                <p className="field-hint">
+                  <span className="field-warn">
+                    Cursor is not installed here, so this profile opens a window
+                    that closes immediately. <code>vibe-os doctor</code> has the
+                    install line.
+                  </span>
+                </p>
+              </div>
+            ) : null}
+
+            <fieldset className="field">
+              <legend className="field-label">Options</legend>
+              <div className="switches">
+                {CURSOR_TOGGLES.map((toggle) => (
+                  <label
+                    key={toggle.flag}
+                    className="check"
+                    title={toggle.hint}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cursor.toggles[toggle.flag])}
+                      onChange={(event) =>
+                        patchCursor({
+                          toggles: {
+                            ...cursor.toggles,
+                            [toggle.flag]: event.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    {toggle.label}
+                  </label>
+                ))}
+              </div>
+              {cursor.toggles["--force"] ? (
+                <p className="field-hint field-warn">
+                  This session will not ask before editing or running anything.
+                  Reasonable on a box that is already a sandbox; think twice
+                  anywhere else.
+                </p>
+              ) : null}
+            </fieldset>
+
+            <div className="field">
+              <button
+                type="button"
+                className="disclosure"
+                aria-expanded={showAdvanced}
+                onClick={() => setShowAdvanced((open) => !open)}
+              >
+                <span className="disclosure-caret" aria-hidden="true">
+                  {showAdvanced ? "▾" : "▸"}
+                </span>
+                Advanced
+              </button>
+              {showAdvanced ? (
+                <>
+                  <input
+                    className="text-input mono"
+                    value={cursor.extra}
+                    placeholder="--resume &quot;…&quot;"
+                    onChange={(event) =>
+                      patchCursor({ extra: event.target.value })
+                    }
+                  />
+                  <p className="field-hint">
+                    Anything else to pass through. The controls above own their
+                    own flags; whatever you put here is kept exactly as typed.
+                  </p>
+                  <p className="field-hint mono command-preview">
+                    cursor-agent {composedCursor || "(no arguments)"}
                   </p>
                 </>
               ) : null}

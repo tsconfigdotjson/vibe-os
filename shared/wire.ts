@@ -16,7 +16,7 @@
  */
 
 /** Which program a profile launches. */
-export type Harness = "claude" | "hermes" | "shell" | "custom";
+export type Harness = "claude" | "hermes" | "cursor" | "shell" | "custom";
 
 /** Whether a window has been handed off to a real terminal. */
 export type Handoff = "ssh" | null;
@@ -112,6 +112,32 @@ export interface HermesInfo {
   /** Values `--reasoning` accepts, weakest first — the order is the scale. */
   reasoningLevels: string[];
   browser: HermesBrowser;
+}
+
+/** `GET /api/harness/cursor` — what the installed Cursor CLI is set up for. */
+export interface CursorInfo {
+  available: boolean;
+  version: string | null;
+  /**
+   * Model ids `cursor-agent models` reports, in the order it printed them.
+   *
+   * Unlike Hermes, Cursor has a real listing mode — but the list is the
+   * account's, not the binary's: it needs a login and sometimes the network,
+   * so an empty list means "could not read", never "no models exist". The
+   * editor keeps the field free text with these as suggestions.
+   */
+  models: string[];
+  /** The model `models` marked as current, when it marked one. */
+  defaultModel: string | null;
+  /**
+   * Whether `cursor-agent status` says someone is logged in.
+   *
+   * Three-valued on purpose: null is "could not tell", which covers a status
+   * output this build cannot read as well as a command that failed to run.
+   * Only a definite false is worth warning about — a profile launched while
+   * logged out opens a window that sits at the login prompt.
+   */
+  loggedIn: boolean | null;
 }
 
 /**

@@ -6,6 +6,7 @@ import { WorkspaceSidebar } from "./chrome/WorkspaceSidebar";
 import {
   describeError,
   type ProfileInput,
+  useCursor,
   useHarness,
   useHermes,
   useMcpServers,
@@ -122,6 +123,7 @@ function Desktop() {
   const popouts = usePopoutHost();
   const harnessInfo = useHarness();
   const hermesInfo = useHermes();
+  const cursorInfo = useCursor();
   const { servers: mcpServers } = useMcpServers(projectId);
 
   const {
@@ -572,6 +574,7 @@ function Desktop() {
           palette={server.palette}
           harnessInfo={harnessInfo}
           hermesInfo={hermesInfo}
+          cursorInfo={cursorInfo}
           mcpServers={mcpServers}
           onSave={(input: ProfileInput) =>
             editing === "new"

@@ -45,9 +45,13 @@ export function harnessCommand(profile: Profile): string | undefined {
       ? "claude"
       : profile.harness === "hermes"
         ? "hermes"
-        : profile.harness === "custom"
-          ? profile.command
-          : null;
+        : // The unambiguous of the two names its installer symlinks — `agent`
+          // is the other, and too generic to be the one a PATH lookup bets on.
+          profile.harness === "cursor"
+          ? "cursor-agent"
+          : profile.harness === "custom"
+            ? profile.command
+            : null;
   if (!executable) return undefined;
   /*
    * `hermes` on its own opens a chat, but `--model` and `--provider` belong to

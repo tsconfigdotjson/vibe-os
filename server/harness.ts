@@ -10,6 +10,11 @@
 // mode at all (`hermes model` is an interactive wizard), so what is discoverable
 // is its own configuration: which providers it has been set up with, what it
 // would use by default, and where its browser tools will land.
+//
+// Cursor sits between the two. `cursor-agent models` is a real listing mode,
+// but it lists the account's models rather than the binary's — so the answer
+// exists only while the box is logged in, and an empty list means "could not
+// read" rather than "nothing to offer".
 
 import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
@@ -19,9 +24,9 @@ import { log } from "./log.ts";
 
 const run = promisify(execFile);
 
-import type { HarnessInfo, HermesInfo } from "../shared/wire.ts";
+import type { CursorInfo, HarnessInfo, HermesInfo } from "../shared/wire.ts";
 
-export type { HarnessInfo, HermesInfo };
+export type { CursorInfo, HarnessInfo, HermesInfo };
 
 /**
  * The effort ladder as of writing, used only when the binary cannot be read.
@@ -487,4 +492,161 @@ export function discoverHermes(): Promise<HermesInfo> {
     };
   })();
   return hermesCached;
+}
+
+// ── Cursor ───────────────────────────────────────────────────────────────────
+
+/**
+ * Where Cursor's installer puts things, when PATH does not say so.
+ *
+ * `curl https://cursor.com/install | bash` unpacks a versioned bundle under
+ * `~/.local/share/cursor-agent/versions/` and symlinks `cursor-agent` (and a
+ * bare `agent`) into `~/.local/bin` — the same directory that neither a systemd
+ * service nor an `ssh host 'command'` has on PATH, for the same reason the
+ * Claude and Hermes lists above exist. `cursor-agent` is the name checked, not
+ * `agent`: both point at the same binary, and only one of them is unambiguous.
+ */
+const CURSOR_PATHS = [
+  `${home}/.local/bin/cursor-agent`,
+  "/usr/local/bin/cursor-agent",
+];
+
+/** The command that installs it, named where doctor checks for it. */
+export const CURSOR_INSTALL = "curl https://cursor.com/install -fsS | bash";
+
+const NO_CURSOR: CursorInfo = {
+  available: false,
+  version: null,
+  models: [],
+  defaultModel: null,
+  loggedIn: null,
+};
+
+/**
+ * The version out of `cursor-agent --version`.
+ *
+ * Cursor's CLI versions are date-shaped — `2026.08.07-abc1234` — rather than
+ * semver, which is still "digits, dots, then whatever" and the same token shape
+ * `hermesVersion` reads. Kept to the first line for the same reason as there:
+ * only the first line is a claim about the binary itself, and a wrapper or
+ * update notice printed after it must not become the answer.
+ */
+export function cursorVersion(stdout: string): string | null {
+  const first = stdout.split("\n").find((l) => l.trim()) ?? "";
+  const match = /\bv?(\d+(?:\.\d+)+[^\s()]*)/.exec(first);
+  return match ? match[1] : null;
+}
+
+/**
+ * Model ids out of `cursor-agent models`.
+ *
+ * The output is a list — ids one per line, possibly indented, possibly under a
+ * header, possibly with the current one marked. None of that layout is
+ * documented, so this reads shapes rather than positions: a line that is one
+ * model-shaped token after its decoration is stripped counts, and anything with
+ * spaces left in it — headers, sentences, login prompts — is skipped rather
+ * than half-read. A marked line (`*` in front, or `(current)`/`(default)`
+ * after) also answers which model is the default.
+ *
+ * Order is kept as printed. Cursor puts its own recommendation first, which is
+ * a better sort than alphabetical for a list whose first entry is `auto`.
+ */
+export function parseCursorModels(stdout: string): {
+  models: string[];
+  defaultModel: string | null;
+} {
+  const models: string[] = [];
+  let defaultModel: string | null = null;
+  for (const raw of stdout.split("\n")) {
+    let line = raw.trim();
+    if (!line) continue;
+    let marked = false;
+    const suffix = /\s*\((current|default|selected)\)\s*$/i.exec(line);
+    if (suffix) {
+      marked = true;
+      line = line.slice(0, suffix.index).trim();
+    }
+    const bullet = /^([-*•▸>]|\d+[.)])\s+/.exec(line);
+    if (bullet) {
+      marked ||= bullet[1] === "*";
+      line = line.slice(bullet[0].length).trim();
+    }
+    // Whatever still contains whitespace or a colon is prose, not an id.
+    if (!/^[A-Za-z0-9][\w./-]*$/.test(line)) continue;
+    if (!models.includes(line)) models.push(line);
+    if (marked && !defaultModel) defaultModel = line;
+  }
+  return { models, defaultModel };
+}
+
+/**
+ * What `cursor-agent status` says about being logged in, when it says anything.
+ *
+ * "Not logged in" contains "logged in", so the negative is checked first. A
+ * status this cannot read returns null rather than false: only a definite "no"
+ * should make the editor warn that a window will sit at a login prompt.
+ */
+export function cursorLoggedIn(stdout: string): boolean | null {
+  const text = stdout.toLowerCase();
+  if (
+    /not\s+logged\s+in|logged\s+out|unauthenticated|no.*credentials/.test(text)
+  )
+    return false;
+  if (/logged\s+in|signed\s+in|authenticated/.test(text)) return true;
+  return null;
+}
+
+let cursorCached: Promise<CursorInfo> | null = null;
+
+/**
+ * Everything the Cursor side of the editor needs, discovered once.
+ *
+ * Between the other two in what it can know. Unlike Hermes there is a listing
+ * mode — `cursor-agent models` — so the model field gets real suggestions. But
+ * the list is the account's rather than the binary's: logged out, or offline,
+ * it cannot be read, so an empty list is "could not tell" and the field stays
+ * free text. No floor of well-known model names, for the reason the Hermes
+ * provider list has none: offering a model this account does not have would
+ * suggest a choice that can only fail after launch.
+ */
+export function discoverCursor(): Promise<CursorInfo> {
+  cursorCached ??= (async (): Promise<CursorInfo> => {
+    const binary = await resolveBinary("cursor-agent", CURSOR_PATHS);
+    if (!binary) {
+      log.debug(
+        "cursor-agent is not on PATH — Cursor profiles will not launch",
+      );
+      return NO_CURSOR;
+    }
+
+    // Concurrently, as ever: `models` and `status` may each go to the network,
+    // and there is no reason to pay for the round trips in series.
+    const [version, listed, loggedIn] = await Promise.all([
+      run(binary, ["--version"], { timeout: 15_000 })
+        .then(({ stdout }) => cursorVersion(stdout))
+        .catch(() => null),
+      run(binary, ["models"], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 })
+        .then(({ stdout }) => parseCursorModels(stdout))
+        // Logged out or offline it exits complaining; that is "could not
+        // read", which the empty list already says.
+        .catch(() => ({ models: [], defaultModel: null })),
+      run(binary, ["status"], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 })
+        .then(({ stdout }) => cursorLoggedIn(stdout))
+        .catch(() => null),
+    ]);
+
+    log.debug(
+      `cursor-agent ${version ?? "?"}: ${listed.models.length} models, ` +
+        `logged ${loggedIn === null ? "in?" : loggedIn ? "in" : "out"}`,
+    );
+
+    return {
+      available: true,
+      version,
+      models: listed.models,
+      defaultModel: listed.defaultModel,
+      loggedIn,
+    };
+  })();
+  return cursorCached;
 }
