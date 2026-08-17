@@ -32,6 +32,21 @@ life of the session, so every later login blocks forever. It presents as a
 terminal that hangs just after verifying the host key, which points nowhere near
 the cause.
 
+### Cursor keeps MCP credentials per working directory
+
+`~/.cursor/mcp.json` lists the servers for the whole box, but the OAuth tokens
+for them live in `~/.cursor/projects/<slug of the directory>/mcp-auth.json`. Every
+workspace here is a freshly cut worktree, so each new window is a directory
+Cursor has never seen: the server shows up configured and then reports
+`requires_authentication`. The session command links that file at one store under
+the state dir, so a login in any window is a login in all of them. The slug is
+the path with every run of non-alphanumeric characters turned into a dash,
+observed rather than documented, so the link is written only where nothing exists
+and a wrong guess costs a login prompt rather than a working window.
+
+Approvals are per-directory too, in `mcp-approvals.json` beside it. That half is
+the `--approve-mcps` switch in the profile editor.
+
 ### Host key algorithm order is not the obvious one
 
 `golang.org/x/crypto/ssh`'s `supportedHostKeyAlgos` puts ECDSA ahead of

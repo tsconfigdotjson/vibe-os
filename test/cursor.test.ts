@@ -5,7 +5,7 @@ import {
   parseCursorModels,
 } from "../server/harness.ts";
 import { tokenize } from "../server/profiles.ts";
-import { harnessCommand } from "../server/session.ts";
+import { cursorProjectSlug, harnessCommand } from "../server/session.ts";
 import {
   buildArgs,
   type CursorSettings,
@@ -30,7 +30,11 @@ describe("round trip", () => {
     ["a model", ["--model", "composer-2.5"]],
     ["force alone", ["--force"]],
     ["both switches", ["--force", "--trust"]],
-    ["everything at once", ["--model", "gpt-5.5", "--force", "--trust"]],
+    ["the mcp approval switch", ["--approve-mcps"]],
+    [
+      "everything at once",
+      ["--model", "gpt-5.5", "--force", "--trust", "--approve-mcps"],
+    ],
     // Short forms are understood on the way in and normalised on the way out,
     // so `-m gpt-5.5` typed into the advanced field becomes a model selection.
     [
@@ -151,27 +155,135 @@ describe("values that need quoting", () => {
  * Hermes — the flags belong to the root command.
  */
 describe("harnessCommand", () => {
-  const profile = (args: string[]) => ({
-    id: "p",
-    projectId: "x",
-    color: "cyan",
-    name: "R",
-    harness: "cursor" as const,
-    command: null,
-    args,
-    prompt: "",
-    position: 0,
-    createdAt: 0,
-  });
+  const profile = (args: string[], harness = "cursor") =>
+    ({
+      id: "p",
+      projectId: "x",
+      color: "cyan",
+      name: "R",
+      harness,
+      command: null,
+      args,
+      prompt: "",
+      position: 0,
+      createdAt: 0,
+    }) as Parameters<typeof harnessCommand>[0];
+
+  const where = {
+    cwd: "/home/ubuntu/workspace/.vibe-worktrees/jooba/bold-coral-lemur",
+    stateDir: "/home/ubuntu/.vibe-os",
+  };
 
   test("launches cursor-agent with the stored flags", () => {
-    const cmd = harnessCommand(profile(["--model", "auto", "--force"]));
+    const cmd = harnessCommand(profile(["--model", "auto", "--force"]), where);
     expect(cmd).toContain("exec 'cursor-agent' '--model' 'auto' '--force'");
   });
 
   test("prepends no subcommand", () => {
-    const cmd = harnessCommand(profile([])) as string;
+    const cmd = harnessCommand(profile([]), where) as string;
     expect(cmd.endsWith("exec 'cursor-agent'")).toBe(true);
+  });
+});
+
+/**
+ * The directory name Cursor derives from a working directory.
+ *
+ * Both fixtures are observed rather than documented: the slug appeared under
+ * `~/.cursor/projects` on a real box after running `cursor-agent` in each of
+ * these directories. Getting it wrong is not fatal — the link lands where
+ * Cursor does not look, and a window asks for a login as it did before — but it
+ * is the whole point of the exercise, so it is pinned.
+ */
+describe("cursorProjectSlug", () => {
+  test("dashes a worktree path and drops the leading slash", () => {
+    expect(
+      cursorProjectSlug(
+        "/home/ubuntu/workspace/.vibe-worktrees/jooba/bold-coral-lemur",
+      ),
+    ).toBe("home-ubuntu-workspace-vibe-worktrees-jooba-bold-coral-lemur");
+  });
+
+  test("keeps case and collapses every run of anything else to one dash", () => {
+    expect(cursorProjectSlug("/tmp/Cursor.Test_1 space/sub")).toBe(
+      "tmp-Cursor-Test-1-space-sub",
+    );
+  });
+
+  test("a trailing slash leaves no trailing dash", () => {
+    expect(cursorProjectSlug("/home/ubuntu/")).toBe("home-ubuntu");
+  });
+});
+
+/**
+ * The link that makes one MCP login serve every workspace.
+ *
+ * Cursor keeps MCP tokens in `~/.cursor/projects/<slug>/mcp-auth.json`, so a
+ * freshly cut worktree starts logged out of every server the box is logged into.
+ * These assert the shape of the fix rather than its effect, which only a real
+ * install can show: the link goes in the directory Cursor will read, points at
+ * one store under the state dir, and refuses to replace anything already there.
+ */
+describe("the Cursor MCP credential link", () => {
+  const profile = (harness: string) =>
+    ({
+      id: "p",
+      projectId: "x",
+      color: "cyan",
+      name: "R",
+      harness,
+      command: harness === "custom" ? "vim" : null,
+      args: [],
+      prompt: "",
+      position: 0,
+      createdAt: 0,
+    }) as Parameters<typeof harnessCommand>[0];
+
+  const where = {
+    cwd: "/home/ubuntu/workspace/.vibe-worktrees/jooba/bold-coral-lemur",
+    stateDir: "/home/ubuntu/.vibe-os",
+  };
+  const link =
+    '"$HOME/.cursor/projects/home-ubuntu-workspace-vibe-worktrees-jooba-bold-coral-lemur/mcp-auth.json"';
+
+  test("links the worktree's project dir at the box's one store", () => {
+    const cmd = harnessCommand(profile("cursor"), where) as string;
+    expect(cmd).toContain(
+      `ln -s '/home/ubuntu/.vibe-os/cursor/mcp-auth.json' ${link}`,
+    );
+  });
+
+  test("creates both directories, since neither is certain to exist", () => {
+    const cmd = harnessCommand(profile("cursor"), where) as string;
+    expect(cmd).toContain(
+      "mkdir -p \"$HOME/.cursor/projects/home-ubuntu-workspace-vibe-worktrees-jooba-bold-coral-lemur\" '/home/ubuntu/.vibe-os/cursor'",
+    );
+  });
+
+  /** Refresh tokens live in there, so it is no wider than the state dir. */
+  test("keeps the store private", () => {
+    const cmd = harnessCommand(profile("cursor"), where) as string;
+    expect(cmd).toContain("chmod 700 '/home/ubuntu/.vibe-os/cursor'");
+  });
+
+  /**
+   * A file already there is somebody's real login for that directory, and a
+   * link already there is this, done. `ln -sf` would quietly discard the first.
+   */
+  test("leaves an existing file or link alone", () => {
+    const cmd = harnessCommand(profile("cursor"), where) as string;
+    expect(cmd).toContain(`[ -e ${link} ] || [ -L ${link} ] || ln -s`);
+  });
+
+  test("runs before the harness, which never returns", () => {
+    const cmd = harnessCommand(profile("cursor"), where) as string;
+    expect(cmd.indexOf("ln -s")).toBeLessThan(cmd.indexOf("exec"));
+  });
+
+  test("nothing else pays for it", () => {
+    for (const harness of ["claude", "hermes", "custom"]) {
+      const cmd = harnessCommand(profile(harness), where) as string;
+      expect(cmd).not.toContain("mcp-auth.json");
+    }
   });
 });
 

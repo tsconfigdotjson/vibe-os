@@ -237,11 +237,11 @@ Without either, Hermes keeps its twelve built-in browser tools and says nothing.
 #### Cursor
 
 Picking the Cursor harness runs `cursor-agent` in the worktree, and the editor
-offers a model and two switches: `--force`, which is Cursor's spelling of
-skip-every-check, and `--trust`, which matters here more than anywhere else —
-every workspace is a freshly cut worktree, which to Cursor is a directory it
-has never seen, so without it every new window opens on the trust prompt
-instead of the conversation.
+offers a model and a handful of switches. Two of them matter most: `--force`,
+which is Cursor's spelling of skip-every-check, and `--trust`, which matters
+here more than anywhere else: every workspace is a freshly cut worktree, which
+to Cursor is a directory it has never seen, so without it every new window opens
+on the trust prompt instead of the conversation.
 
 Models are typed with real suggestions behind them. `cursor-agent models` is a
 proper listing mode — the only harness with one — but the list belongs to the
@@ -252,7 +252,23 @@ Logging in is a property of the box, not of a profile: run `cursor-agent
 login` once on the box. Logged out, a Cursor window opens and sits at the
 login prompt — `vibe-os doctor` says so before you find out that way.
 
+MCP servers are a property of the box as well. Configure them in
+`~/.cursor/mcp.json`, then log in once, from inside any window:
+
+```sh
+cursor-agent mcp login linear
+```
+
+Cursor files MCP credentials per directory, which would mean one login per
+workspace. vibe-os points every workspace at a single store under the state dir
+instead, so that one login covers the ones opened later too. A switch,
+`--approve-mcps`, skips the approval prompt each new workspace would otherwise
+ask for.
+
 #### MCP servers
+
+For Claude profiles. Cursor reads its own list from `~/.cursor/mcp.json`, see
+[Cursor](#cursor) above.
 
 Three settings rather than a list of switches, because that is what Claude
 accepts: everything the box has, nothing, or exactly what you pick.
@@ -846,7 +862,8 @@ Known gaps:
   same Chrome, because that is where Hermes reads the CDP target from.
 - **Cursor's login is a box-wide setting.** The CLI holds one credential per
   user, so every Cursor profile runs as the same account, and its model list is
-  readable only while logged in.
+  readable only while logged in. Its MCP credentials are shared across every
+  workspace for the same reason.
 - **No branch operations.** Pushing, PRs and merging happen in the terminal.
 - **Deleting a workspace keeps its branch**, so work is recoverable. Nothing
   prunes them for you.
