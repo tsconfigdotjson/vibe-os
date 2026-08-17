@@ -39,6 +39,7 @@ edit, no `sshd_config` change, and no root.
   - [Profiles](#profiles)
     - [Hermes](#hermes)
     - [Hermes and the browser](#hermes-and-the-browser)
+    - [Cursor](#cursor)
   - [Popping a terminal out](#popping-a-terminal-out)
   - [The desktop](#the-desktop)
   - [Installing it as an app](#installing-it-as-an-app)
@@ -178,8 +179,8 @@ If two pieces of work need to proceed independently, give them a workspace each.
 
 ### Profiles
 
-A profile is a name, a colour, a harness (`claude`, `hermes`, a shell, or any
-command on the box) with its flags, and a standing prompt. Profiles belong to a
+A profile is a name, a colour, a harness (`claude`, `hermes`, `cursor`, a
+shell, or any command on the box) with its flags, and a standing prompt. Profiles belong to a
 project and appear in every workspace of it.
 
 The colour is the point: it tints the window, its title bar and its dock entry,
@@ -232,6 +233,24 @@ cost (it acts inside your accounts).
 Browser Use mode needs the `browser-use` CLI, or `uvx` to run it on demand.
 Without either, Hermes keeps its twelve built-in browser tools and says nothing.
 `vibe-os doctor` is where that shows up.
+
+#### Cursor
+
+Picking the Cursor harness runs `cursor-agent` in the worktree, and the editor
+offers a model and two switches: `--force`, which is Cursor's spelling of
+skip-every-check, and `--trust`, which matters here more than anywhere else —
+every workspace is a freshly cut worktree, which to Cursor is a directory it
+has never seen, so without it every new window opens on the trust prompt
+instead of the conversation.
+
+Models are typed with real suggestions behind them. `cursor-agent models` is a
+proper listing mode — the only harness with one — but the list belongs to the
+account rather than the binary: it needs a login, and sometimes the network, so
+when it cannot be read the field is plain free text and typed ids still work.
+
+Logging in is a property of the box, not of a profile: run `cursor-agent
+login` once on the box. Logged out, a Cursor window opens and sits at the
+login prompt — `vibe-os doctor` says so before you find out that way.
 
 #### MCP servers
 
@@ -358,6 +377,7 @@ installation without one.
 | `gh` | PRs, issues and reviews (optional) | git works, the GitHub API does not |
 | `claude` | the Claude harness | those profiles open a window that closes immediately |
 | `hermes` | the Hermes harness (optional) | those profiles open a window that closes immediately |
+| `cursor-agent` | the Cursor harness (optional) | those profiles open a window that closes immediately |
 | `uv` | `uvx browser-use`, for Hermes' Browser Use mode (optional) | Hermes keeps its twelve built-in browser tools |
 
 ```bash
@@ -368,6 +388,10 @@ curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 hermes setup                                        # pick a provider
+
+# Optional, for the Cursor harness
+curl https://cursor.com/install -fsS | bash
+cursor-agent login                                  # one login per box
 ```
 
 Verified on Debian 12 and 13, Ubuntu 24.04 and 26.04 LTS, x86\_64.
@@ -820,6 +844,9 @@ Known gaps:
   has no listing mode, so there is nothing to read off the box.
 - **Hermes' browser is a box-wide setting.** Every Hermes profile drives the
   same Chrome, because that is where Hermes reads the CDP target from.
+- **Cursor's login is a box-wide setting.** The CLI holds one credential per
+  user, so every Cursor profile runs as the same account, and its model list is
+  readable only while logged in.
 - **No branch operations.** Pushing, PRs and merging happen in the terminal.
 - **Deleting a workspace keeps its branch**, so work is recoverable. Nothing
   prunes them for you.

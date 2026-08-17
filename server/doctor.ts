@@ -25,7 +25,13 @@ import {
   vncPasswordFileFromUnit,
 } from "./browser.ts";
 import type { Config } from "./config.ts";
-import { discoverHermes, HERMES_INSTALL, UV_INSTALL } from "./harness.ts";
+import {
+  CURSOR_INSTALL,
+  discoverCursor,
+  discoverHermes,
+  HERMES_INSTALL,
+  UV_INSTALL,
+} from "./harness.ts";
 import { IS_COMPILED } from "./runtime.ts";
 import { discoverHostKey, SshCa } from "./ssh-ca.ts";
 
@@ -403,6 +409,55 @@ async function hermesChecks(): Promise<Check[]> {
   return checks;
 }
 
+/**
+ * Cursor, and whether a window opened as it would get past the login prompt.
+ *
+ * Two questions. Neither is fatal, for the reason the Hermes checks give: a box
+ * that never installs Cursor is a working box. The login check exists because
+ * its failure is quiet in exactly the way this file cares about — the window
+ * opens, the harness runs, and it sits asking for a browser login on a box that
+ * may not have one attached.
+ */
+async function cursorChecks(): Promise<Check[]> {
+  const cursor = await discoverCursor();
+  if (!cursor.available) {
+    return [
+      bad(
+        "cursor",
+        "not on PATH — profiles using the Cursor harness fall back to a shell",
+        CURSOR_INSTALL,
+      ),
+    ];
+  }
+
+  const checks: Check[] = [
+    ok(
+      "cursor",
+      `${cursor.version ?? "installed"} — the Cursor harness will run`,
+    ),
+  ];
+
+  if (cursor.loggedIn === false) {
+    checks.push(
+      bad(
+        "cursor login",
+        "not logged in — Cursor windows will sit at a login prompt",
+        "cursor-agent login",
+      ),
+    );
+  } else if (cursor.loggedIn === true) {
+    checks.push(
+      ok(
+        "cursor login",
+        `logged in${cursor.models.length > 0 ? `, ${cursor.models.length} models offered` : ""}`,
+      ),
+    );
+  }
+  // null stays silent: status output this build cannot read is not a finding.
+
+  return checks;
+}
+
 /** The home directory sshd will use for a user, which need not be ours. */
 export async function homeFor(user: string): Promise<string | null> {
   if (user === os.userInfo().username) return os.homedir();
@@ -590,6 +645,7 @@ export async function runDoctor(config: Config): Promise<Check[]> {
   );
 
   checks.push(...(await hermesChecks()));
+  checks.push(...(await cursorChecks()));
 
   // ── can a browser actually log in? ───────────────────────────────────────
   const sshdUp = await probeTcp(config.sshHost, config.sshPort);

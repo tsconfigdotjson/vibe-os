@@ -11,7 +11,7 @@ import {
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
-import { discoverClaude, discoverHermes } from "./harness.ts";
+import { discoverClaude, discoverCursor, discoverHermes } from "./harness.ts";
 import {
   badId,
   IMMUTABLE_CACHE_CONTROL,
@@ -133,6 +133,11 @@ export function createApi(deps: ApiDeps) {
     // configured providers, its own defaults, and where its browser tools land.
     if (p === "/api/harness/hermes" && req.method === "GET") {
       return json(await discoverHermes());
+    }
+
+    // And for Cursor: the account's model list, and whether anyone is logged in.
+    if (p === "/api/harness/cursor" && req.method === "GET") {
+      return json(await discoverCursor());
     }
 
     if (p === "/api/config" && req.method === "GET") {

@@ -12,7 +12,7 @@ import {
 } from "./bridge.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
-import { discoverClaude, discoverHermes } from "./harness.ts";
+import { discoverClaude, discoverCursor, discoverHermes } from "./harness.ts";
 import { json } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { ensureWasm, ensureWebRoot } from "./preflight.ts";
@@ -196,6 +196,9 @@ export async function startServer(config: Config): Promise<RunningServer> {
   // Hermes is Python and answers three `config get` calls, so it is slower
   // still. Same reasoning, more of it.
   void discoverHermes();
+  // Cursor asks its own service for the model list and login state, so this
+  // one can wait on the network rather than a binary. Same reasoning again.
+  void discoverCursor();
 
   const gate = createGate(config.token);
   const serveStatic = createStaticServer(config.webRoot);

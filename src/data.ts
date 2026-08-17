@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import type {
   AttachInfo,
+  CursorInfo,
   Harness,
   HarnessInfo,
   HermesInfo,
@@ -304,6 +305,21 @@ export function useHermes() {
 }
 
 /**
+ * What Cursor on the box is set up for.
+ *
+ * Server-read for the Hermes reason, not the Claude one: the model list and
+ * the login state belong to the account the box is signed in as, which only
+ * the server can ask.
+ */
+export function useCursor() {
+  const { data } = useSWR<CursorInfo>("/api/harness/cursor", fetcher, {
+    revalidateOnFocus: false,
+    refreshInterval: 0,
+  });
+  return data ?? null;
+}
+
+/**
  * MCP servers this project's profiles can be given.
  *
  * Project-scoped because a repo's `.mcp.json` is, and because a server added
@@ -398,6 +414,7 @@ export const windowApi = {
 
 export type {
   AttachInfo,
+  CursorInfo,
   Harness,
   HarnessInfo,
   HermesInfo,

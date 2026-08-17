@@ -37,6 +37,7 @@ export const PALETTE = [
 export const HARNESSES = [
   "claude",
   "hermes",
+  "cursor",
   "shell",
   "custom",
 ] as const satisfies readonly Harness[];
