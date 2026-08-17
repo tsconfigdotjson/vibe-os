@@ -824,43 +824,69 @@ export function ProfilePanel({
 
         {harness === "cursor" ? (
           <>
-            {/* Typed with real suggestions. `cursor-agent models` is a proper
-                listing mode — the first harness to have one — but the list is
-                the account's and needs a login to read, so the field stays
-                free text with whatever the box could discover behind it. */}
+            {/* A real dropdown when the list could be read, free text when it
+                could not. `cursor-agent models` is a proper listing mode — the
+                first harness to have one — so when it answers, the select is
+                authoritative. It started as a type-ahead datalist, which
+                filters its suggestions by the field's current text: a profile
+                already set to `auto` showed exactly one suggestion — `auto` —
+                and read as an empty list twice in one afternoon. */}
             <div className="field">
               <label htmlFor="cursor-model">Model</label>
-              <input
-                id="cursor-model"
-                className="text-input mono"
-                list="cursor-models"
-                value={cursor.model}
-                placeholder={
-                  cursorInfo?.defaultModel
-                    ? `Default — ${cursorInfo.defaultModel}`
-                    : "Default — whatever Cursor picks"
-                }
-                onChange={(event) => patchCursor({ model: event.target.value })}
-              />
-              <datalist id="cursor-models">
-                {(cursorInfo?.models ?? []).map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
-              <p className="field-hint">
-                {(cursorInfo?.models.length ?? 0) > 0 ? (
-                  <>
+              {(cursorInfo?.models.length ?? 0) > 0 ? (
+                <>
+                  <select
+                    id="cursor-model"
+                    className="text-input select"
+                    value={cursor.model}
+                    onChange={(event) =>
+                      patchCursor({ model: event.target.value })
+                    }
+                  >
+                    <option value="">
+                      {cursorInfo?.defaultModel
+                        ? `Default — ${cursorInfo.defaultModel}`
+                        : "Default — whatever Cursor picks"}
+                    </option>
+                    {/* Cursor's own order, which leads with auto and its
+                        recommendations — a better sort than alphabetical for
+                        a 200-entry list. */}
+                    {(cursorInfo?.models ?? []).map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                    {/* Same round-trip guarantee the other harnesses make: a
+                        model this account no longer lists is offered back
+                        rather than reset. */}
+                    {cursor.model &&
+                    !(cursorInfo?.models ?? []).includes(cursor.model) ? (
+                      <option value={cursor.model}>{cursor.model}</option>
+                    ) : null}
+                  </select>
+                  <p className="field-hint">
                     Read off <code>cursor-agent models</code>, so the list
                     follows your account.
-                  </>
-                ) : (
-                  <>
-                    Nothing to suggest — <code>cursor-agent models</code> could
+                  </p>
+                </>
+              ) : (
+                <>
+                  <input
+                    id="cursor-model"
+                    className="text-input mono"
+                    value={cursor.model}
+                    placeholder="Default — whatever Cursor picks"
+                    onChange={(event) =>
+                      patchCursor({ model: event.target.value })
+                    }
+                  />
+                  <p className="field-hint">
+                    Nothing to offer — <code>cursor-agent models</code> could
                     not be read, which usually means the box is not logged in.
                     Typed ids still work.
-                  </>
-                )}
-              </p>
+                  </p>
+                </>
+              )}
             </div>
 
             {/* Login is a property of the box, not of this profile: the CLI
