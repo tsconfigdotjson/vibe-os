@@ -38,9 +38,12 @@ describe("round trip", () => {
       ["-m", "gpt-5.5"],
       ["--model", "gpt-5.5"],
     ],
-    // The CLI documents --yolo as the same switch as --force, so it lights the
-    // same toggle rather than sitting in extra as text nothing recognises.
+    // The CLI documents --yolo and -f as the same switch as --force, so they
+    // light the same toggle rather than sitting in extra as text nothing
+    // recognises.
     ["--yolo is the force switch", ["--yolo"], ["--force"]],
+    ["-f is the force switch", ["-f"], ["--force"]],
+    ["the continue switch", ["--continue"]],
     // Order is the composer's, not the input's: controls first, then extra.
     [
       "reordered to the composer's order",
@@ -83,6 +86,16 @@ describe("flags the controls do not own", () => {
     const parsed = parseSettings(["--resume", "--force"]);
     expect(parsed.extra).toBe("--resume");
     expect(parsed.toggles["--force"]).toBe(true);
+  });
+
+  /** `-w` behaves like `--resume`: bare means "make one up", valued names one. */
+  test("-w with a name stays a pair in extra", () => {
+    expect(cycle(["-w", "scratch"])).toEqual(["-w", "scratch"]);
+    expect(parseSettings(["-w", "--force"]).extra).toBe("-w");
+  });
+
+  test("a valued mode flag keeps its pair", () => {
+    expect(cycle(["--mode", "plan"])).toEqual(["--mode", "plan"]);
   });
 
   test("a known flag and an unknown one both survive", () => {
@@ -165,12 +178,13 @@ describe("harnessCommand", () => {
 /**
  * `cursor-agent --version` parsing.
  *
- * Cursor's versions are date-shaped — `2026.08.07-abc1234` — which is still
- * "digits and dots, then whatever" and must survive whole, suffix included.
+ * The fixture is verbatim from the VPS: one line, date-shaped —
+ * `2026.08.11-e8db854` — which is still "digits and dots, then whatever" and
+ * must survive whole, suffix included.
  */
 describe("cursorVersion", () => {
-  test("reads a date-shaped version", () => {
-    expect(cursorVersion("2026.08.07-abc1234\n")).toBe("2026.08.07-abc1234");
+  test("reads the date-shaped version a real install prints", () => {
+    expect(cursorVersion("2026.08.11-e8db854\n")).toBe("2026.08.11-e8db854");
   });
 
   test("reads it out of a sentence on the first line", () => {
@@ -199,54 +213,78 @@ describe("cursorVersion", () => {
 /**
  * `cursor-agent models` parsing.
  *
- * The layout is undocumented, so the parser reads shapes rather than
- * positions: model-shaped tokens count, prose does not, and a marker on a line
- * answers which model is the default.
+ * The fixture is verbatim from a logged-in VPS (abridged from 204 lines): an
+ * `Available models` header, `id - Display Name` rows with the default marked
+ * inside the display half, and a trailing `Tip:` sentence. The first version
+ * of this parser expected bare ids and skipped any line containing a space —
+ * which was every line, so a working box offered zero models.
  */
 describe("parseCursorModels", () => {
-  test("reads a plain indented list under a header", () => {
-    const out = `Available models:
-  auto
-  composer-2.5
-  gpt-5.5
-  claude-sonnet-4.6
+  const REAL = `Available models
+
+auto - Auto (default)
+gpt-5.3-codex - Codex 5.3
+gpt-5.3-codex-fast - Codex 5.3 Fast
+composer-2.5 - Composer 2.5
+claude-opus-5-thinking-high - Claude Opus 5 1M Thinking
+claude-fable-5-thinking-high - Claude Fable 5 1M Thinking (NO ZDR)
+cursor-grok-4.6-high - Cursor Grok 4.6
+glm-5.2-max - GLM 5.2 Max
+
+Tip: use --model <id> (or /model <id> in interactive mode) to switch. Parameterized models also accept quoted overrides, e.g. --model 'claude-opus-4-8[context=1m,effort=high,fast=false]'.
 `;
-    expect(parseCursorModels(out)).toEqual({
-      models: ["auto", "composer-2.5", "gpt-5.5", "claude-sonnet-4.6"],
-      defaultModel: null,
-    });
+
+  test("reads the ids and drops the display names", () => {
+    expect(parseCursorModels(REAL).models).toEqual([
+      "auto",
+      "gpt-5.3-codex",
+      "gpt-5.3-codex-fast",
+      "composer-2.5",
+      "claude-opus-5-thinking-high",
+      "claude-fable-5-thinking-high",
+      "cursor-grok-4.6-high",
+      "glm-5.2-max",
+    ]);
+  });
+
+  test("the (default) marker in the display half is the default", () => {
+    expect(parseCursorModels(REAL).defaultModel).toBe("auto");
+  });
+
+  /** A suffix like "(NO ZDR)" is a note, not a marker. */
+  test("other parenthesised notes are not the default", () => {
+    const { defaultModel } = parseCursorModels(
+      "a - A (NO ZDR)\nb - B (default)\n",
+    );
+    expect(defaultModel).toBe("b");
+  });
+
+  test("the header and the tip are skipped, not half-read", () => {
+    const { models } = parseCursorModels(REAL);
+    expect(models).not.toContain("Available");
+    expect(models).not.toContain("Tip");
   });
 
   test("keeps the printed order rather than sorting", () => {
-    const { models } = parseCursorModels("auto\nzeta\nalpha\n");
+    const { models } = parseCursorModels("auto - A\nzeta - Z\nalpha - B\n");
     expect(models).toEqual(["auto", "zeta", "alpha"]);
   });
 
-  test("a starred line is the default", () => {
-    const out = "* composer-2.5\n- gpt-5.5\n";
-    expect(parseCursorModels(out)).toEqual({
-      models: ["composer-2.5", "gpt-5.5"],
-      defaultModel: "composer-2.5",
-    });
+  /** A bare id with no display half is still an id. */
+  test("a bare id counts", () => {
+    expect(parseCursorModels("auto\n").models).toEqual(["auto"]);
   });
 
-  test("a (current) suffix is the default", () => {
-    const out = "  auto (current)\n  gpt-5.5\n";
-    expect(parseCursorModels(out)).toEqual({
-      models: ["auto", "gpt-5.5"],
-      defaultModel: "auto",
-    });
-  });
-
-  test("prose and prompts are skipped, not half-read", () => {
+  test("prose and prompts yield nothing", () => {
     const out = `You are not logged in.
 Run cursor-agent login to see your models.
+Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.
 `;
     expect(parseCursorModels(out)).toEqual({ models: [], defaultModel: null });
   });
 
   test("duplicates collapse", () => {
-    expect(parseCursorModels("auto\nauto\n").models).toEqual(["auto"]);
+    expect(parseCursorModels("auto - A\nauto - A\n").models).toEqual(["auto"]);
   });
 });
 
@@ -262,7 +300,9 @@ describe("cursorLoggedIn", () => {
     expect(cursorLoggedIn("✓ Logged in as lee@example.com\n")).toBe(true);
   });
 
+  /** Verbatim from the VPS: two words, exit code 0. */
   test("not logged in wins over its own substring", () => {
+    expect(cursorLoggedIn("Not logged in\n")).toBe(false);
     expect(cursorLoggedIn("Not logged in. Run cursor-agent login.\n")).toBe(
       false,
     );

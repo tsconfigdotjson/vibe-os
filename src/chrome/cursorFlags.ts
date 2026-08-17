@@ -9,12 +9,12 @@ import { detokenize } from "../../shared/args";
  * field in its original order — but almost no flags in common, and a generic
  * flag-descriptor table is more machinery than three harnesses justify.
  *
- * The flag list comes from `cursor-agent --help` as reported by real installs,
- * not from the documentation — the lesson the Hermes file learned the hard way
- * when the docs listed a flag argparse rejected. Everything here also has a
- * second source: `--force`/`--yolo`, `--trust`, `--resume`, `-p/--print`,
- * `--output-format` and `--workspace` all appear in the CLI's own root help as
- * quoted by projects that drive it headless.
+ * The flag list is verbatim from `cursor-agent --help` on a real install —
+ * the lesson the Hermes file learned the hard way when the docs listed a flag
+ * argparse rejected. Notable absences are deliberate: there is no `-m` short
+ * form for `--model` (it is accepted on the way in anyway, and normalised to
+ * the spelling the CLI does take), and `--print`/`--output-format` belong to
+ * scripting rather than to a terminal window, so they pass through untouched.
  */
 
 /**
@@ -22,10 +22,24 @@ import { detokenize } from "../../shared/args";
  * `extra`.
  *
  * `--model` is absent for the reason it is absent in the other two files: it
- * has its own branch, which always `continue`s. `--resume` takes an optional
- * chat id, handled like Hermes' `-c` below rather than listed here.
+ * has its own branch, which always `continue`s. `--resume` and `--worktree`
+ * take an *optional* value, handled like Hermes' `-c` below rather than listed
+ * here.
  */
-const VALUED = new Set(["--output-format", "--workspace", "--api-key"]);
+const VALUED = new Set([
+  "--output-format",
+  "--workspace",
+  "--api-key",
+  "--mode",
+  "--sandbox",
+  "--header",
+  "-H",
+  "--endpoint",
+  "-e",
+  "--add-dir",
+  "--plugin-dir",
+  "--worktree-base",
+]);
 
 export interface CursorSettings {
   /** Model id as `cursor-agent models` spells it. Empty for Cursor's default. */
@@ -62,6 +76,11 @@ export const TOGGLES: {
     label: "Trust the worktree",
     hint: "Skip the new-workspace trust prompt. Every vibe-os worktree is new to Cursor.",
   },
+  {
+    flag: "--continue",
+    label: "Resume last conversation",
+    hint: "Pick up the most recent session rather than starting a new one.",
+  },
 ];
 
 export { detokenize };
@@ -82,8 +101,8 @@ export function parseSettings(args: string[]): CursorSettings {
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
 
-    // The CLI's own alias for --force; folded in so the switch lights up.
-    if (token === "--yolo") {
+    // The CLI's aliases for --force; folded in so the switch lights up.
+    if (token === "--yolo" || token === "-f") {
       toggles["--force"] = true;
       continue;
     }
@@ -103,10 +122,11 @@ export function parseSettings(args: string[]): CursorSettings {
       model = value;
       continue;
     }
-    // `--resume` takes an optional chat id. Bare, it resumes the latest
-    // conversation; with an id it names one, which no control here can say —
-    // so the pair goes to the advanced field whole, like Hermes' `-c mine`.
-    if (token === "--resume") {
+    // `--resume` takes an optional chat id, `-w`/`--worktree` an optional
+    // name. Bare they mean "the latest" or "make one up"; with a value they
+    // name one, which no control here can say — so the pair goes to the
+    // advanced field whole, like Hermes' `-c mine`.
+    if (token === "--resume" || token === "--worktree" || token === "-w") {
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith("-")) {
         leftovers.push(token, next);

@@ -525,8 +525,9 @@ const NO_CURSOR: CursorInfo = {
 /**
  * The version out of `cursor-agent --version`.
  *
- * Cursor's CLI versions are date-shaped — `2026.08.07-abc1234` — rather than
- * semver, which is still "digits, dots, then whatever" and the same token shape
+ * Cursor's CLI versions are date-shaped — `2026.08.11-e8db854`, one line and
+ * nothing else on a real install — rather than semver, which is still "digits,
+ * dots, then whatever" and the same token shape
  * `hermesVersion` reads. Kept to the first line for the same reason as there:
  * only the first line is a claim about the binary itself, and a wrapper or
  * update notice printed after it must not become the answer.
@@ -540,16 +541,19 @@ export function cursorVersion(stdout: string): string | null {
 /**
  * Model ids out of `cursor-agent models`.
  *
- * The output is a list — ids one per line, possibly indented, possibly under a
- * header, possibly with the current one marked. None of that layout is
- * documented, so this reads shapes rather than positions: a line that is one
- * model-shaped token after its decoration is stripped counts, and anything with
- * spaces left in it — headers, sentences, login prompts — is skipped rather
- * than half-read. A marked line (`*` in front, or `(current)`/`(default)`
- * after) also answers which model is the default.
+ * The format is verbatim from a real box: an `Available models` header, then
+ * one `id - Display Name` per line, then a `Tip:` sentence about `--model`.
+ * The default is marked inside the display half — `auto - Auto (default)`.
  *
- * Order is kept as printed. Cursor puts its own recommendation first, which is
- * a better sort than alphabetical for a list whose first entry is `auto`.
+ * The id is the machine half and the only part kept: it is what `--model`
+ * takes, and the display name repeats it in prose. A line has to open with an
+ * id-shaped token followed by the ` - ` separator (or nothing at all), which
+ * is what keeps the header and the tip out — both contain spaces where the
+ * separator would have to be. Half-reading prose would put "Tip" in a model
+ * dropdown, which is worse than missing a model.
+ *
+ * Order is kept as printed. Cursor leads with `auto` and its recommendations,
+ * which is a better sort than alphabetical for a 200-entry list.
  */
 export function parseCursorModels(stdout: string): {
   models: string[];
@@ -558,23 +562,14 @@ export function parseCursorModels(stdout: string): {
   const models: string[] = [];
   let defaultModel: string | null = null;
   for (const raw of stdout.split("\n")) {
-    let line = raw.trim();
+    const line = raw.trim();
     if (!line) continue;
-    let marked = false;
-    const suffix = /\s*\((current|default|selected)\)\s*$/i.exec(line);
-    if (suffix) {
-      marked = true;
-      line = line.slice(0, suffix.index).trim();
-    }
-    const bullet = /^([-*•▸>]|\d+[.)])\s+/.exec(line);
-    if (bullet) {
-      marked ||= bullet[1] === "*";
-      line = line.slice(bullet[0].length).trim();
-    }
-    // Whatever still contains whitespace or a colon is prose, not an id.
-    if (!/^[A-Za-z0-9][\w./-]*$/.test(line)) continue;
-    if (!models.includes(line)) models.push(line);
-    if (marked && !defaultModel) defaultModel = line;
+    const match = /^([A-Za-z0-9][\w./-]*)(?:\s+-\s+(.*))?$/.exec(line);
+    if (!match) continue;
+    const [, id, label] = match;
+    if (!models.includes(id)) models.push(id);
+    if (label && /\((default|current|selected)\)/i.test(label) && !defaultModel)
+      defaultModel = id;
   }
   return { models, defaultModel };
 }
