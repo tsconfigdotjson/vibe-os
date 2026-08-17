@@ -251,6 +251,14 @@ Tip: use --model <id> (or /model <id> in interactive mode) to switch. Parameteri
     expect(parseCursorModels(REAL).defaultModel).toBe("auto");
   });
 
+  /** A second real account prints the marker as `(current, default)`. */
+  test("a shared-parens marker still names the default", () => {
+    const { defaultModel } = parseCursorModels(
+      "auto - Auto (current, default)\ngpt-5.3-codex - Codex 5.3\n",
+    );
+    expect(defaultModel).toBe("auto");
+  });
+
   /** A suffix like "(NO ZDR)" is a note, not a marker. */
   test("other parenthesised notes are not the default", () => {
     const { defaultModel } = parseCursorModels(

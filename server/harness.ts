@@ -568,7 +568,14 @@ export function parseCursorModels(stdout: string): {
     if (!match) continue;
     const [, id, label] = match;
     if (!models.includes(id)) models.push(id);
-    if (label && /\((default|current|selected)\)/i.test(label) && !defaultModel)
+    // The marker word can share its parens: one account prints `(default)`,
+    // another `(current, default)`, so the test is for the word, anchored
+    // inside a parenthesised note rather than to the whole note.
+    if (
+      label &&
+      /\([^)]*\b(default|current|selected)\b[^)]*\)/i.test(label) &&
+      !defaultModel
+    )
       defaultModel = id;
   }
   return { models, defaultModel };
