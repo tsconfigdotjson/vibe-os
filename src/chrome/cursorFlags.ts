@@ -60,6 +60,12 @@ export interface CursorSettings {
  * `--trust` exists because every vibe-os workspace is a freshly cut worktree,
  * which to Cursor is a directory it has never seen: without this, every new
  * workspace opens with the trust prompt where the conversation should be.
+ *
+ * `--approve-mcps` is the same argument one layer along. Cursor records which
+ * MCP servers have been approved per directory, in the same per-worktree place
+ * it keeps their credentials, so the approval given in one workspace is not the
+ * approval the next one asks for. The credentials are shared by the link
+ * `session.ts` makes; approvals are a flag because Cursor offers one.
  */
 export const TOGGLES: {
   flag: string;
@@ -75,6 +81,11 @@ export const TOGGLES: {
     flag: "--trust",
     label: "Trust the worktree",
     hint: "Skip the new-workspace trust prompt. Every vibe-os worktree is new to Cursor.",
+  },
+  {
+    flag: "--approve-mcps",
+    label: "Approve MCP servers",
+    hint: "Skip the per-workspace approval prompt for the servers in ~/.cursor/mcp.json.",
   },
   {
     flag: "--continue",
