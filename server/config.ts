@@ -84,6 +84,9 @@ export const OPTION_SPEC = {
   "theme-color": { type: "string" as const },
   sessions: { type: "boolean" as const },
   "no-sessions": { type: "boolean" as const },
+  // doctor only, same reasoning as the install-browser block below: parseArgs
+  // is strict, so a flag it has never heard of is an error.
+  reap: { type: "boolean" as const },
   // install-browser only. Kept here because parseArgs is strict, and a flag it
   // has never heard of is an error rather than something a subcommand can read.
   geometry: { type: "string" as const },

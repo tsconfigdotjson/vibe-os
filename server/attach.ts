@@ -36,6 +36,7 @@ import {
 } from "./db.ts";
 import { log } from "./log.ts";
 import { getProfile } from "./profiles.ts";
+import { sessionProcesses, terminate } from "./reaper.ts";
 import { invocation } from "./runtime.ts";
 import { socketPath, windowCommand } from "./session.ts";
 
@@ -272,15 +273,23 @@ export async function detachClients(
   }
 }
 
-/** Ends a session outright: the program exits and the socket is removed. */
+/**
+ * Ends a session outright: the whole process tree, then the socket.
+ *
+ * "Whole tree" is the load-bearing part. This used to pkill exactly the dtach
+ * master, whose death takes the pty and with it the harness — but not the
+ * harness's children, which were reparented to init and ran for a week in
+ * worktrees that no longer existed (#38). `sessionProcesses` resolves
+ * everything the session ever started, by the pty's kernel session id and by
+ * the `VIBE_OS_SOCK` marker stamped on the create command, and `terminate`
+ * gives it TERM, a grace, then KILL.
+ */
 export async function killSession(
   config: Config,
   session: string,
 ): Promise<void> {
   const sock = socketPath(config, session);
-  await run("pkill", ["-f", `^dtach -n ${sock}`], { timeout: 10_000 }).catch(
-    () => {},
-  );
+  await terminate(await sessionProcesses(sock));
   await rm(sock, { force: true }).catch(() => {});
   // The lock file the forced command serialises on. Harmless to leave behind —
   // `liveSessions` only looks at `.sock` — but it is ours to clean up.
