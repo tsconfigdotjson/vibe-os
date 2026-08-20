@@ -675,6 +675,12 @@ export async function removeWorkspace(
     .where(eq(projects.id, ws.projectId))
     .get();
 
+  // Sessions die before the worktree does. The other order left every process
+  // the harness had spawned running in a directory that no longer existed,
+  // invisible to everything but ps (#38) — and a busy process in the worktree
+  // is also exactly what makes `worktree remove` fail.
+  await killWorkspaceSessions(db, config, id);
+
   if (project) {
     // --force because a worktree with uncommitted changes should still be
     // removable from the UI; the branch is deliberately left behind so the work
@@ -687,7 +693,6 @@ export async function removeWorkspace(
   }
   await rm(ws.path, { recursive: true, force: true }).catch(() => {});
 
-  await killWorkspaceSessions(db, config, id);
   db.delete(windows).where(eq(windows.workspaceId, id)).run();
   db.delete(workspaces).where(eq(workspaces.id, id)).run();
   log.info(`removed workspace ${ws.name} (branch ${ws.branch} kept)`);

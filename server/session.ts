@@ -13,6 +13,7 @@
 
 import type { Config } from "./config.ts";
 import type { Profile } from "./profiles.ts";
+import { SOCK_VAR } from "./reaper.ts";
 
 /** Single-quote for the login shell that runs a certificate's force-command. */
 export function shellQuote(value: string): string {
@@ -269,7 +270,21 @@ export function windowCommand(
   // a liveness probe. A socket left behind by a crashed session would otherwise
   // make every later attach fail with no way back except deleting it by hand.
   const probe = `dtach -p ${shellQuote(sock)} < /dev/null > /dev/null 2>&1`;
-  const create = `dtach -n ${shellQuote(sock)} -E -z /bin/sh -c ${shellQuote(inner)}`;
+  /*
+   * `VIBE_OS_SOCK` is the session's name tag, and inheritance is the feature.
+   *
+   * Set on the create and nowhere else, it rides the environment into dtach,
+   * into the shell on the pty, into the harness, and into everything the
+   * harness ever starts — across fork, exec, daemonisation, even a second
+   * setsid. A process group cannot make that promise: dtach creates the pty
+   * with forkpty, which makes its child a session leader, so no pgid of ours
+   * ever covers the grandchildren. The environment does.
+   *
+   * That is what lets killSession end a session *tree* instead of one pid, and
+   * what lets the reaper name the owner of a process found running in a
+   * deleted worktree a week later. reaper.ts is the only reader.
+   */
+  const create = `${SOCK_VAR}=${shellQuote(sock)} dtach -n ${shellQuote(sock)} -E -z /bin/sh -c ${shellQuote(inner)}`;
   const attach = `exec dtach -a ${shellQuote(sock)} -E -z -r winch`;
 
   /*

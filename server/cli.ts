@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -41,6 +41,7 @@ import { type Check, homeFor, onPath, runDoctor } from "./doctor.ts";
 import { HERMES_INSTALL } from "./harness.ts";
 import { startServer } from "./index.ts";
 import { color, describeError, log } from "./log.ts";
+import { reapLeaks } from "./reaper.ts";
 import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
 
 const run = promisify(execFile);
@@ -104,6 +105,9 @@ const HELP = `
   ${color.bold("connect-hermes")}
     --cdp-port <n>      the debug port to point Hermes at, when there is no
                         installed browser unit to read it from
+
+  ${color.bold("doctor")}
+    --reap              kill processes that outlived their workspace or session
 `;
 
 function version(): string {
@@ -708,16 +712,43 @@ async function attach(
    * separators and two layers of quoting included. Handing it to a shell here
    * is what makes the two paths identical rather than merely similar.
    *
-   * spawnSync rather than a detached child: dtach needs this terminal, and the
-   * exit code needs to be ours. There is no exec() to replace the process with
-   * in a Bun binary, so this one stays resident and idle for the session.
+   * An async spawn, awaited, where this used to be spawnSync — and on Linux
+   * that difference is a CPU core. Inside Bun's spawnSync wait the main
+   * thread sat in a zero-timeout poll, ~35k epoll_pwait2 a second returning
+   * immediately, for the life of the child; once the terminal was gone
+   * nothing ended it, and one attach burned a core for eight days (#39).
+   * Awaiting an ordinary spawn leaves the event loop in its normal blocking
+   * wait. There is still no exec() to replace the process with in a Bun
+   * binary, so this stays resident for the session: idle now, not spinning.
    */
-  const child = spawnSync("/bin/sh", ["-c", command], { stdio: "inherit" });
-  if (child.error) {
-    log.error(`could not start the session: ${child.error.message}`);
-    return 1;
+  const child = spawn("/bin/sh", ["-c", command], { stdio: "inherit" });
+
+  /*
+   * A client must not survive its terminal (#40, rule 2).
+   *
+   * When the terminal dies the kernel sends SIGHUP to the foreground process
+   * group, which is both of us. Forward it, give dtach a moment to detach
+   * cleanly, then leave regardless — whatever the state of the wait above,
+   * this caps a lost terminal at seconds rather than days. SIGTERM gets the
+   * same treatment so `kill <pid>` takes the pair down, not half of it.
+   */
+  for (const [signal, code] of [
+    ["SIGHUP", 129],
+    ["SIGTERM", 143],
+  ] as const) {
+    process.on(signal, () => {
+      child.kill(signal);
+      setTimeout(() => process.exit(code), 2_000).unref();
+    });
   }
-  return child.status ?? 0;
+
+  return await new Promise<number>((resolve) => {
+    child.once("error", (err) => {
+      log.error(`could not start the session: ${err.message}`);
+      resolve(1);
+    });
+    child.once("exit", (code) => resolve(code ?? 0));
+  });
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -760,13 +791,20 @@ export async function main(argv: string[]): Promise<number> {
       // A generated token is only useful if it survives a restart.
       if (config.token)
         await savePersisted(config.stateDir, { token: config.token });
+      // Sweep up what the last life left behind: processes in deleted
+      // worktrees, sessions whose socket is gone. Teardown is supposed to make
+      // these impossible, and a crash mid-teardown makes them real anyway.
+      await reapLeaks(config).catch(() => {});
       await startServer(config);
       return -1; // keep running
     }
     case "attach":
       return attach(config, positionals[1]);
-    case "doctor":
+    case "doctor": {
+      // Reap first, so the check list below reports the box as it now is.
+      if (values.reap) await reapLeaks(config);
       return printChecks(await runDoctor(config));
+    }
     case "install-service":
       return installService(config, argv);
     case "install-browser":

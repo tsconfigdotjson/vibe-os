@@ -32,6 +32,7 @@ import {
   HERMES_INSTALL,
   UV_INSTALL,
 } from "./harness.ts";
+import { findLeaks } from "./reaper.ts";
 import { IS_COMPILED } from "./runtime.ts";
 import { discoverHostKey, SshCa } from "./ssh-ca.ts";
 
@@ -900,6 +901,32 @@ export async function runDoctor(config: Config): Promise<Check[]> {
   // without a browser on the box, and a machine that never asked for one should
   // not be told about four things it does not have.
   checks.push(...(await browserChecks()));
+
+  // ── leaked processes ─────────────────────────────────────────────────────
+  //
+  // Processes that outlived their workspace or session: a cwd that is a
+  // deleted path under `.vibe-worktrees/`, or a tie to a session socket that
+  // no longer exists. Teardown is supposed to make these impossible; this is
+  // how the times it did not (#38, #39) get found without an afternoon of ps.
+  const leaks = await findLeaks(config);
+  if (leaks.length === 0) {
+    checks.push(
+      ok("leaks", "no process has outlived its workspace or session"),
+    );
+  } else {
+    const shown = leaks
+      .slice(0, 4)
+      .map((l) => `${l.pid} (${l.args.slice(0, 40)})`)
+      .join(", ");
+    const more = leaks.length > 4 ? `, and ${leaks.length - 4} more` : "";
+    checks.push(
+      bad(
+        "leaks",
+        `${leaks.length} process${leaks.length === 1 ? " has" : "es have"} outlived their workspace or session: ${shown}${more}`,
+        "vibe-os doctor --reap",
+      ),
+    );
+  }
 
   // ── exposure ─────────────────────────────────────────────────────────────
   //

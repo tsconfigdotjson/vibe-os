@@ -96,6 +96,30 @@ describe("windowCommand", () => {
   });
 });
 
+describe("windowCommand ownership", () => {
+  test("stamps VIBE_OS_SOCK on the create, and only the create", () => {
+    // The unwrapped form, so the assertion is not fighting flock's quoting.
+    const shown = windowCommand("vibe-w-1", "/tmp", config(), null, {
+      forDisplay: true,
+    }) as string;
+    // On the create: everything the session ever starts inherits the marker,
+    // which is what killSession and the reaper kill and find by.
+    expect(shown).toContain(
+      "VIBE_OS_SOCK='/var/lib/vibe-os/sessions/vibe-w-1.sock' dtach -n",
+    );
+    // Not on the attach: a client is a view, not an owner, and marking it
+    // would hand the session's name to every ssh login that ever looked in.
+    const attachIdx = shown.indexOf("exec dtach -a");
+    expect(attachIdx).toBeGreaterThan(-1);
+    expect(shown.slice(attachIdx)).not.toContain("VIBE_OS_SOCK");
+  });
+
+  test("the marker survives the locking wrapper", () => {
+    const real = windowCommand("vibe-w-1", "/tmp", config()) as string;
+    expect(real).toContain("VIBE_OS_SOCK=");
+  });
+});
+
 describe("windowCommand forDisplay", () => {
   test("drops the locking wrapper but keeps what actually runs", () => {
     const shown = windowCommand("vibe-w-1", "/tmp", config(), null, {
