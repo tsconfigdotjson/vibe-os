@@ -26,6 +26,7 @@ import {
 } from "./browser.ts";
 import type { Config } from "./config.ts";
 import {
+  CLAUDE_INSTALL,
   CURSOR_INSTALL,
   discoverCursor,
   discoverHermes,
@@ -161,7 +162,7 @@ const fatal = (label: string, detail: string, fix?: string): Check => ({
   fatal: true,
 });
 
-function probeTcp(
+export function probeTcp(
   host: string,
   port: number,
   timeout = 2000,
@@ -474,6 +475,25 @@ export async function homeFor(user: string): Promise<string | null> {
 }
 
 /**
+ * `sshd -T` output as a map.
+ *
+ * sshd -T lowercases keywords and prints repeated ones on their own lines;
+ * joining preserves multi-value keywords like allowusers.
+ */
+export function parseSshdConfig(stdout: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const space = trimmed.indexOf(" ");
+    const key = space === -1 ? trimmed : trimmed.slice(0, space);
+    const value = space === -1 ? "" : trimmed.slice(space + 1);
+    map.set(key, map.has(key) ? `${map.get(key)} ${value}` : value);
+  }
+  return map;
+}
+
+/**
  * sshd's effective configuration, evaluated for the user who will log in.
  *
  * `sshd -T` is the only honest source: it applies Include directives, drop-in
@@ -491,18 +511,7 @@ async function sshdEffectiveConfig(
         ["-T", "-C", `user=${user},host=localhost,addr=127.0.0.1`],
         { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 },
       );
-      const map = new Map<string, string>();
-      for (const line of stdout.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const space = trimmed.indexOf(" ");
-        // sshd -T lowercases keywords and prints repeated ones on their own
-        // lines; joining preserves multi-value keywords like allowusers.
-        const key = space === -1 ? trimmed : trimmed.slice(0, space);
-        const value = space === -1 ? "" : trimmed.slice(space + 1);
-        map.set(key, map.has(key) ? `${map.get(key)} ${value}` : value);
-      }
-      return map;
+      return parseSshdConfig(stdout);
     } catch {
       // not this path, or not root — try the next
     }
@@ -641,7 +650,7 @@ export async function runDoctor(config: Config): Promise<Check[]> {
       : bad(
           "claude",
           "not on PATH — profiles using the Claude harness fall back to a shell",
-          "curl -fsSL https://claude.ai/install.sh | bash",
+          CLAUDE_INSTALL,
         ),
   );
 
@@ -671,8 +680,10 @@ export async function runDoctor(config: Config): Promise<Check[]> {
     );
   } else {
     const mine = os.homedir();
+    // Root is checking on someone's behalf (`sudo vibe-os doctor`, or the end
+    // of setup), not running the server, so where its own home is says nothing.
     checks.push(
-      home === mine
+      home === mine || process.getuid?.() === 0
         ? ok("login user", `${user} (${home})`)
         : bad(
             "login user",

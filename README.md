@@ -46,6 +46,7 @@ edit, no `sshd_config` change, and no root.
 - [Deploying on a VPS](#deploying-on-a-vps)
   - [What the box needs](#what-the-box-needs)
   - [Install](#install)
+  - [Setup](#setup)
   - [Behind Tailscale](#behind-tailscale)
   - [Firewall](#firewall)
   - [Running it as a service](#running-it-as-a-service)
@@ -77,39 +78,22 @@ token is off, so the port is on loopback only: a vibe-os with no token is a
 shell for anyone who can reach it. The image has no harness, so profiles open a
 shell; from a clone, `docker compose up --build` adds Claude Code.
 
-### Or point an agent at a VPS
+### Or set up a VPS
 
-You have an agent. Give it SSH access to a fresh box and this:
+On a fresh Debian or Ubuntu box, as any user with sudo (or as root, which
+creates one):
 
-> Set up vibe-os (https://github.com/tsconfigdotjson/vibe-os) on this VPS.
->
-> 1. Create a non-root user with sudo if I am logged in as root, and do the rest
->    as that user. vibe-os hands out shells as whoever runs it.
-> 2. Install the prerequisites: `openssh-server`, `openssh-client`, `dtach`,
->    `git`, and `gh`. Install Claude Code with the standalone installer from
->    https://claude.ai/install.sh, not npm.
-> 3. Install Tailscale, run `tailscale up`, and tell me the tailnet address.
-> 4. Install vibe-os: `curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh`.
-> 5. Run `vibe-os doctor` and then `sudo vibe-os doctor`. Fix what they report
->    before continuing. Do not skip this.
-> 6. Install the service: `sudo vibe-os install-service --port 7681 --host
->    127.0.0.1 --token`. Run that with sudo from the user account, not as root.
-> 7. Put HTTPS in front: `sudo tailscale serve --bg 7681`.
-> 8. Close the box down with ufw: allow in on `tailscale0`, allow `41641/udp`,
->    default deny incoming, then enable. Confirm you can still reach the box
->    over the tailnet in a second session before enabling it.
-> 9. Turn off SSH password authentication by writing
->    `PasswordAuthentication no` to `/etc/ssh/sshd_config.d/01-hardening.conf`.
->    That file has to sort before `50-cloud-init.conf`, which sets it to yes.
->    Run `sshd -t` before reloading.
-> 10. Run `sudo vibe-os doctor` one more time and paste the output, along with
->     the URL and token from `journalctl -u vibe-os`.
->
-> Tell me what you are about to run before you run anything that opens a port
-> or changes sshd.
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh
+vibe-os setup
+```
 
-Read what it proposes before you let it run. Step 8 can lock you out of the box
-if the tailnet is not actually working yet.
+`setup` runs the same checks as `doctor` and offers to fix each one, printing
+every command before it runs it. See [Setup](#setup) for what it does.
+
+For an agent with SSH access to the box, the prompt is one line:
+
+> Install vibe-os with `curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh`, then run `vibe-os setup --yes` and show me its output.
 
 ---
 
@@ -449,6 +433,53 @@ sudo vibe-os doctor     # adds the sshd and firewall checks
 `doctor` evaluates the flags it is given and cannot see a systemd unit, so pass
 the same flags the service uses to get a true answer.
 
+### Setup
+
+```bash
+vibe-os setup
+```
+
+Each step checks first and skips itself when there is nothing to do, so running
+it again on a configured box changes nothing. In order:
+
+1. **User.** As root, it offers to create a user with passwordless sudo and
+   root's SSH keys, then stops so you can log in as them and run it again.
+2. **Prerequisites.** `openssh-server`, `openssh-client`, `dtach`, `git`,
+   `curl` and optionally `gh`, through apt, dnf, yum, pacman or zypper.
+3. **sshd**, enabled and started if nothing answers on port 22.
+4. **Harnesses.** Claude Code, then optionally Hermes and Cursor.
+5. **Tailscale**, installed and brought up (it prints a login URL).
+6. **The service**, on `127.0.0.1:7681` with a generated token kept in
+   `~/.vibe-os/config.json`. An installed unit is left alone unless you pass a
+   different `--port` or `--host`.
+7. **`tailscale serve --bg 7681`**, for HTTPS on the tailnet.
+8. **SSH hardening.** Writes `01-hardening.conf` to turn off password logins,
+   runs `sshd -t` and reloads. Skipped if your user has no SSH key yet.
+9. **Firewall**, with ufw: allow the tailnet and `41641/udp`, deny the rest.
+10. **`doctor`**, run with sudo, then the URL with `?token=`.
+
+The firewall step can lock you out, so before enabling ufw it arms a systemd
+timer that disables it again in five minutes. Setup then waits for you to
+confirm from a **new** session over the tailnet:
+
+```bash
+ssh <user>@<machine>.<tailnet>.ts.net vibe-os confirm-firewall
+```
+
+If that never arrives, ufw turns itself off. Your provider's firewall is
+separate; leave `41641/udp` open there.
+
+| flag | |
+| --- | --- |
+| `-y`, `--yes` | take the default answer to every question |
+| `--firewall` | with `--yes`, do the firewall step too (it is skipped otherwise) |
+| `--hermes`, `--cursor` | install those harnesses too |
+| `--user <name>` | as root, the user to create |
+| `--port`, `--host` | where the service listens (default `7681`, `127.0.0.1`) |
+
+With `--yes`, an agent runs the firewall confirmation from a second SSH
+connection while setup waits in the first.
+
 ### Behind Tailscale
 
 The recommended setup. You stop needing to bind port 80, and you stop needing
@@ -757,6 +788,8 @@ in a session could otherwise ask what you last copied.
 | `vibe-os` / `vibe-os start` | serve the UI and the SSH bridge |
 | `vibe-os attach [window]` | attach this terminal to a window's session |
 | `vibe-os doctor` | check this machine is ready, and say what is missing |
+| `vibe-os setup` | fix what `doctor` finds, asking before each change |
+| `vibe-os confirm-firewall` | tell a waiting `setup` the tailnet still gets in |
 | `sudo vibe-os install-service` | write and enable a systemd unit |
 | `sudo vibe-os install-browser` | run one Chrome on a virtual display |
 | `vibe-os connect-hermes` | point Hermes' browser tools at that Chrome |
@@ -808,6 +841,9 @@ in a session could otherwise ask what you last copied.
                     this. An existing one is kept unless --no-vnc-password
 --no-vnc-password   serve the display with no authentication
 ```
+
+`setup` takes the [flags above](#setup) as well as `--port`, `--host`,
+`--workspace` and `--state-dir`, which it passes to the service.
 
 `connect-hermes` takes one:
 

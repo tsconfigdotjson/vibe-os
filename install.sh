@@ -112,10 +112,13 @@ esac
 
 cat <<EOF
 
-Next, check this machine is ready:
+Next, set this machine up. It asks before each change:
+
+  vibe-os setup
+
+Or check it without changing anything:
 
   vibe-os doctor
-  sudo vibe-os doctor
 
-Then follow https://github.com/$REPO#deploying-on-a-vps
+More at https://github.com/$REPO#deploying-on-a-vps
 EOF
