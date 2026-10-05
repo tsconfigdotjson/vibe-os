@@ -6,11 +6,18 @@
 // the certificate signer, the wallpaper upload, the byte pipe) goes through
 // this one gate.
 //
-// It is off by default, which is a deliberate and dangerous choice: it makes
-// `vibe-os` work on a private network without ceremony. Startup prints a
-// warning that says so. Pass --token to turn it on.
+// It is on by default. --no-token turns it off, and startup prints a warning
+// that says so.
+//
+// Two checks sit in front of the token. Origin applies to every request: a
+// page on another site can make the browser send a request here, and a foreign
+// Origin is how to tell. Host applies only when there is no token, because
+// that is when DNS rebinding pays: a page that points its own name at this box
+// becomes same-origin with it, and with no token there is nothing else to
+// stop it. With a token, the rebound page has no cookie and no token to send.
 
 import { createHash, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 
 const COOKIE = "vibe_os_session";
 
@@ -128,4 +135,60 @@ export function createGate(token: string | null): Gate {
   } satisfies Gate;
 
   return gate;
+}
+
+/**
+ * Rejects requests a page on another origin made the browser send.
+ *
+ * Browsers send Origin on every cross-origin request and on every POST, so a
+ * foreign one is either a mistake or an attack. It covers the routes a CORS
+ * preflight cannot: a `text/plain` POST, like the certificate request, and a
+ * WebSocket upgrade, neither of which is preflighted. No Origin means a client
+ * that is not a browser, or a same-origin GET.
+ */
+export function originAllowed(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (origin === null) return true;
+  const host = req.headers.get("host");
+  if (!host) return false;
+  try {
+    // An opaque origin ("null", from a sandboxed frame or a file) parses to a
+    // URL with an empty host, which never matches.
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+/** The name part of a Host header: no port, no IPv6 brackets, lower case. */
+export function hostName(header: string): string {
+  const bracketed = /^\[([^\]]+)\]/.exec(header);
+  if (bracketed) return bracketed[1].toLowerCase();
+  // One colon is a port. More than one is a bare IPv6 address, which a
+  // browser never sends but curl will.
+  const colons = header.split(":").length - 1;
+  return (colons === 1 ? header.slice(0, header.indexOf(":")) : header)
+    .toLowerCase()
+    .replace(/\.$/, "");
+}
+
+/**
+ * Whether a request names this server, for a server with no token.
+ *
+ * An address is always allowed: rebinding needs a name the attacker owns, and
+ * a browser that typed an IP sends that IP. So is `localhost` and anything
+ * under it. Any other name has to be one the server was told about, which
+ * `knownHosts` in index.ts collects: the machine's hostname, `--domain`,
+ * `--ssh-advertise`, the Tailscale name and `--allowed-host`.
+ */
+export function hostAllowed(req: Request, names: ReadonlySet<string>): boolean {
+  const header = req.headers.get("host");
+  if (!header) return false;
+  const name = hostName(header);
+  return (
+    isIP(name) !== 0 ||
+    name === "localhost" ||
+    name.endsWith(".localhost") ||
+    names.has(name)
+  );
 }

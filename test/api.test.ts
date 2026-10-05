@@ -257,6 +257,25 @@ describe("writes", () => {
     );
   });
 
+  test("a body not labelled JSON is treated as no body", async () => {
+    // text/plain is what a page on another site can POST without a preflight.
+    const p = `/api/projects/${ids.project}/profiles`;
+    const res = await answered(
+      handle(
+        new Request(`http://x${p}`, {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: JSON.stringify({ name: "Planted", harness: "custom" }),
+        }),
+        new URL(`http://x${p}`),
+      ),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      "a profile needs a name",
+    );
+  });
+
   test("a malformed body is a 400, not a crash", async () => {
     const res = await handle(
       new Request(`http://x/api/projects/${ids.project}/profiles`, {

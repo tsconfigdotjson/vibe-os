@@ -71,9 +71,9 @@ open http://localhost:8080
 ```
 
 A blank Debian box with sshd, dtach and git, which is the same shape as a fresh
-VPS. The port is published on loopback only, because this compose file runs
-without a token and an unauthenticated vibe-os is a shell for anyone who can
-reach it.
+VPS. The compose file turns the token off so the URL above just works, and
+publishes the port on loopback only, because a vibe-os with no token is a shell
+for anyone who can reach it.
 
 ### Or point an agent at a VPS
 
@@ -705,16 +705,29 @@ Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
 The recommended shape is all of it: behind Tailscale, firewalled to the tailnet,
 bound to the tailnet address, and with the token on.
 
-**The gate is off by default**, which suits a private network, and startup warns
-you about it.
+**The gate is on by default.** The first start generates a token, remembers it
+in the state dir, and prints the URL with it.
 
 ```bash
-vibe-os --token          # generates one, remembers it, prints the URL
+vibe-os                  # the remembered token, or a new one
 vibe-os --token hunter2  # or pick your own
+vibe-os --no-token       # no gate, with a warning at startup
 ```
 
 It gates the app, the API, the certificate signer, the wallpaper upload and the
-WebSocket bridge. Cross-origin WebSocket upgrades are always rejected.
+WebSocket bridge.
+
+Two checks run in front of it:
+
+- **Origin, always.** A request carrying an `Origin` that is not this server is
+  refused, so a page on another site cannot drive the API or open the bridge
+  through your browser.
+- **Host, with no token.** A request has to name the server by an address,
+  `localhost`, the machine's hostname, `--domain`, `--ssh-advertise` or its
+  Tailscale name. That stops DNS rebinding, where a page points its own domain
+  at the box to become same-origin with it. Add any other name with
+  `--allowed-host`. With a token this check is off, since a rebound page has
+  neither the cookie nor the token.
 
 Open the URL with `?token=…` once and the server sets an `HttpOnly` cookie, then
 redirects without the token so it does not linger in history. Scripts can send
@@ -750,8 +763,13 @@ in a session could otherwise ask what you last copied.
 --email <addr>      contact address for Let's Encrypt
 --tls-port <n>      HTTPS port (default 443)
 
---token [value]     require a token; generates and remembers one if omitted
---no-token          disable the gate (default)
+--token [value]     the token to require (default: the last one used, or
+                    a new one, remembered in the state dir)
+--no-token          disable the gate (prints a warning)
+--allowed-host <name>
+                    with no token, a name this server answers to beyond
+                    its hostname, --domain and its Tailscale name.
+                    Repeatable
 
 --ssh-host <addr>   SSH target for the bridge (default 127.0.0.1)
 --ssh-port <n>      SSH target port (default 22)
@@ -793,7 +811,9 @@ in a session could otherwise ask what you last copied.
 ```
 
 Every option except `--tls-port` and `--cert-ttl` also reads a `VIBE_OS_`
-environment variable, which is how the container is configured.
+environment variable, which is how the container is configured. `--no-token` is
+`VIBE_OS_NO_TOKEN=1`, and `--allowed-host` is `VIBE_OS_ALLOWED_HOSTS`, comma
+separated.
 
 ---
 
@@ -849,8 +869,8 @@ The firewall rules were checked from outside the tailnet.
 
 Known gaps:
 
-- **No authentication by default.** The token gate is off until you pass
-  `--token`, and there is no multi-user story at all.
+- **One token, one user.** Everyone with the token is the same unix user, and
+  there is no per-browser session to revoke.
 - **ACME has never issued a real certificate.** `--domain` works in tests, but
   the Tailscale path makes it unnecessary, so it stays unproven.
 - **IPv6 reachability is unverified.** The v4 firewall rules were tested from

@@ -1,14 +1,15 @@
+import { execFile } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
+import { promisify } from "node:util";
 import type { Server } from "bun";
 import { Acme } from "./acme.ts";
 import { createApi } from "./api.ts";
-import { createGate } from "./auth.ts";
+import { createGate, hostAllowed, hostName, originAllowed } from "./auth.ts";
 import {
   type BridgeData,
   bridgeConnections,
   createBridgeHandlers,
-  originAllowed,
 } from "./bridge.ts";
 import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
@@ -26,6 +27,8 @@ import {
 } from "./ssh-ca.ts";
 import { createStaticServer } from "./static.ts";
 import { WallpaperStore } from "./wallpapers.ts";
+
+const run = promisify(execFile);
 
 export interface RunningServer {
   port: number;
@@ -112,6 +115,45 @@ function reachableHosts(config: Config): string[] {
     }
   }
   return addresses.length > 0 ? addresses : [os.hostname()];
+}
+
+/**
+ * This machine's name on the tailnet, if Tailscale is up.
+ *
+ * `tailscale serve` passes the browser's Host through, so behind it every
+ * request names the box by its MagicDNS name, which nothing else here knows.
+ */
+async function tailscaleName(): Promise<string | null> {
+  try {
+    const { stdout } = await run("tailscale", ["status", "--json"], {
+      timeout: 3_000,
+    });
+    const name = (JSON.parse(stdout) as { Self?: { DNSName?: string } }).Self
+      ?.DNSName;
+    return name ? hostName(name) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every name a request may use to reach this server when there is no token.
+ *
+ * Addresses and `localhost` need no listing; `hostAllowed` takes those as
+ * given. A dotted name brings its first label too, since MagicDNS and most
+ * LANs answer to the short form.
+ */
+async function knownHosts(config: Config): Promise<Set<string>> {
+  const names = [
+    os.hostname(),
+    config.domain,
+    config.sshAdvertise && hostName(config.sshAdvertise),
+    await tailscaleName(),
+    ...config.allowedHosts,
+  ]
+    .filter((n): n is string => Boolean(n))
+    .map(hostName);
+  return new Set(names.flatMap((n) => [n, n.split(".")[0]]));
 }
 
 function banner(
@@ -201,6 +243,8 @@ export async function startServer(config: Config): Promise<RunningServer> {
   void discoverCursor();
 
   const gate = createGate(config.token);
+  // Only consulted without a token, so only worth the Tailscale probe then.
+  const hosts = config.token ? new Set<string>() : await knownHosts(config);
   const serveStatic = createStaticServer(config.webRoot);
   const handleApi = createApi({ config, ca, hostKey, wallpapers, db });
   const bridge = createBridgeHandlers({
@@ -239,18 +283,32 @@ export async function startServer(config: Config): Promise<RunningServer> {
       );
     }
 
+    if (!originAllowed(req)) {
+      log.warn(
+        `rejected ${req.method} ${url.pathname} from origin ${req.headers.get("origin")}`,
+      );
+      return new Response("forbidden: cross-origin request\n", {
+        status: 403,
+      });
+    }
+    if (!config.token && !hostAllowed(req, hosts)) {
+      const name = hostName(req.headers.get("host") ?? "");
+      log.warn(
+        `rejected a request for host ${JSON.stringify(name)}; if that is this server, add --allowed-host ${name}`,
+      );
+      return new Response(
+        `forbidden: this server does not answer to ${name}\n` +
+          `If it should, restart it with --allowed-host ${name}, or with a token.\n`,
+        { status: 403 },
+      );
+    }
+
     const redirect = gate.consumeTokenParam(req, url, secure);
     if (redirect) return redirect;
 
     const denied = gate.check(req);
 
     if (url.pathname === "/websocket") {
-      if (!originAllowed(req)) {
-        log.warn(
-          `rejected cross-origin websocket upgrade from ${req.headers.get("origin")}`,
-        );
-        return new Response("forbidden", { status: 403 });
-      }
       if (denied) return new Response("unauthorized", { status: 401 });
       if (bridge.atCapacity())
         return new Response("too many connections", { status: 503 });

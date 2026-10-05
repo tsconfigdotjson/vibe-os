@@ -52,6 +52,11 @@ export interface Config {
 
   /** null disables the gate entirely (with a loud warning at startup). */
   token: string | null;
+  /**
+   * Names, beyond the ones the server works out for itself, that a request may
+   * use to reach it when there is no token. See `hostAllowed` in auth.ts.
+   */
+  allowedHosts: string[];
   certTtlSeconds: number;
   /**
    * Keep each window in a dtach session so it survives a reload. Auto-detected
@@ -80,6 +85,7 @@ export const OPTION_SPEC = {
   workspace: { type: "string" as const },
   token: { type: "string" as const },
   "no-token": { type: "boolean" as const },
+  "allowed-host": { type: "string" as const, multiple: true },
   "cert-ttl": { type: "string" as const },
   "theme-color": { type: "string" as const },
   sessions: { type: "boolean" as const },
@@ -102,8 +108,8 @@ export const OPTION_SPEC = {
 };
 
 export type RawOptions = Partial<
-  Record<keyof typeof OPTION_SPEC, string | boolean>
->;
+  Record<Exclude<keyof typeof OPTION_SPEC, "allowed-host">, string | boolean>
+> & { "allowed-host"?: string[] };
 
 /**
  * Flags that mean "generate one" when given no value.
@@ -270,19 +276,25 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
   );
   const persisted = await loadPersisted(stateDir);
 
-  // --token with no value means "generate one"; --no-token means "no gate".
+  // A token unless told otherwise: --no-token, or VIBE_OS_NO_TOKEN for the
+  // container. Given none, the one from the last run, or a new one.
   let token: string | null;
-  if (values["no-token"]) {
+  if (flag(values["no-token"] ?? process.env.VIBE_OS_NO_TOKEN)) {
     token = null;
   } else if (typeof values.token === "string" && values.token.length > 0) {
     token = values.token;
   } else if (process.env.VIBE_OS_TOKEN) {
     token = process.env.VIBE_OS_TOKEN;
-  } else if (values.token === "") {
-    token = persisted.token ?? randomBytes(24).toString("base64url");
   } else {
-    token = persisted.token ?? null;
+    token = persisted.token ?? randomBytes(24).toString("base64url");
   }
+
+  const allowedHosts = [
+    ...(values["allowed-host"] ?? []),
+    ...(process.env.VIBE_OS_ALLOWED_HOSTS?.split(",") ?? []),
+  ]
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
 
   const sessions = values["no-sessions"]
     ? false
@@ -339,6 +351,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
       ),
     ),
     token,
+    allowedHosts,
     certTtlSeconds: num(
       values["cert-ttl"] ?? process.env.VIBE_OS_CERT_TTL,
       12 * 60 * 60,

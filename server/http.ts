@@ -40,6 +40,14 @@ export const badId = (what: string): Response =>
  * or malformed body as empty so validation reports the real problem ("a profile
  * needs a name") rather than a parse error. One route was the odd one out and
  * threw instead.
+ *
+ * A body not labelled JSON counts as missing. `text/plain` is one of the types
+ * a page on another site can POST without a preflight, so honouring it would
+ * let such a page fill in a route's fields. The Origin check already stops
+ * that; this means a gap in it would only ever deliver an empty body.
  */
-export const readJson = async <T>(req: Request): Promise<T> =>
-  (await req.json().catch(() => ({}))) as T;
+export const readJson = async <T>(req: Request): Promise<T> => {
+  const type = req.headers.get("content-type")?.split(";")[0].trim();
+  if (type !== "application/json") return {} as T;
+  return (await req.json().catch(() => ({}))) as T;
+};

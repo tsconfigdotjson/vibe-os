@@ -48,26 +48,6 @@ export function bridgeConnections(): number {
   return open;
 }
 
-/**
- * Rejects cross-origin upgrades.
- *
- * A browser will let any page on the internet open a WebSocket to a host it can
- * route to, and unlike fetch there is no preflight to stop it. Since the app is
- * always served from the same origin it talks to, a foreign Origin is either a
- * mistake or an attack.
- */
-export function originAllowed(req: Request): boolean {
-  const origin = req.headers.get("origin");
-  if (!origin) return true; // non-browser client
-  const host = req.headers.get("host");
-  if (!host) return false;
-  try {
-    return new URL(origin).host === host;
-  } catch {
-    return false;
-  }
-}
-
 export function createBridgeHandlers(
   target: BridgeTarget,
   maxConnections = 64,
