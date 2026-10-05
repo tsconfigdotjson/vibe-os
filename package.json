@@ -1,9 +1,15 @@
 {
   "name": "vibe-os",
   "version": "0.1.0",
-  "description": "A terminal multiplexer in the browser. Runs on a blank VPS, serves on port 80, and SSHes back into the box with browser-held keys and short-lived certificates.",
+  "description": "A coding desktop in the browser, on a box you own. Git worktrees per piece of work, terminals that survive a reload, and SSH that runs in the tab.",
   "type": "module",
   "license": "MIT",
+  "homepage": "https://github.com/GratefulWorkspace/vibe-os#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GratefulWorkspace/vibe-os.git"
+  },
+  "bugs": "https://github.com/GratefulWorkspace/vibe-os/issues",
   "engines": {
     "bun": ">=1.2"
   },
