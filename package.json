@@ -4,12 +4,12 @@
   "description": "A coding desktop in the browser, on a box you own. Git worktrees per piece of work, terminals that survive a reload, and SSH that runs in the tab.",
   "type": "module",
   "license": "MIT",
-  "homepage": "https://github.com/GratefulWorkspace/vibe-os#readme",
+  "homepage": "https://github.com/tsconfigdotjson/vibe-os#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GratefulWorkspace/vibe-os.git"
+    "url": "git+https://github.com/tsconfigdotjson/vibe-os.git"
   },
-  "bugs": "https://github.com/GratefulWorkspace/vibe-os/issues",
+  "bugs": "https://github.com/tsconfigdotjson/vibe-os/issues",
   "engines": {
     "bun": ">=1.2"
   },
