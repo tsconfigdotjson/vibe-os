@@ -110,6 +110,7 @@ const UVX_PATHS = [`${home}/.local/bin/uvx`, "/usr/local/bin/uvx"];
  * one when there is nothing to configure. Both used to be about to grow their
  * own copy of a URL that has to be right.
  */
+export const CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash";
 export const HERMES_INSTALL =
   "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
 export const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";

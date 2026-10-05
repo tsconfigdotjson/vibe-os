@@ -93,6 +93,11 @@ export const OPTION_SPEC = {
   // doctor only, same reasoning as the install-browser block below: parseArgs
   // is strict, so a flag it has never heard of is an error.
   reap: { type: "boolean" as const },
+  // setup only, for the same reason.
+  yes: { type: "boolean" as const, short: "y" },
+  firewall: { type: "boolean" as const },
+  hermes: { type: "boolean" as const },
+  cursor: { type: "boolean" as const },
   // install-browser only. Kept here because parseArgs is strict, and a flag it
   // has never heard of is an error rather than something a subcommand can read.
   geometry: { type: "string" as const },
@@ -149,6 +154,24 @@ export function parseCliArgs(argv: string[]): {
     strict: true,
   });
   return { values: values as RawOptions, positionals };
+}
+
+/**
+ * The user this process runs as.
+ *
+ * Bun's `os.userInfo().username` comes from `$USER`, and reads "unknown" when
+ * that is unset, which `docker exec`, cron and some `su` invocations all do.
+ * `id` asks the passwd database for the real uid instead.
+ */
+async function currentUser(): Promise<string> {
+  const name = os.userInfo().username;
+  if (name && name !== "unknown") return name;
+  try {
+    const { stdout } = await run("id", ["-un"], { timeout: 5_000 });
+    return stdout.trim() || name;
+  } catch {
+    return name;
+  }
 }
 
 async function hasDtach(): Promise<boolean> {
@@ -334,7 +357,7 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
       process.env.VIBE_OS_SSH_ADVERTISE ??
       undefined,
     user: userName(
-      values.user ?? process.env.VIBE_OS_USER ?? os.userInfo().username,
+      values.user ?? process.env.VIBE_OS_USER ?? (await currentUser()),
       "user",
     ),
     stateDir,

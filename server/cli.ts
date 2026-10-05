@@ -43,6 +43,7 @@ import { startServer } from "./index.ts";
 import { color, describeError, log } from "./log.ts";
 import { reapLeaks } from "./reaper.ts";
 import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
+import { confirmFirewall, runSetup } from "./setup.ts";
 
 const run = promisify(execFile);
 const BUN = process.execPath;
@@ -56,6 +57,7 @@ const HELP = `
     vibe-os [start]              serve the UI and the SSH bridge
     vibe-os attach [window]      attach a real terminal to a window's session
     vibe-os doctor               check this machine is ready
+    vibe-os setup                fix what doctor finds, asking first
     vibe-os install-service      write and enable a systemd unit (needs root)
     vibe-os install-browser      run one Chrome on a virtual display (needs root)
     vibe-os connect-hermes       point Hermes' browser tools at that Chrome
@@ -113,6 +115,14 @@ const HELP = `
 
   ${color.bold("doctor")}
     --reap              kill processes that outlived their workspace or session
+
+  ${color.bold("setup")}
+    -y, --yes           take the default answer to every question
+    --firewall          close the box to all but the tailnet with ufw; needed
+                        with --yes, which otherwise leaves the firewall alone
+    --hermes            install Hermes too (asked otherwise, default no)
+    --cursor            install Cursor too (asked otherwise, default no)
+    --user <name>       as root: the user to create and run vibe-os as
 `;
 
 function version(): string {
@@ -810,6 +820,10 @@ export async function main(argv: string[]): Promise<number> {
       if (values.reap) await reapLeaks(config);
       return printChecks(await runDoctor(config));
     }
+    case "setup":
+      return runSetup(config, values);
+    case "confirm-firewall":
+      return confirmFirewall(config);
     case "install-service":
       return installService(config, argv);
     case "install-browser":
