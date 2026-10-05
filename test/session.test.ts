@@ -3,7 +3,12 @@ import type { Config } from "../server/config.ts";
 import { shellQuote, windowCommand } from "../server/session.ts";
 
 const config = (over: Partial<Config> = {}) =>
-  ({ sessions: true, stateDir: "/var/lib/vibe-os", ...over }) as Config;
+  ({
+    sessions: true,
+    stateDir: "/var/lib/vibe-os",
+    memory: { high: null, max: null, swapMax: null },
+    ...over,
+  }) as Config;
 
 describe("shellQuote", () => {
   const cases = [
@@ -188,6 +193,8 @@ describe("terminal speed", () => {
       command: null,
       args: [],
       prompt: "",
+      memoryHigh: null,
+      memoryMax: null,
       position: 0,
       createdAt: 0,
     }) as string;

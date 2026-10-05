@@ -9,6 +9,7 @@ import { asc, eq } from "drizzle-orm";
 import { detokenize, tokenize } from "../shared/args.ts";
 import type { Harness, Profile, ProfileInput } from "../shared/wire.ts";
 import { type Db, newId, profiles, windows } from "./db.ts";
+import { parseSize } from "./memory.ts";
 
 /**
  * The ten colours a profile can be.
@@ -70,6 +71,8 @@ const hydrate = (row: typeof profiles.$inferSelect): Profile => ({
   command: row.command,
   args: parseStoredArgs(row.args),
   prompt: row.prompt,
+  memoryHigh: row.memoryHigh,
+  memoryMax: row.memoryMax,
   position: row.position,
   createdAt: row.createdAt,
 });
@@ -137,6 +140,13 @@ function validate(input: ProfileInput, partial: boolean): Fields {
     out.prompt = prompt;
   }
 
+  // Checked here rather than at launch: systemd-run refuses a size it cannot
+  // read, and the window would never open.
+  if (input.memoryHigh !== undefined || !partial)
+    out.memoryHigh = parseSize(input.memoryHigh, "memory high");
+  if (input.memoryMax !== undefined || !partial)
+    out.memoryMax = parseSize(input.memoryMax, "memory max");
+
   // A custom harness with no command would launch nothing at all, silently.
   const harness = out.harness ?? input.harness;
   if (harness === "custom" && out.command === null)
@@ -179,6 +189,8 @@ export function createProfile(
       command: fields.command ?? null,
       args: fields.args ?? "[]",
       prompt: fields.prompt ?? "",
+      memoryHigh: fields.memoryHigh ?? null,
+      memoryMax: fields.memoryMax ?? null,
       position: input.position ?? siblings.length,
       createdAt: Date.now(),
     })

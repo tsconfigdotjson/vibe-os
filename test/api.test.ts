@@ -68,6 +68,7 @@ async function build() {
     user: "vibe",
     workspace: "/tmp/demo",
     sessions: false,
+    memory: { high: null, max: null, swapMax: null },
     token: null,
     themeColor: "#1c2128",
     stateDir: dir,

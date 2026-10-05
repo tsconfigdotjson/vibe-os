@@ -12,6 +12,7 @@
 // functions is not a trade worth making.
 
 import type { Config } from "./config.ts";
+import { effectiveLimits, SCOPE_PROBE, scopePrefix } from "./memory.ts";
 import type { Profile } from "./profiles.ts";
 import { SOCK_VAR } from "./reaper.ts";
 
@@ -284,7 +285,19 @@ export function windowCommand(
    * what lets the reaper name the owner of a process found running in a
    * deleted worktree a week later. reaper.ts is the only reader.
    */
-  const create = `${SOCK_VAR}=${shellQuote(sock)} dtach -n ${shellQuote(sock)} -E -z /bin/sh -c ${shellQuote(inner)}`;
+  const dtachNew = `dtach -n ${shellQuote(sock)} -E -z /bin/sh -c ${shellQuote(inner)}`;
+  /*
+   * A scope of its own, with the memory limits, when the login has a user
+   * systemd to ask (see memory.ts). The marker goes on both branches: a
+   * `VAR=value` prefix cannot sit in front of an `if`, and exporting it would
+   * hand it to the attaching client below as well, which would then count as
+   * part of the session it is only looking at.
+   */
+  const scope = scopePrefix(effectiveLimits(config.memory, profile), session);
+  const marked = `${SOCK_VAR}=${shellQuote(sock)}`;
+  const create = scope
+    ? `if ${SCOPE_PROBE}; then ${marked} ${scope}${dtachNew}; else ${marked} ${dtachNew}; fi`
+    : `${marked} ${dtachNew}`;
   const attach = `exec dtach -a ${shellQuote(sock)} -E -z -r winch`;
 
   /*
@@ -315,10 +328,11 @@ export function windowCommand(
   const critical = `${probe} || { rm -f ${shellQuote(sock)}; ${create}; }`;
 
   // The banner wants to show what a window actually runs, which is the create
-  // and the attach. Printing the locking wrapper as well — twice, once per
-  // branch, with three levels of nested quoting — buries that in a wall of
-  // backslashes and tells the reader nothing they can act on.
-  if (opts?.forDisplay) return [create, attach].join("; ");
+  // (scoped, when it can be) and the attach. Printing the locking wrapper as
+  // well — twice, once per branch, with three levels of nested quoting — buries
+  // that in a wall of backslashes and tells the reader nothing they can act on.
+  if (opts?.forDisplay)
+    return [`${marked} ${scope}${dtachNew}`, attach].join("; ");
 
   return [
     `mkdir -p ${shellQuote(`${config.stateDir}/sessions`)}`,

@@ -1,6 +1,6 @@
 import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
-import type { ClientConfig } from "../shared/wire.ts";
+import type { ClientConfig, MemoryReport } from "../shared/wire.ts";
 import {
   attachInfo,
   killSession,
@@ -27,6 +27,12 @@ import {
   syncMcpMirrors,
 } from "./mcp.ts";
 import {
+  capacityWarning,
+  effectiveLimits,
+  readBoxMemory,
+  sessionMemory,
+} from "./memory.ts";
+import {
   createProfile,
   deleteProfile,
   getProfile,
@@ -44,7 +50,7 @@ import {
   scanProjects,
   touchWorkspace,
 } from "./projects.ts";
-import { windowCommand } from "./session.ts";
+import { socketPath, windowCommand } from "./session.ts";
 import type { SshCa } from "./ssh-ca.ts";
 import { fingerprint, MAX_PUBKEY_BYTES } from "./ssh-ca.ts";
 import {
@@ -155,6 +161,7 @@ export function createApi(deps: ApiDeps) {
         maxWallpaperBytes: MAX_WALLPAPER_BYTES,
         themeColor: config.themeColor,
         palette: PALETTE,
+        memory: config.memory,
       };
       return json(body);
     }
@@ -303,7 +310,9 @@ export function createApi(deps: ApiDeps) {
         return json(listWindows(db, workspaceId));
       }
       if (req.method === "POST") {
-        const body = await readJson<{ profileId?: unknown }>(req);
+        const body = await readJson<{ profileId?: unknown; force?: unknown }>(
+          req,
+        );
         let profileId: string | null = null;
         if (typeof body.profileId === "string" && body.profileId !== "") {
           const profile = getProfile(db, body.profileId);
@@ -313,11 +322,44 @@ export function createApi(deps: ApiDeps) {
           if (!profile || profile.projectId !== workspace.projectId) {
             return json({ error: "unknown profile for this workspace" }, 400);
           }
+          // An agent is what fills a small box, so an agent is what asks
+          // first. 409 with `capacity` is the question; the browser asks the
+          // person and sends `force` to go ahead anyway.
+          if (profile.harness !== "shell" && body.force !== true) {
+            const warning = capacityWarning(
+              await readBoxMemory(),
+              effectiveLimits(config.memory, profile).high,
+            );
+            if (warning) return json({ error: warning, capacity: true }, 409);
+          }
           profileId = profile.id;
         }
         return json(createWindow(db, workspaceId, profileId), 201);
       }
       return methodNotAllowed();
+    }
+
+    // What the box has and what each of this workspace's windows costs, for
+    // the dock. Linux only; elsewhere both halves come back empty.
+    const memoryMatch = /^\/api\/workspaces\/([^/]+)\/memory$/.exec(p);
+    if (memoryMatch && req.method === "GET") {
+      const workspaceId = decodeURIComponent(memoryMatch[1]);
+      if (!ID_PATTERN.test(workspaceId)) return badId("workspace");
+      const sockets = new Map<string, string>();
+      for (const win of listWindows(db, workspaceId)) {
+        const target = sessionNameFor(db, win.id);
+        if (target) sockets.set(socketPath(config, target.session), win.id);
+      }
+      const [box, usage] = await Promise.all([
+        readBoxMemory(),
+        sessionMemory([...sockets.keys()]),
+      ]);
+      const report: MemoryReport = { box, windows: {} };
+      for (const [sock, mem] of usage) {
+        const id = sockets.get(sock);
+        if (id) report.windows[id] = mem;
+      }
+      return json(report);
     }
 
     // How to reach this window from a real terminal. Read-only: it composes
