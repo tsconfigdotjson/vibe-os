@@ -35,6 +35,10 @@ jobs:
       - name: Lint and format check
         run: bun run lint
 
+      # shellcheck ships on GitHub's Ubuntu runners.
+      - name: Shell scripts
+        run: shellcheck install.sh docker/entrypoint.sh
+
       - name: Typecheck
         run: bun run typecheck
 

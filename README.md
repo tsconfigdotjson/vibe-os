@@ -55,6 +55,8 @@ edit, no `sshd_config` change, and no root.
 - [Security](#security)
 - [CLI reference](#cli-reference)
 - [Development](#development)
+  - [Building from source](#building-from-source)
+  - [Releasing](#releasing)
 - [Project status](#project-status)
 - [Contributing](#contributing)
 - [License](#license)
@@ -66,14 +68,14 @@ edit, no `sshd_config` change, and no root.
 ### Try it locally
 
 ```bash
-docker compose up --build
+docker run --rm -p 127.0.0.1:8080:80 -e VIBE_OS_NO_TOKEN=1 ghcr.io/tsconfigdotjson/vibe-os
 open http://localhost:8080
 ```
 
-A blank Debian box with sshd, dtach and git, which is the same shape as a fresh
-VPS. The compose file turns the token off so the URL above just works, and
-publishes the port on loopback only, because a vibe-os with no token is a shell
-for anyone who can reach it.
+A blank Debian box with sshd, dtach and git, the same shape as a fresh VPS. The
+token is off, so the port is on loopback only: a vibe-os with no token is a
+shell for anyone who can reach it. The image has no harness, so profiles open a
+shell; from a clone, `docker compose up --build` adds Claude Code.
 
 ### Or point an agent at a VPS
 
@@ -87,9 +89,7 @@ You have an agent. Give it SSH access to a fresh box and this:
 >    `git`, and `gh`. Install Claude Code with the standalone installer from
 >    https://claude.ai/install.sh, not npm.
 > 3. Install Tailscale, run `tailscale up`, and tell me the tailnet address.
-> 4. Build the binary. If you have Bun locally, `bun run compile` and copy
->    `dist/bin/vibe-os-linux-x64` to `/usr/local/bin/vibe-os`. Otherwise clone
->    the repo on the box, install Bun, and run `bun install && bun run build`.
+> 4. Install vibe-os: `curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh`.
 > 5. Run `vibe-os doctor` and then `sudo vibe-os doctor`. Fix what they report
 >    before continuing. Do not skip this.
 > 6. Install the service: `sudo vibe-os install-service --port 7681 --host
@@ -418,10 +418,13 @@ invocation, so without it a profile opens a shell and does nothing else.
 ### Install
 
 ```bash
-bun run compile              # writes dist/bin/vibe-os-linux-{x64,arm64}
-scp dist/bin/vibe-os-linux-x64 you@host:/usr/local/bin/vibe-os
-ssh you@host 'chmod +x /usr/local/bin/vibe-os'
+curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh
 ```
+
+It installs the latest [release](https://github.com/tsconfigdotjson/vibe-os/releases)
+for Linux x64, Linux arm64 or Apple Silicon to `/usr/local/bin` (or
+`~/.local/bin` without sudo), after checking its SHA-256. Set `VIBE_OS_VERSION`
+to pin a tag, or `VIBE_OS_INSTALL_DIR` to choose the directory.
 
 The binary carries the whole app, including the 20MB SSH WASM runtime. No Bun,
 Node or npm on the target.
@@ -681,12 +684,8 @@ accept that `gh` will not work.
 ### Updating a running box
 
 ```bash
-bun run build && bun scripts/compile.ts linux-x64
-scp dist/bin/vibe-os-linux-x64 you@host:/tmp/vibe-os
-ssh you@host 'sudo systemctl stop vibe-os \
-  && sudo mv /tmp/vibe-os /usr/local/bin/vibe-os \
-  && sudo chmod +x /usr/local/bin/vibe-os \
-  && sudo systemctl start vibe-os'
+curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh
+sudo systemctl restart vibe-os
 ```
 
 Nothing is lost by that restart. Two things it does not pick up:
@@ -854,6 +853,30 @@ step of its own.
 its SHA-256 verified before extraction. To move it, set `SSHTERM_VERSION`, run
 `bun run fetch-wasm`, and copy the checksum it prints into `PINNED`.
 
+### Building from source
+
+```bash
+bun install && bun run build
+bun scripts/compile.ts linux-x64     # or linux-arm64, darwin-arm64; none for all
+scp dist/bin/vibe-os-linux-x64 you@host:/tmp/vibe-os
+ssh you@host 'sudo install -m 0755 /tmp/vibe-os /usr/local/bin/vibe-os'
+```
+
+### Releasing
+
+Bump `version` in `package.json`, merge, then tag the merge commit:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The tag must match `package.json`. The workflow publishes the binaries with
+`SHA256SUMS` as a GitHub Release and pushes `ghcr.io/tsconfigdotjson/vibe-os`.
+A hyphenated tag such as `v0.2.0-rc.1` is a prerelease, which the installer
+skips.
+
+### Icons
+
 App icons are generated from `public/icon.svg`:
 
 ```bash
@@ -867,8 +890,7 @@ rsvg-convert -w 512 -h 512 public/icon-maskable.svg -o public/icon-maskable-512.
 
 ## Project status
 
-Usable and in daily use, but young. No release binaries are published yet, so
-build one or run the container.
+Usable and in daily use, but young.
 
 Everything in [Deploying on a VPS](#deploying-on-a-vps) has been walked end to
 end on a fresh OVHcloud VPS on Ubuntu 26.04, behind Tailscale, serving HTTPS.
