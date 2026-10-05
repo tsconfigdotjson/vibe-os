@@ -1,5 +1,5 @@
 {
-  "name": "vibe-os",
+  "name": "@tsconfigdotjson/vibe-os",
   "version": "0.1.0",
   "description": "A coding desktop in the browser, on a box you own. Git worktrees per piece of work, terminals that survive a reload, and SSH that runs in the tab.",
   "type": "module",
@@ -26,6 +26,9 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "fetch-wasm": "bun scripts/fetch-wasm.mjs",
     "postinstall": "bun scripts/gen-assets.ts && bun scripts/fetch-wasm.mjs --if-missing --soft-fail || exit 0",

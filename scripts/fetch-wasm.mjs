@@ -7,7 +7,7 @@
 // WASM ABI and is version-locked to the compiler that produced the .wasm, so
 // they always come from the same release tarball. Building from source instead
 // would require a Go toolchain on the target machine, which a VPS running
-// `npx vibe-os` will not have.
+// the npm package will not have.
 //
 // Flags:
 //   --if-missing   no-op when public/ssh.wasm already exists
@@ -233,7 +233,7 @@ main().catch((err) => {
   if (softFail) {
     console.warn(`vibe-os: could not fetch ssh.wasm (${err.message}).`);
     console.warn(
-      "vibe-os: it will be fetched on first start, or run `npx vibe-os fetch-wasm`.",
+      "vibe-os: it will be fetched on first start, or run `vibe-os fetch-wasm`.",
     );
     process.exit(0);
   }
