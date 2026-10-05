@@ -546,12 +546,14 @@ them restart on failure.
 | `--display <n>` | `99` |
 | `--vnc-port <n>` | `5900`, loopback only |
 | `--cdp-port <n>` | `9222`, loopback only |
-| `--restart-at <expr>` | `*-*-* 02:00:00 America/New_York` |
+| `--restart-at <expr>` | `*-*-* 02:00:00`, in the box's timezone |
 | `--no-restart` | install no nightly timer |
 | `--vnc-password [value]` | none, and an existing one is kept |
 | `--no-vnc-password` | serve the display with no authentication |
 
-Include the timezone in `--restart-at`. systemd reads a bare time as UTC.
+The default names the box's own timezone, which on most VPS images is UTC, and
+the install summary prints it. Pass your own zone if your night is elsewhere, as
+in `*-*-* 02:00:00 America/New_York`.
 
 Give it two gigabytes of headroom counting swap. Chrome idles near 0.5GB, and on
 a box without it the OOM killer takes terminal sessions rather than tabs.
@@ -698,6 +700,8 @@ the same unix user, there is no per-user isolation, and anyone who can reach the
 port and pass the gate can run anything that user can. Treat access to vibe-os
 as equivalent to SSH access to the box.
 
+Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
+
 The recommended shape is all of it: behind Tailscale, firewalled to the tailnet,
 bound to the tailnet address, and with the token on.
 
@@ -772,7 +776,7 @@ in a session could otherwise ask what you last copied.
 --vnc-port <n>      VNC port, bound to loopback (default 5900)
 --cdp-port <n>      Chrome debug port, bound to loopback (default 9222)
 --restart-at <expr> nightly restart, a systemd OnCalendar expression
-                    (default '*-*-* 02:00:00 America/New_York')
+                    (default '*-*-* 02:00:00', the box's own timezone)
 --no-restart        do not install the nightly restart timer
 --vnc-password [value]
                     require a VNC password; generates and prints one if
@@ -892,4 +896,7 @@ documented decision, update the reasoning with it.
 
 ## License
 
-MIT. Bundles [c2FmZQ/sshterm](https://github.com/c2FmZQ/sshterm) (MIT).
+MIT, see [LICENSE](LICENSE). Bundles [c2FmZQ/sshterm](https://github.com/c2FmZQ/sshterm)
+(MIT) and the packages listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). After changing dependencies,
+regenerate that file with `bun run notices`.

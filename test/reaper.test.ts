@@ -71,8 +71,8 @@ describe("classifyLeak", () => {
       proc({
         pid: 107466,
         age: 30, // even a young one: teardown kills before it deletes
-        args: "fly logs -a pr-1118-jooba",
-        cwd: "/home/ubuntu/workspace/.vibe-worktrees/jooba/sunny-violet-dingo (deleted)",
+        args: "fly logs -a webapp-staging",
+        cwd: "/home/ubuntu/workspace/.vibe-worktrees/webapp/sunny-violet-dingo (deleted)",
       }),
       opts(),
     );
@@ -83,7 +83,7 @@ describe("classifyLeak", () => {
     expect(
       classifyLeak(
         proc({
-          cwd: "/home/ubuntu/workspace/.vibe-worktrees/jooba/sunny-violet-dingo",
+          cwd: "/home/ubuntu/workspace/.vibe-worktrees/webapp/sunny-violet-dingo",
         }),
         opts(),
       ),

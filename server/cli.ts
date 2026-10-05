@@ -94,7 +94,7 @@ const HELP = `
     --vnc-port <n>      VNC port, bound to loopback (default 5900)
     --cdp-port <n>      Chrome debug port, bound to loopback (default 9222)
     --restart-at <expr> nightly restart, a systemd OnCalendar expression
-                        (default '*-*-* 02:00:00 America/New_York')
+                        (default '*-*-* 02:00:00', the box's own timezone)
     --no-restart        do not install the nightly restart timer
     --vnc-password [value]
                         require a VNC password; generates and prints one if
