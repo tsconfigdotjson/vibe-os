@@ -1,6 +1,6 @@
 {
   "name": "@tsconfigdotjson/vibe-os",
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "description": "A coding desktop in the browser, on a box you own. Git worktrees per piece of work, terminals that survive a reload, and SSH that runs in the tab.",
   "type": "module",
   "license": "MIT",
