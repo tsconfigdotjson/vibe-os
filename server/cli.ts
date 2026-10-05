@@ -69,8 +69,13 @@ const HELP = `
     --acme-staging      use the Let's Encrypt staging environment
     --tls-port <n>      HTTPS port (default 443)
 
-    --token [value]     require a token; generates and remembers one if omitted
-    --no-token          disable the gate (default, prints a warning)
+    --token [value]     the token to require (default: the last one used, or
+                        a new one, remembered in the state dir)
+    --no-token          disable the gate (prints a warning)
+    --allowed-host <name>
+                        with no token, a name this server answers to beyond
+                        its hostname, --domain and its Tailscale name.
+                        Repeatable
 
     --ssh-host <addr>   SSH target for the bridge (default 127.0.0.1)
     --ssh-port <n>      SSH target port (default 22)

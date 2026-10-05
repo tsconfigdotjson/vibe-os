@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createGate } from "../server/auth.ts";
+import {
+  createGate,
+  hostAllowed,
+  hostName,
+  originAllowed,
+} from "../server/auth.ts";
 
 /**
  * The front door, which had no tests at all.
@@ -182,5 +187,92 @@ describe("the Secure flag", () => {
         "Secure",
       );
     }
+  });
+});
+
+describe("the Origin check", () => {
+  const from = (origin: string | null, host = "box:7681") =>
+    new Request("http://box:7681/api/projects", {
+      method: "POST",
+      headers: { host, ...(origin === null ? {} : { origin }) },
+    });
+
+  test("a request with no Origin is not a browser on another site", () => {
+    expect(originAllowed(from(null))).toBe(true);
+  });
+
+  test("the page's own origin is allowed", () => {
+    expect(originAllowed(from("http://box:7681"))).toBe(true);
+  });
+
+  test("another site is refused", () => {
+    expect(originAllowed(from("https://evil.example"))).toBe(false);
+  });
+
+  test("the same name on another port is another origin", () => {
+    expect(originAllowed(from("http://box:8080"))).toBe(false);
+  });
+
+  test("an opaque origin is refused", () => {
+    expect(originAllowed(from("null"))).toBe(false);
+  });
+
+  test("an Origin with no Host to compare it to is refused", () => {
+    const req = new Request("http://box/", {
+      headers: { origin: "http://box" },
+    });
+    req.headers.delete("host");
+    expect(originAllowed(req)).toBe(false);
+  });
+});
+
+describe("hostName", () => {
+  test.each([
+    ["box", "box"],
+    ["box:7681", "box"],
+    ["Box.Example.TS.net.", "box.example.ts.net"],
+    ["127.0.0.1:80", "127.0.0.1"],
+    ["[::1]:7681", "::1"],
+    ["[::1]", "::1"],
+    ["fe80::1", "fe80::1"],
+  ])("%s is %s", (header, name) => {
+    expect(hostName(header)).toBe(name);
+  });
+});
+
+describe("the Host check", () => {
+  const names = new Set(["vibe-os", "vibe-os.example.ts.net"]);
+  const to = (host: string) =>
+    hostAllowed(new Request("http://x/", { headers: { host } }), names);
+
+  test("addresses are always allowed, since rebinding needs a name", () => {
+    expect(to("127.0.0.1:8080")).toBe(true);
+    expect(to("100.64.0.7")).toBe(true);
+    expect(to("[::1]:7681")).toBe(true);
+  });
+
+  test("localhost and its subdomains are allowed", () => {
+    expect(to("localhost:8080")).toBe(true);
+    expect(to("app.localhost")).toBe(true);
+  });
+
+  test("a name the server knows is allowed, in any case and on any port", () => {
+    expect(to("vibe-os.example.ts.net")).toBe(true);
+    expect(to("VIBE-OS:7681")).toBe(true);
+  });
+
+  test("a name it does not know is refused", () => {
+    expect(to("rebind.evil.example")).toBe(false);
+  });
+
+  test("a known name inside a longer one is still unknown", () => {
+    expect(to("vibe-os.evil.example")).toBe(false);
+    expect(to("localhost.evil.example")).toBe(false);
+  });
+
+  test("no Host at all is refused", () => {
+    const req = new Request("http://x/");
+    req.headers.delete("host");
+    expect(hostAllowed(req, names)).toBe(false);
   });
 });

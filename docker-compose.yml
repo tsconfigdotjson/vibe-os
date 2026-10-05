@@ -17,17 +17,20 @@ services:
         # set to 0 for a lean image with shell and custom harnesses only.
         WITH_CLAUDE: 1
     container_name: vibe-os
+    environment:
+      # No token, so http://localhost:8080 opens with nothing to paste. Remove
+      # this line and the server generates one and prints the URL with it, in
+      # `docker compose logs vibe-os`.
+      VIBE_OS_NO_TOKEN: "1"
     ports:
-      # Loopback only, deliberately. With no `--token` below there is no gate in
-      # front of this, and `vibe-os doctor` names that exact combination as the
-      # worst case: "no token, bound to every interface — anyone who can reach
-      # this port gets a shell." Binding to 127.0.0.1 makes the default safe on
-      # a laptop and on a VPS alike.
+      # Loopback only, deliberately, because of the line above: with no token,
+      # anyone who can reach this port gets a shell. Binding to 127.0.0.1 makes
+      # that safe on a laptop and on a VPS alike.
       #
       # To reach it from another machine, pick one:
       #   - keep this, and use an SSH tunnel:  ssh -L 8080:localhost:8080 box
       #   - put it on a tailnet address:       "100.x.y.z:8080:80"
-      #   - open it and turn the gate on:      "8080:80" plus command: ["--token"]
+      #   - open it and turn the gate on:      "8080:80", and drop VIBE_OS_NO_TOKEN
       - "127.0.0.1:8080:80"
     volumes:
       # Keeps the SSH certificate authority, the cert-authority line, and any
@@ -42,7 +45,7 @@ services:
       # by the entrypoint on every boot rather than baked into this path.
       - vibe-sshd:/etc/ssh
     # Anything here is passed straight to `vibe-os start`.
-    # command: ["--token"]
+    # command: ["--theme-color", "#7a4fd6"]
     restart: unless-stopped
 
 volumes:
