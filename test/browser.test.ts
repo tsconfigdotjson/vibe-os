@@ -25,7 +25,7 @@ const SS_LOOPBACK = `LISTEN 0      4096                    127.0.0.54:53    0.0.
 LISTEN 0      5                        127.0.0.1:5900  0.0.0.0:*
 LISTEN 0      4096                 127.0.0.53%lo:53    0.0.0.0:*
 LISTEN 0      5                            [::1]:5900     [::]:*
-LISTEN 0      4096                 100.96.101.46:32799 0.0.0.0:*
+LISTEN 0      4096                 100.64.0.7:32799 0.0.0.0:*
 `;
 
 const SS_EXPOSED = `LISTEN 0      5                          0.0.0.0:5900  0.0.0.0:*
@@ -37,7 +37,7 @@ const SS_HALF_EXPOSED = `LISTEN 0      5                        127.0.0.1:5900  
 LISTEN 0      5                             [::]:5900     [::]:*
 `;
 
-const SS_TAILNET_ONLY = `LISTEN 0      5                    100.96.101.46:5900  0.0.0.0:*
+const SS_TAILNET_ONLY = `LISTEN 0      5                    100.64.0.7:5900  0.0.0.0:*
 `;
 
 const SS_NO_VNC = `LISTEN 0      4096                    127.0.0.54:53    0.0.0.0:*
@@ -178,8 +178,9 @@ describe("browserUnits", () => {
       (u) => u.name === "vibe-os-chrome-restart.timer",
     );
     expect(timer?.contents).toContain("OnCalendar=");
-    // A bare time would be evaluated as UTC, silently, and fire at the wrong hour.
-    expect(timer?.contents).toMatch(/OnCalendar=.*[A-Za-z]+\/[A-Za-z_]+/);
+    // Named, so the unit says which night it means rather than leaving it to
+    // whatever the box happens to be set to.
+    expect(timer?.contents).toMatch(/OnCalendar=\*-\*-\* 02:00:00 \S+\n/);
   });
 
   test("no nightly restart means no timer and no service for it", () => {

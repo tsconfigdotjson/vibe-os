@@ -74,7 +74,13 @@ export const DEFAULT_DISPLAY = 99;
 export const DEFAULT_GEOMETRY = "1600x900";
 export const DEFAULT_VNC_PORT = 5900;
 export const DEFAULT_CDP_PORT = 9222;
-export const DEFAULT_RESTART_AT = "*-*-* 02:00:00 America/New_York";
+/**
+ * 2am in the box's own timezone, written out by name. systemd would read a bare
+ * time the same way, but naming the zone puts it in the unit and in the install
+ * summary, where someone whose night is not the box's can see to change it.
+ */
+export const defaultRestartAt = () =>
+  `*-*-* 02:00:00 ${Intl.DateTimeFormat().resolvedOptions().timeZone}`;
 
 /** VNC authentication truncates silently past this, so generate exactly this. */
 export const VNC_PASSWORD_LENGTH = 8;
@@ -92,7 +98,7 @@ export function defaultBrowserOptions(
     geometry: DEFAULT_GEOMETRY,
     vncPort: DEFAULT_VNC_PORT,
     cdpPort: DEFAULT_CDP_PORT,
-    restartAt: DEFAULT_RESTART_AT,
+    restartAt: defaultRestartAt(),
     profileDir: `${home}/.vibe-os/chrome`,
     vncPasswordFile: null,
   };

@@ -16,7 +16,9 @@
     "shared",
     "dist/web",
     "scripts",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "fetch-wasm": "bun scripts/fetch-wasm.mjs",
@@ -26,6 +28,7 @@
     "build:assets": "bun scripts/gen-assets.ts",
     "build": "bun run fetch-wasm -- --if-missing && bun run build:web && bun run build:compress && bun run build:assets",
     "compile": "bun scripts/compile.ts",
+    "notices": "bun scripts/notices.ts",
     "prepack": "bun run build",
     "typecheck": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.server.json --noEmit",
     "lint": "biome check .",

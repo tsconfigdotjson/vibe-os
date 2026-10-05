@@ -332,7 +332,7 @@ export async function killWorkspaceSessions(
  * resolves nowhere.
  *
  * The right answer is the host the browser is already talking to. If you
- * reached the desktop at `vibe-os.tail76dd79.ts.net`, ssh to that name works —
+ * reached the desktop at `vibe-os.your-tailnet.ts.net`, ssh to that name works —
  * it is the same machine, and on a tailnet it is the same name sshd answers on.
  * `--ssh-advertise` overrides it for the case where the two genuinely differ,
  * such as a reverse proxy in front of the web port.

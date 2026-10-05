@@ -18,7 +18,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.10
 
       # --ignore-scripts skips postinstall, which reaches out to the GitHub API
       # for ssh.wasm. Nothing under test needs the wasm, and a rate-limited

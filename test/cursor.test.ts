@@ -170,7 +170,7 @@ describe("harnessCommand", () => {
     }) as Parameters<typeof harnessCommand>[0];
 
   const where = {
-    cwd: "/home/ubuntu/workspace/.vibe-worktrees/jooba/bold-coral-lemur",
+    cwd: "/home/ubuntu/workspace/.vibe-worktrees/webapp/bold-coral-lemur",
     stateDir: "/home/ubuntu/.vibe-os",
   };
 
@@ -198,9 +198,9 @@ describe("cursorProjectSlug", () => {
   test("dashes a worktree path and drops the leading slash", () => {
     expect(
       cursorProjectSlug(
-        "/home/ubuntu/workspace/.vibe-worktrees/jooba/bold-coral-lemur",
+        "/home/ubuntu/workspace/.vibe-worktrees/webapp/bold-coral-lemur",
       ),
-    ).toBe("home-ubuntu-workspace-vibe-worktrees-jooba-bold-coral-lemur");
+    ).toBe("home-ubuntu-workspace-vibe-worktrees-webapp-bold-coral-lemur");
   });
 
   test("keeps case and collapses every run of anything else to one dash", () => {
@@ -239,11 +239,11 @@ describe("the Cursor MCP credential link", () => {
     }) as Parameters<typeof harnessCommand>[0];
 
   const where = {
-    cwd: "/home/ubuntu/workspace/.vibe-worktrees/jooba/bold-coral-lemur",
+    cwd: "/home/ubuntu/workspace/.vibe-worktrees/webapp/bold-coral-lemur",
     stateDir: "/home/ubuntu/.vibe-os",
   };
   const link =
-    '"$HOME/.cursor/projects/home-ubuntu-workspace-vibe-worktrees-jooba-bold-coral-lemur/mcp-auth.json"';
+    '"$HOME/.cursor/projects/home-ubuntu-workspace-vibe-worktrees-webapp-bold-coral-lemur/mcp-auth.json"';
 
   test("links the worktree's project dir at the box's one store", () => {
     const cmd = harnessCommand(profile("cursor"), where) as string;
@@ -255,7 +255,7 @@ describe("the Cursor MCP credential link", () => {
   test("creates both directories, since neither is certain to exist", () => {
     const cmd = harnessCommand(profile("cursor"), where) as string;
     expect(cmd).toContain(
-      "mkdir -p \"$HOME/.cursor/projects/home-ubuntu-workspace-vibe-worktrees-jooba-bold-coral-lemur\" '/home/ubuntu/.vibe-os/cursor'",
+      "mkdir -p \"$HOME/.cursor/projects/home-ubuntu-workspace-vibe-worktrees-webapp-bold-coral-lemur\" '/home/ubuntu/.vibe-os/cursor'",
     );
   });
 
