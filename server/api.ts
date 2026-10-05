@@ -354,7 +354,11 @@ export function createApi(deps: ApiDeps) {
         readBoxMemory(),
         sessionMemory([...sockets.keys()]),
       ]);
-      const report: MemoryReport = { box, windows: {} };
+      const report: MemoryReport = {
+        box,
+        warning: capacityWarning(box, config.memory.high),
+        windows: {},
+      };
       for (const [sock, mem] of usage) {
         const id = sockets.get(sock);
         if (id) report.windows[id] = mem;

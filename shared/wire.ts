@@ -58,6 +58,11 @@ export interface MemoryReport {
     swapFree: number;
     pressure: { some10: number; full10: number } | null;
   } | null;
+  /**
+   * What opening another agent would be warned with right now, or null when
+   * there is room. The dock shows it, so it never disagrees with the question.
+   */
+  warning: string | null;
   /** Keyed by window id. A window with no live session is absent. */
   windows: Record<
     string,

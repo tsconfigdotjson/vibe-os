@@ -87,7 +87,9 @@ export function Dock({
 
         <span className="dock-rule" aria-hidden="true" />
 
-        {memory?.box ? <BoxMemory box={memory.box} /> : null}
+        {memory?.box ? (
+          <BoxMemory box={memory.box} warning={memory.warning} />
+        ) : null}
 
         <button
           type="button"
@@ -163,19 +165,25 @@ function WindowMemory({ usage }: { usage?: MemoryReport["windows"][string] }) {
  * window throttled at its own limit stalls, and the kernel counts that as box
  * pressure even while the box itself is idle. That window shows on its own
  * dock entry instead.
+ *
+ * Amber is exactly "opening an agent would ask first", from the server's own
+ * answer; red is under a tenth of RAM left.
  */
-export function boxLevel(box: {
-  total: number;
-  available: number;
-}): "ok" | "warn" | "err" {
-  if (box.total === 0) return "ok";
-  const free = box.available / box.total;
-  if (free < 0.1) return "err";
-  if (free < 0.2) return "warn";
-  return "ok";
+export function boxLevel(
+  box: { total: number; available: number },
+  warning: string | null,
+): "ok" | "warn" | "err" {
+  if (box.total > 0 && box.available / box.total < 0.1) return "err";
+  return warning ? "warn" : "ok";
 }
 
-function BoxMemory({ box }: { box: NonNullable<MemoryReport["box"]> }) {
+function BoxMemory({
+  box,
+  warning,
+}: {
+  box: NonNullable<MemoryReport["box"]>;
+  warning: string | null;
+}) {
   const used = box.total - box.available;
   const share = box.total > 0 ? Math.round((used / box.total) * 100) : 0;
   const psi = box.pressure?.some10 ?? null;
@@ -183,8 +191,9 @@ function BoxMemory({ box }: { box: NonNullable<MemoryReport["box"]> }) {
   return (
     <span
       className="dock-box"
-      data-level={boxLevel(box)}
+      data-level={boxLevel(box, warning)}
       title={[
+        warning,
         `${shortBytes(used)} of ${shortBytes(box.total)} in use`,
         psi === null
           ? null

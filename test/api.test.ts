@@ -161,6 +161,7 @@ describe("id validation", () => {
     `/api/projects/${id}/workspaces`,
     `/api/projects/${id}/profiles`,
     `/api/workspaces/${id}/windows`,
+    `/api/workspaces/${id}/memory`,
   ];
 
   test("a malformed id is rejected before anything is looked up", async () => {
@@ -209,6 +210,7 @@ describe("reads", () => {
       "maxWallpaperBytes",
       "themeColor",
       "palette",
+      "memory",
     ]) {
       expect(body).toHaveProperty(key);
     }
@@ -227,6 +229,19 @@ describe("reads", () => {
       call("GET", `/api/workspaces/${ids.workspace}/windows`),
     );
     expect(wins.map((w) => w.id)).toContain(ids.window);
+  });
+
+  test("the memory report answers in its shape", async () => {
+    // Whatever the platform: no /proc gives a null box and no windows, a Linux
+    // runner gives real numbers. A window with no session is never listed.
+    const report = await bodyOf<{
+      box: unknown;
+      warning: unknown;
+      windows: Record<string, unknown>;
+    }>(call("GET", `/api/workspaces/${ids.workspace}/memory`));
+    expect(report).toHaveProperty("box");
+    expect(report).toHaveProperty("warning");
+    expect(report.windows).toEqual({});
   });
 });
 
