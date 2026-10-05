@@ -99,8 +99,10 @@ fi
 $sudo mkdir -p "$dir"
 $sudo install -m 0755 "$tmp/$name" "$dir/vibe-os"
 
-installed="$("$dir/vibe-os" --version)" && [ -n "$installed" ] ||
+installed="$("$dir/vibe-os" --version 2>/dev/null || true)"
+if [ -z "$installed" ]; then
   die "installed $dir/vibe-os, but it does not run on this machine"
+fi
 say "installed $installed to $dir/vibe-os"
 
 case ":$PATH:" in
