@@ -9,7 +9,7 @@
 Switch between the git repos on a machine, spin up a worktree per piece of work,
 and open terminals into it, from anything with a browser.
 
-[![CI](https://github.com/GratefulWorkspace/vibe-os/actions/workflows/ci.yml/badge.svg)](https://github.com/GratefulWorkspace/vibe-os/actions/workflows/ci.yml)
+[![CI](https://github.com/tsconfigdotjson/vibe-os/actions/workflows/ci.yml/badge.svg)](https://github.com/tsconfigdotjson/vibe-os/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 
 </div>
@@ -79,7 +79,7 @@ for anyone who can reach it.
 
 You have an agent. Give it SSH access to a fresh box and this:
 
-> Set up vibe-os (https://github.com/GratefulWorkspace/vibe-os) on this VPS.
+> Set up vibe-os (https://github.com/tsconfigdotjson/vibe-os) on this VPS.
 >
 > 1. Create a non-root user with sudo if I am logged in as root, and do the rest
 >    as that user. vibe-os hands out shells as whoever runs it.
