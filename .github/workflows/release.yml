@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  # The tag, package.json, `vibe-os --version` and /api/config all have to name
+  # the same version. The last two read package.json, so checking the tag
+  # against it covers all four.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        name: Tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(jq -r .version package.json)"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $pkg"
+            exit 1
+          fi
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+
+  # Each binary is compiled on its own platform, so it can be run once before it
+  # ships, and so the macOS one is signed by a Mac.
+  binary:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-latest
+            target: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      # postinstall fetches ssh.wasm through the GitHub API, which rate-limits
+      # anonymous runners.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: bun run build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compile
+        run: bun scripts/compile.ts ${{ matrix.target }}
+
+      - name: Smoke test
+        run: |
+          got="$(dist/bin/vibe-os-${{ matrix.target }} --version)"
+          if [ "$got" != "${{ needs.version.outputs.version }}" ]; then
+            echo "::error::binary reports $got, expected ${{ needs.version.outputs.version }}"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vibe-os-${{ matrix.target }}
+          path: dist/bin/vibe-os-${{ matrix.target }}
+          if-no-files-found: error
+
+  release:
+    needs: [version, binary]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: out
+        run: sha256sum vibe-os-* > SHA256SUMS && cat SHA256SUMS
+
+      # A tag with a hyphen (v0.2.0-rc.1) becomes a prerelease, which
+      # releases/latest skips, so install.sh keeps serving the last real one.
+      - name: Create the release
+        working-directory: out
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            $prerelease \
+            vibe-os-* SHA256SUMS
+
+  image:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # The builder stage cross-compiles natively; QEMU only runs the arm64
+      # runtime stage's apt-get and setcap.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # semver tags: 0.2.0, 0.2, and latest. Prereleases get only their own tag.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # A secret rather than a build arg, which would end up in the
+          # image's history.
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}

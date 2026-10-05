@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # A blank Linux box with sshd, dtach and vibe-os on port 80 — the same shape as
 # a fresh VPS, close enough to be a real rehearsal for one.
 #
@@ -8,7 +9,9 @@
 # be lying around.
 
 # ── stage 1: build and compile ───────────────────────────────────────────────
-FROM oven/bun:1-debian AS builder
+# Runs on the build machine's own architecture and cross-compiles, so a
+# multi-arch build does not run Bun under emulation.
+FROM --platform=$BUILDPLATFORM oven/bun:1-debian AS builder
 
 WORKDIR /src
 # scripts/ comes along with the manifest because postinstall runs from there.
@@ -16,14 +19,18 @@ WORKDIR /src
 # developer has, rather than re-resolving every range at build time.
 COPY package.json bun.lock ./
 COPY scripts ./scripts
-RUN bun install --frozen-lockfile
+# The release workflow passes a token so postinstall's GitHub API call for
+# ssh.wasm is not rate-limited. A local build runs without one.
+RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
+    bun install --frozen-lockfile
 
 COPY . .
 
 # Compile for whatever architecture the image is being built for, so this works
 # on both an arm64 laptop and an x64 VPS.
 ARG TARGETARCH
-RUN bun run build \
+RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
+    bun run build \
     && case "$TARGETARCH" in \
          amd64) BUN_TARGET=linux-x64 ;; \
          arm64) BUN_TARGET=linux-arm64 ;; \
