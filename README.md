@@ -426,6 +426,13 @@ ssh you@host 'chmod +x /usr/local/bin/vibe-os'
 The binary carries the whole app, including the 20MB SSH WASM runtime. No Bun,
 Node or npm on the target.
 
+On a box that already has Bun, the npm package is the same thing without the
+build step:
+
+```bash
+bun add -g @tsconfigdotjson/vibe-os   # installs the vibe-os command
+```
+
 Then check it, twice. `vibe-os doctor` answers whether a certificate this host
 signs will actually be accepted, which catches the failures that otherwise
 appear in a browser as `handshake failed` and nowhere else. Reading sshd's
