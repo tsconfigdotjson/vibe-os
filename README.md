@@ -907,9 +907,11 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 
 The tag must match `package.json`. The workflow publishes the binaries with
-`SHA256SUMS` as a GitHub Release and pushes `ghcr.io/tsconfigdotjson/vibe-os`.
-A hyphenated tag such as `v0.2.0-rc.1` is a prerelease, which the installer
-skips.
+`SHA256SUMS` as a GitHub Release, pushes `ghcr.io/tsconfigdotjson/vibe-os`, and
+publishes `@tsconfigdotjson/vibe-os` to npm with provenance, through npm's
+[trusted publishing](https://docs.npmjs.com/trusted-publishers). A hyphenated
+tag such as `v0.2.0-rc.1` is a prerelease: the installer skips it, and npm gets
+it under the `next` dist-tag rather than `latest`.
 
 ### Icons
 
