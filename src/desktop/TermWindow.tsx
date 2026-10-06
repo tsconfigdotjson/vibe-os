@@ -1,5 +1,5 @@
 import type { Terminal } from "@xterm/xterm";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerConfig } from "../api";
 import { windowSshConfig } from "../api";
 import type { Profile } from "../data";
@@ -57,6 +57,12 @@ export interface TermWindowProps {
   onBringBack: (id: string, resume: boolean) => void;
   onReclaim: (id: string) => void;
   focused: boolean;
+  /**
+   * Raised each time something asks for this window's terminal to take the
+   * keyboard: a shortcut, the dock. Zero while it never has. A counter, so
+   * asking twice for a window that already has focus still works.
+   */
+  summon: number;
   view: Viewport;
   onRaise: (id: string) => void;
   onCommit: (id: string, rect: Rect, mode: DragMode) => void;
@@ -93,6 +99,7 @@ export const TermWindow = memo(function TermWindow({
   onBringBack,
   onReclaim,
   focused,
+  summon,
   view,
   onRaise,
   onCommit,
@@ -235,6 +242,17 @@ export const TermWindow = memo(function TermWindow({
   );
 
   useDismiss(menuOpen, menuAnchor, closeMenu);
+
+  // Waits for the terminal as well as the request: a minimised window has none
+  // until it is restored, and the one it gets is a fresh mount. Each request is
+  // answered once, so a terminal remounting later does not grab the keyboard.
+  const answered = useRef(0);
+  useEffect(() => {
+    if (summon > answered.current && term) {
+      answered.current = summon;
+      term.focus();
+    }
+  }, [summon, term]);
 
   if (win.minimized) return null;
 

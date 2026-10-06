@@ -21,8 +21,14 @@ import { Dock } from "./desktop/Dock";
 import { GridOverlay } from "./desktop/GridOverlay";
 import type { Viewport } from "./desktop/geometry";
 import { PopoutView } from "./desktop/PopoutView";
+import { ShortcutHud } from "./desktop/ShortcutHud";
 import { TermWindow } from "./desktop/TermWindow";
 import { readPopoutTarget, usePopoutHost } from "./desktop/usePopouts";
+import {
+  LEADER_LABEL,
+  type ShortcutCommand,
+  useShortcuts,
+} from "./desktop/useShortcuts";
 import { useWallpaper, wallpaperUrl } from "./desktop/useWallpaper";
 import { type Rect, useWindows } from "./desktop/useWindows";
 import { WallpaperPanel } from "./desktop/WallpaperPanel";
@@ -148,6 +154,42 @@ function Desktop() {
     setStatus,
     setTitle,
   } = useWindows(workspaceId);
+
+  // Which window's terminal was last asked to take the keyboard, and a counter
+  // so asking again for the same one still lands. See `TermWindow`'s `summon`.
+  const [summon, setSummon] = useState<{ id: string | null; n: number }>({
+    id: null,
+    n: 0,
+  });
+  const focusTerminal = useCallback((id: string | undefined) => {
+    if (id) setSummon((s) => ({ id, n: s.n + 1 }));
+  }, []);
+  // A workspace switch does not know which window it will land on until the new
+  // rows arrive and one is focused, so it leaves a note for that moment.
+  const focusNext = useRef(false);
+  useEffect(() => {
+    if (focusNext.current && focused) {
+      focusNext.current = false;
+      focusTerminal(focused);
+    }
+  }, [focused, focusTerminal]);
+
+  const select = useCallback(
+    (id: string) => {
+      raise(id);
+      focusTerminal(id);
+    },
+    [raise, focusTerminal],
+  );
+  const openTerminal = useCallback(
+    async () => focusTerminal((await spawn())?.id),
+    [spawn, focusTerminal],
+  );
+  const onOpenProfile = useCallback(
+    async (id: string, opts: { forceNew?: boolean } = {}) =>
+      focusTerminal(await openProfile(id, opts)),
+    [openProfile, focusTerminal],
+  );
 
   // Restoring the saved selection is its own concern; it used to share an
   // effect with the config fetch for no reason beyond both running once.
@@ -344,6 +386,91 @@ function Desktop() {
     [remove, workspaceId],
   );
 
+  const runShortcut = useCallback(
+    (command: ShortcutCommand) => {
+      const current = windows.find((w) => w.id === focused);
+      switch (command.kind) {
+        case "window": {
+          const win = windows.find((w) => w.idx === command.idx);
+          if (win) select(win.id);
+          return;
+        }
+        case "cycle": {
+          // In dock order, past the minimised ones: stepping through a window
+          // should not be what brings it back out.
+          const list = windows.filter((w) => !w.minimized);
+          if (list.length === 0) return;
+          const at = list.findIndex((w) => w.id === focused);
+          const next =
+            at === -1
+              ? command.step === 1
+                ? 0
+                : list.length - 1
+              : (at + command.step + list.length) % list.length;
+          select(list[next].id);
+          return;
+        }
+        case "workspace": {
+          if (workspaces.length < 2) return;
+          const at = workspaces.findIndex((w) => w.id === workspaceId);
+          const next =
+            (at + command.step + workspaces.length) % workspaces.length;
+          focusNext.current = true;
+          setWorkspaceId(workspaces[next].id);
+          return;
+        }
+        case "profile": {
+          const profile = profiles[command.index];
+          if (profile && workspaceId) void onOpenProfile(profile.id);
+          return;
+        }
+        case "spawn":
+          if (workspaceId) void openTerminal();
+          return;
+        case "minimize": {
+          if (!current || current.minimized) return;
+          minimize(current.id);
+          // The same pick `minimize` makes for focus.
+          focusTerminal(
+            ordered.filter((w) => !w.minimized && w.id !== current.id).at(-1)
+              ?.id,
+          );
+          return;
+        }
+        case "maximize":
+          if (current && !current.minimized) {
+            maximize(current.id);
+            focusTerminal(current.id);
+          }
+          return;
+        case "tile":
+          if (tileable) tile();
+          return;
+      }
+    },
+    [
+      windows,
+      ordered,
+      focused,
+      workspaces,
+      workspaceId,
+      profiles,
+      select,
+      onOpenProfile,
+      openTerminal,
+      minimize,
+      maximize,
+      tile,
+      tileable,
+      focusTerminal,
+    ],
+  );
+
+  const shortcuts = useShortcuts(
+    Boolean(server) && !editing && !panelOpen,
+    runShortcut,
+  );
+
   if (error) {
     return (
       <BootError message={error} onRetry={() => window.location.reload()} />
@@ -360,7 +487,12 @@ function Desktop() {
   const measured = view.width > 0 && view.height > 0;
 
   return (
-    <div className="desktop">
+    <div
+      className="desktop"
+      // Pulls the dock out while a command is pending, so the window numbers it
+      // carries are on screen, and the rail while a profile is being picked.
+      data-keys={shortcuts.mode === "idle" ? undefined : shortcuts.mode}
+    >
       <div
         className="wallpaper"
         style={
@@ -422,6 +554,14 @@ function Desktop() {
             {server.authRequired ? "token auth" : "no auth"}
           </span>
         </span>
+        <button
+          type="button"
+          className="menu-keys"
+          onClick={shortcuts.arm}
+          title={`Keyboard shortcuts: press ${LEADER_LABEL}, then a key`}
+        >
+          {LEADER_LABEL}
+        </button>
         <span className="menu-right">v{server.version}</span>
       </header>
 
@@ -469,6 +609,7 @@ function Desktop() {
                   onBringBack={bringBack}
                   onReclaim={popouts.reclaim}
                   focused={win.id === focused}
+                  summon={summon.id === win.id ? summon.n : 0}
                   view={view}
                   onRaise={raise}
                   onCommit={move}
@@ -524,7 +665,7 @@ function Desktop() {
                     <button
                       type="button"
                       className="ghost"
-                      onClick={() => void spawn()}
+                      onClick={() => void openTerminal()}
                     >
                       Open a terminal
                     </button>
@@ -546,7 +687,8 @@ function Desktop() {
           activeId={focusedProfileId}
           projectName={currentProject?.name ?? null}
           canOpen={Boolean(workspaceId)}
-          onOpen={(id, opts) => void openProfile(id, opts)}
+          numbered={shortcuts.mode === "profile"}
+          onOpen={(id, opts) => void onOpenProfile(id, opts)}
           onEdit={setEditing}
           onCreate={() => setEditing("new")}
         />
@@ -562,11 +704,15 @@ function Desktop() {
         focused={focused}
         memory={memory}
         canTile={tileable}
-        onSpawn={() => void spawn()}
-        onSelect={raise}
+        onSpawn={() => void openTerminal()}
+        onSelect={select}
         onTile={tile}
         onWallpaper={() => setPanelOpen(true)}
       />
+
+      {shortcuts.mode !== "idle" ? (
+        <ShortcutHud mode={shortcuts.mode} profiles={profiles.length} />
+      ) : null}
 
       {editing ? (
         <ProfilePanel
