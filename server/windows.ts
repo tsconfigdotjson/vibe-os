@@ -4,7 +4,7 @@
 // between browsers and machines, and so switching workspaces can restore an
 // arrangement rather than rebuild one.
 
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import {
   DEFAULT_WINDOW_COLS,
   DEFAULT_WINDOW_ROWS,
@@ -100,8 +100,12 @@ function toRow(w: typeof windows.$inferSelect) {
     promptDone: Boolean(w.promptDone),
     handoffSeen: Boolean(w.handoffSeen),
     handoff: (w.handoff as "ssh" | null) ?? null,
+    restore: (w.restore as Restore | null) ?? null,
   };
 }
+
+/** What happens to a window whose session died under it. See `windows.restore`. */
+export type Restore = "ask" | "resume";
 
 /**
  * Places a new window without landing exactly on an existing one.
@@ -203,6 +207,50 @@ export function deleteWindow(db: Db, id: string) {
   const row = getWindow(db, id);
   if (row) db.delete(windows).where(eq(windows.id, id)).run();
   return row;
+}
+
+/**
+ * Flags windows whose session died without its harness exiting.
+ *
+ * Their next session is held until someone says whether to resume the
+ * conversation or start over. A window already flagged keeps what it has, so a
+ * 'resume' answered before a second restart is not asked again.
+ */
+export function markInterrupted(db: Db, ids: string[]): number {
+  if (ids.length === 0) return 0;
+  return db
+    .update(windows)
+    .set({ restore: "ask" })
+    .where(and(inArray(windows.id, ids), isNull(windows.restore)))
+    .returning({ id: windows.id })
+    .all().length;
+}
+
+/** The answer to the offer: resume the conversation, or start a fresh one. */
+export function restoreWindow(db: Db, id: string, resume: boolean) {
+  if (!getWindow(db, id)) return undefined;
+  db.update(windows)
+    .set({ restore: resume ? "resume" : null })
+    .where(eq(windows.id, id))
+    .run();
+  return getWindow(db, id);
+}
+
+/**
+ * Whether the session about to be created should resume, clearing the flag.
+ *
+ * Called once per login, by whatever builds the session command. An 'ask'
+ * nobody answered counts as yes: something logging in to a window it was not
+ * offered on (a pop-out, `vibe-os attach`) is reaching for what was there.
+ */
+export function takeResume(db: Db, id: string): boolean {
+  const row = db
+    .update(windows)
+    .set({ restore: null })
+    .where(and(eq(windows.id, id), isNotNull(windows.restore)))
+    .returning({ id: windows.id })
+    .get();
+  return row !== undefined;
 }
 
 /**

@@ -101,6 +101,12 @@ export const windows = sqliteTable(
     handoffAt: integer("handoff_at"),
     /** Set once a terminal has actually attached to this window's session. */
     handoffSeen: integer("handoff_seen").notNull().default(0),
+    /**
+     * 'ask' when the session died without its harness exiting (a reboot, a
+     * kill), so the desktop offers to bring it back rather than starting one.
+     * 'resume' once the answer was yes, until the next session is created.
+     */
+    restore: text("restore"),
     createdAt: integer("created_at").notNull(),
   },
   (t) => [index("windows_workspace_idx").on(t.workspaceId)],
@@ -155,6 +161,7 @@ const DDL = [
      handoff TEXT,
      handoff_at INTEGER,
      handoff_seen INTEGER NOT NULL DEFAULT 0,
+     restore TEXT,
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS windows_workspace_idx ON windows (workspace_id)`,
@@ -178,6 +185,7 @@ const ADDED_COLUMNS: [table: string, column: string, decl: string][] = [
   ["windows", "handoff", "TEXT"],
   ["windows", "handoff_at", "INTEGER"],
   ["windows", "handoff_seen", "INTEGER NOT NULL DEFAULT 0"],
+  ["windows", "restore", "TEXT"],
   ["profiles", "memory_high", "TEXT"],
   ["profiles", "memory_max", "TEXT"],
 ];

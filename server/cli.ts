@@ -44,6 +44,7 @@ import { color, describeError, log } from "./log.ts";
 import { reapLeaks } from "./reaper.ts";
 import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
 import { confirmFirewall, runSetup } from "./setup.ts";
+import { takeResume } from "./windows.ts";
 
 const run = promisify(execFile);
 const BUN = process.execPath;
@@ -721,7 +722,9 @@ async function attach(
   }
   if (!target) return 0;
 
-  const command = commandFor(db, config, target);
+  const command = commandFor(db, config, target, {
+    resume: takeResume(db, target.windowId),
+  });
   if (!command) {
     log.error(`could not build a command for ${target.ref}`);
     return 1;

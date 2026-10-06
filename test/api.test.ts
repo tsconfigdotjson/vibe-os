@@ -304,6 +304,23 @@ describe("writes", () => {
     expect(res?.status).toBeGreaterThanOrEqual(400);
   });
 
+  test("bringing a window back records the answer", async () => {
+    const row = await bodyOf<{ restore: string | null }>(
+      call("POST", `/api/windows/${ids.window}/restore`, { resume: true }),
+    );
+    expect(row.restore).toBe("resume");
+
+    const bad = await answered(
+      call("POST", `/api/windows/${ids.window}/restore`, { resume: "yes" }),
+    );
+    expect(bad.status).toBe(400);
+
+    const missing = await answered(
+      call("POST", `/api/windows/${newId()}/restore`, { resume: false }),
+    );
+    expect(missing.status).toBe(404);
+  });
+
   test("window geometry is clamped server-side", async () => {
     const res = await bodyOf<{ col: number; colSpan: number }>(
       call("PATCH", `/api/windows/${ids.window}`, {
