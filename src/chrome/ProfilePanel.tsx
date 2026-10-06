@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { countBlanks } from "../../shared/blanks";
 import type {
   CursorInfo,
   Harness,
@@ -9,7 +10,6 @@ import type {
   ProfileInput,
 } from "../data";
 import { describeError } from "../data";
-import { countBlanks } from "../desktop/blanks";
 import {
   buildArgs,
   type ClaudeSettings,

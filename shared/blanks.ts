@@ -85,3 +85,29 @@ export function fillPrompt(
     return value?.trim() ? value.trim() : label.trim();
   });
 }
+
+/**
+ * Fills blanks by label, for callers that have names rather than positions.
+ *
+ * The CLI and the API take `--blank ticket=123`, so every blank with that label
+ * gets the value. `missing` lists labels left empty and `unknown` lists labels
+ * the prompt does not have, so a caller can refuse instead of sending a prompt
+ * with a hole in it.
+ */
+export function fillBlanks(
+  prompt: string,
+  values: Record<string, string>,
+): { text: string; missing: string[]; unknown: string[] } {
+  const labels = parsePrompt(prompt).flatMap((s) =>
+    s.type === "blank" ? [s.value] : [],
+  );
+  const byIndex: Record<number, string> = {};
+  labels.forEach((label, i) => {
+    if (Object.hasOwn(values, label)) byIndex[i] = values[label];
+  });
+  return {
+    text: fillPrompt(prompt, byIndex),
+    missing: [...new Set(labels.filter((l) => !values[l]?.trim()))],
+    unknown: Object.keys(values).filter((k) => !labels.includes(k)),
+  };
+}

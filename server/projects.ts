@@ -575,16 +575,62 @@ async function baseForWorkspace(
 }
 
 /**
+ * Where a new workspace's branch starts when the caller named a branch.
+ *
+ * Origin's copy wins over a local branch of the same name, after a fetch, for
+ * the same reason the default does: a workspace should start from the current
+ * state of the work. A local branch or a commit is the fallback. Unlike the
+ * default, a name that resolves to nothing is an error, because the caller
+ * asked for something specific.
+ */
+async function baseFromRef(
+  repo: string,
+  projectName: string,
+  from: string,
+): Promise<{ ref: string; warning: string | null }> {
+  if (from.startsWith("-") || /\s/.test(from))
+    throw new Error(`invalid branch ${JSON.stringify(from)}`);
+
+  let warning: string | null = null;
+  const origin = await hasOrigin(repo);
+  if (origin) {
+    try {
+      await git(repo, ["fetch", "origin"], FETCH_TIMEOUT_MS);
+    } catch (err) {
+      const failure = gitReason(err);
+      log.warn(`could not fetch origin for ${projectName}: ${failure}`);
+      warning = `Could not fetch origin (${failure}). This branch starts from ${from} as it was at the last fetch.`;
+    }
+  }
+
+  const candidates = origin ? [`origin/${from}`, from] : [from];
+  for (const ref of candidates) {
+    const found = await git(repo, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${ref}^{commit}`,
+    ]).then(
+      () => true,
+      () => false,
+    );
+    if (found) return { ref, warning };
+  }
+  throw new Error(`no branch or commit called ${from} in ${projectName}`);
+}
+
+/**
  * Creates a git worktree and records it as a workspace.
  *
  * The worktree gets its own branch named after the workspace, branched from a
- * freshly fetched origin — see `baseForWorkspace`.
+ * freshly fetched origin — see `baseForWorkspace` — or from `from` when given.
  */
 export async function createWorkspace(
   db: Db,
   workspaceRoot: string,
   projectId: string,
   requested?: string,
+  from?: string,
 ): Promise<{
   id: string;
   name: string;
@@ -612,10 +658,13 @@ export async function createWorkspace(
     } while (taken.has(name));
   }
 
+  // Resolved before anything is made on disk, so a bad --from leaves nothing.
+  const base = from?.trim()
+    ? await baseFromRef(project.path, project.name, from.trim())
+    : await baseForWorkspace(project.path, project.name);
+
   const target = path.join(workspaceRoot, WORKTREE_DIR, project.name, name);
   await mkdir(path.dirname(target), { recursive: true });
-
-  const base = await baseForWorkspace(project.path, project.name);
 
   // -b creates the branch; git refuses if it already exists, which is the
   // behaviour we want rather than silently reusing someone else's work.

@@ -29,6 +29,7 @@ import {
   vncPasswordPath,
   XVNC_UNIT_PATH,
 } from "./browser.ts";
+import { runClient } from "./client.ts";
 import {
   type Config,
   parseCliArgs,
@@ -63,6 +64,16 @@ const HELP = `
     vibe-os install-browser      run one Chrome on a virtual display (needs root)
     vibe-os connect-hermes       point Hermes' browser tools at that Chrome
     vibe-os fetch-wasm           (re)download the SSH WASM runtime
+
+    vibe-os ls                   list windows, and which are running
+    vibe-os workspace new <project> [--from <branch>] [--name <name>]
+                                 cut a workspace
+    vibe-os workspace ls [project]
+                                 list workspaces
+    vibe-os open <workspace> [--profile <name>] [--prompt <text>]
+                 [--blank label=value] [--submit] [--force]
+                                 open a window and start it
+    vibe-os close <window>       close a window and end its session
 
   ${color.bold("Options")}
     --port <n>          HTTP port (default 80)
@@ -102,6 +113,19 @@ const HELP = `
 
     -h, --help          show this
     -v, --version       print the version
+
+  ${color.bold("ls, workspace, open, close")}
+    --url <url>         the server to talk to (default VIBE_OS_URL, or on this
+                        box the address start is listening on)
+    --token <value>     its token (default VIBE_OS_TOKEN, or on this box the
+                        one start remembered)
+    --json              print JSON instead of text
+    --prompt <text>     paste this into the window; - reads it from stdin
+    --blank <label=value>
+                        fill a blank in the profile's prompt and paste that.
+                        Repeatable
+    --submit            press Enter after pasting
+    --force             open even when the box is short of memory
 
   ${color.bold("install-browser")}
     --geometry <WxH>    virtual screen size (default 1600x900)
@@ -856,6 +880,11 @@ export async function main(argv: string[]): Promise<number> {
       process.stdout.write(stdout);
       return 0;
     }
+    case "ls":
+    case "workspace":
+    case "open":
+    case "close":
+      return runClient(command, positionals.slice(1), values, config);
     case "help":
       console.log(HELP);
       return 0;

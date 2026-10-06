@@ -106,7 +106,7 @@ export function parseEtime(value: string): number {
   );
 }
 
-async function pgrep(args: string[]): Promise<number[]> {
+export async function pgrep(args: string[]): Promise<number[]> {
   try {
     const { stdout } = await run("pgrep", args, { timeout: 10_000 });
     return stdout
