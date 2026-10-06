@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { countBlanks, fillPrompt, parsePrompt } from "./blanks";
+import {
+  countBlanks,
+  fillBlanks,
+  fillPrompt,
+  parsePrompt,
+} from "../shared/blanks.ts";
 
 describe("parsePrompt", () => {
   test("a prompt with no braces is one text segment", () => {
@@ -119,5 +124,21 @@ describe("fillPrompt", () => {
       if (s.type === "blank") values[s.index] = `<${s.value}>`;
     }
     expect(fillPrompt(prompt, values)).toBe("a <one> b <two> c");
+  });
+});
+
+describe("fillBlanks", () => {
+  test("fills every blank with a label, and reports nothing amiss", () => {
+    expect(
+      fillBlanks("review {{ticket}} then {{ticket}}", { ticket: "#4" }),
+    ).toEqual({ text: "review #4 then #4", missing: [], unknown: [] });
+  });
+
+  test("reports labels left empty and labels the prompt lacks", () => {
+    expect(fillBlanks("{{a}} and {{b}}", { a: " ", c: "x" })).toEqual({
+      text: "a and b",
+      missing: ["a", "b"],
+      unknown: ["c"],
+    });
   });
 });

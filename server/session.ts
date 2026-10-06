@@ -188,6 +188,16 @@ export function harnessCommand(
   return `export PATH="$HOME/.local/bin:$PATH"; ${setup}exec ${argv}`;
 }
 
+/**
+ * The size a session started with no terminal gets.
+ *
+ * dtach copies the size of the terminal that creates a session, and a detached
+ * start has none, so the program would come up at 0x0. The first browser or
+ * `vibe-os attach` sends its real size and the program repaints.
+ */
+export const DETACHED_ROWS = 40;
+export const DETACHED_COLS = 120;
+
 /** Where a window's dtach socket lives. */
 export function socketPath(config: Config, session: string): string {
   return `${config.stateDir}/sessions/${session}.sock`;
@@ -246,8 +256,11 @@ export function windowCommand(
   /**
    * `forDisplay` drops the locking wrapper, leaving the readable essentials.
    * `resume` only matters if the session is created rather than attached to.
+   * `detached` creates the session and stops there, without attaching, for a
+   * window started before any terminal opens it. It has no pty to copy a size
+   * from, so it sets one.
    */
-  opts?: { forDisplay?: boolean; resume?: boolean },
+  opts?: { forDisplay?: boolean; resume?: boolean; detached?: boolean },
 ): string | undefined {
   if (!config.sessions) return undefined;
 
@@ -300,7 +313,9 @@ export function windowCommand(
    * reports. Failure is ignored on purpose — a box where `stty` is missing
    * should still open a window.
    */
-  const baud = "stty 38400 2>/dev/null;";
+  const baud = opts?.detached
+    ? `stty 38400 rows ${DETACHED_ROWS} cols ${DETACHED_COLS} 2>/dev/null;`
+    : "stty 38400 2>/dev/null;";
   const inner = `cd ${shellQuote(cwd)} && ${baud} ${env} ${harness ?? 'exec "$SHELL"'}`;
 
   // `dtach -p` writes to a live socket and fails on a dead one, which makes it
@@ -375,6 +390,6 @@ export function windowCommand(
     `if command -v flock > /dev/null 2>&1; then ` +
       `flock -o ${shellQuote(`${sock}.lock`)} -c ${shellQuote(critical)}; ` +
       `else { ${critical}; }; fi`,
-    attach,
+    ...(opts?.detached ? [] : [attach]),
   ].join("; ");
 }

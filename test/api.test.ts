@@ -20,7 +20,7 @@ import { WallpaperStore } from "../server/wallpapers.ts";
 let handle: (req: Request, url: URL) => Promise<Response | null>;
 let ids: { project: string; workspace: string; window: string };
 
-async function build() {
+async function build(over: Partial<Config> = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "vibe-os-api-"));
   const d = openDb(dir);
   const now = Date.now();
@@ -72,6 +72,7 @@ async function build() {
     token: null,
     themeColor: "#1c2128",
     stateDir: dir,
+    ...over,
   } as unknown as Config;
 
   const deps: ApiDeps = {
@@ -346,5 +347,110 @@ describe("writes", () => {
 
     const get = await bodyOf<{ dim: number }>(call("GET", "/api/desktop"));
     expect(get.dim).toBe(0.9);
+  });
+});
+
+describe("automation", () => {
+  const profileWithPrompt = async (prompt: string) =>
+    bodyOf<{ id: string }>(
+      call("POST", `/api/projects/${ids.project}/profiles`, {
+        name: "QA",
+        harness: "shell",
+        prompt,
+      }),
+    );
+
+  const openAs = async (profileId?: string) =>
+    bodyOf<{ id: string }>(
+      call("POST", `/api/workspaces/${ids.workspace}/windows`, { profileId }),
+    );
+
+  test("lists every window with its ref and whether it runs", async () => {
+    const list = await bodyOf<{ id: string; ref: string; live: boolean }[]>(
+      call("GET", "/api/windows"),
+    );
+    expect(list).toEqual([
+      expect.objectContaining({
+        id: ids.window,
+        ref: "brisk-copper-vole-1",
+        project: "demo",
+        workspace: "brisk-copper-vole",
+        role: null,
+        live: false,
+      }),
+    ]);
+  });
+
+  test("lists every workspace with its project", async () => {
+    const list = await bodyOf<{ id: string; project: string }[]>(
+      call("GET", "/api/workspaces"),
+    );
+    expect(list).toEqual([
+      expect.objectContaining({
+        id: ids.workspace,
+        name: "brisk-copper-vole",
+        project: "demo",
+        projectId: ids.project,
+      }),
+    ]);
+  });
+
+  test("start and send need sessions", async () => {
+    for (const verb of ["start", "send"]) {
+      const res = await answered(
+        call("POST", `/api/windows/${ids.window}/${verb}`, { text: "hi" }),
+      );
+      expect(res.status).toBe(409);
+    }
+  });
+
+  describe("with sessions", () => {
+    beforeEach(async () => {
+      handle = await build({ sessions: true });
+    });
+
+    const send = (id: string, body: unknown) =>
+      answered(call("POST", `/api/windows/${id}/send`, body));
+    const errorOf = async (res: Promise<Response>) =>
+      ((await (await res).json()) as { error: string }).error;
+
+    test("an unknown window is a 404", async () => {
+      expect((await send(newId(), { text: "hi" })).status).toBe(404);
+    });
+
+    test("a window with no profile prompt needs text", async () => {
+      const res = send(ids.window, {});
+      expect((await res).status).toBe(400);
+      expect(await errorOf(res)).toContain("no profile prompt");
+    });
+
+    test("text and blanks together are refused", async () => {
+      const res = send(ids.window, { text: "hi", blanks: { a: "b" } });
+      expect((await res).status).toBe(400);
+    });
+
+    test("submit must be a boolean", async () => {
+      const res = send(ids.window, { text: "hi", submit: "yes" });
+      expect((await res).status).toBe(400);
+    });
+
+    test("every blank has to be filled, and only real ones", async () => {
+      const profile = await profileWithPrompt(
+        "review {{ticket}} for {{owner}}",
+      );
+      const win = await openAs(profile.id);
+
+      const missing = send(win.id, { blanks: { ticket: "#12" } });
+      expect((await missing).status).toBe(400);
+      expect(await errorOf(missing)).toBe("fill every blank: owner");
+
+      const unknown = send(win.id, {
+        blanks: { ticket: "#12", owner: "me", colour: "red" },
+      });
+      expect((await unknown).status).toBe(400);
+      expect(await errorOf(unknown)).toBe(
+        "the prompt has no blank called colour",
+      );
+    });
   });
 });

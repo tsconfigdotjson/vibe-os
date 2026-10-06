@@ -1,17 +1,29 @@
 import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
-import type { ClientConfig, MemoryReport } from "../shared/wire.ts";
+import { fillBlanks } from "../shared/blanks.ts";
+import type {
+  ClientConfig,
+  MemoryReport,
+  SendInput,
+  WindowSummary,
+  WorkspaceSummary,
+} from "../shared/wire.ts";
 import {
+  type AttachTarget,
   attachInfo,
   killSession,
+  listTargets,
+  liveSessions,
   publicHost,
   reapStaleHandoffs,
+  resolveTarget,
   setHandoff,
 } from "./attach.ts";
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
 import { discoverClaude, discoverCursor, discoverHermes } from "./harness.ts";
+import { sendText, startSession } from "./headless.ts";
 import {
   badId,
   IMMUTABLE_CACHE_CONTROL,
@@ -111,6 +123,59 @@ async function refreshMcpMirrors(db: Db, stateDir: string): Promise<void> {
   );
 }
 
+/** Ceiling on text sent to a window, matching a profile prompt's. */
+const MAX_SEND_CHARS = 16_000;
+
+const summarise = (t: AttachTarget, live: Set<string>): WindowSummary => ({
+  id: t.windowId,
+  ref: t.ref,
+  session: t.session,
+  workspace: t.workspace,
+  project: t.project,
+  role: t.role,
+  live: live.has(t.session),
+});
+
+/**
+ * What to paste for a send: the text given, or the profile prompt with its
+ * blanks filled. Throws with a message for the caller when neither works.
+ */
+function textToSend(
+  body: SendInput,
+  profile: { prompt: string } | undefined,
+): string {
+  if (body.text !== undefined) {
+    if (typeof body.text !== "string" || body.text === "")
+      throw new Error("text must be a non-empty string");
+    if (body.blanks !== undefined)
+      throw new Error(
+        "blanks fill the profile prompt; leave out text to use it",
+      );
+    if (body.text.length > MAX_SEND_CHARS)
+      throw new Error(`text must be under ${MAX_SEND_CHARS} characters`);
+    return body.text;
+  }
+  if (!profile || profile.prompt.trim() === "")
+    throw new Error("this window has no profile prompt; send text instead");
+
+  const blanks = body.blanks ?? {};
+  if (
+    typeof blanks !== "object" ||
+    blanks === null ||
+    Array.isArray(blanks) ||
+    Object.values(blanks).some((v) => typeof v !== "string")
+  )
+    throw new Error("blanks must be an object of strings");
+  const filled = fillBlanks(profile.prompt, blanks);
+  if (filled.unknown.length > 0)
+    throw new Error(
+      `the prompt has no blank called ${filled.unknown.join(", ")}`,
+    );
+  if (filled.missing.length > 0)
+    throw new Error(`fill every blank: ${filled.missing.join(", ")}`);
+  return filled.text;
+}
+
 export interface ApiDeps {
   config: Config;
   ca: SshCa;
@@ -204,12 +269,17 @@ export function createApi(deps: ApiDeps) {
 
       if (req.method === "POST") {
         try {
-          const body = await readJson<{ name?: string }>(req);
+          const body = await readJson<{ name?: unknown; from?: unknown }>(req);
+          if (body.name !== undefined && typeof body.name !== "string")
+            throw new Error("name must be a string");
+          if (body.from !== undefined && typeof body.from !== "string")
+            throw new Error("from must be a string");
           const created = await createWorkspace(
             db,
             config.workspace,
             projectId,
             body.name,
+            body.from,
           );
           return json(created, 201);
         } catch (err) {
@@ -219,6 +289,24 @@ export function createApi(deps: ApiDeps) {
         }
       }
       return methodNotAllowed();
+    }
+
+    if (p === "/api/workspaces" && req.method === "GET") {
+      const projectNames = new Map(listProjects(db).map((x) => [x.id, x.name]));
+      const all: WorkspaceSummary[] = [];
+      for (const [projectId, project] of projectNames) {
+        for (const w of listWorkspaces(db, projectId))
+          all.push({
+            id: w.id,
+            name: w.name,
+            branch: w.branch,
+            path: w.path,
+            projectId,
+            project,
+            lastOpenedAt: w.lastOpenedAt,
+          });
+      }
+      return json(all.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt));
     }
 
     // ── profiles ─────────────────────────────────────────────────────────────
@@ -366,6 +454,73 @@ export function createApi(deps: ApiDeps) {
         if (id) report.windows[id] = mem;
       }
       return json(report);
+    }
+
+    if (p === "/api/windows" && req.method === "GET") {
+      const live = config.sessions
+        ? await liveSessions(config)
+        : new Set<string>();
+      return json(listTargets(db).map((t) => summarise(t, live)));
+    }
+
+    // Starts a window's session with nothing attached, so it is running before
+    // any browser opens it. Idempotent: a running session is left alone.
+    const startMatch = /^\/api\/windows\/([^/]+)\/(start|send)$/.exec(p);
+    if (startMatch && req.method === "POST") {
+      const id = decodeURIComponent(startMatch[1]);
+      if (!ID_PATTERN.test(id)) return badId("window");
+      if (!config.sessions)
+        return json(
+          { error: "this server runs plain login shells (--no-sessions)" },
+          409,
+        );
+      const target = resolveTarget(db, id);
+      if (!target || target.windowId !== id)
+        return json({ error: "unknown window" }, 404);
+      const profile = target.profileId
+        ? getProfile(db, target.profileId)
+        : undefined;
+
+      let text: string | undefined;
+      let submit = false;
+      if (startMatch[2] === "send") {
+        const body = await readJson<SendInput>(req);
+        if (body.submit !== undefined && typeof body.submit !== "boolean")
+          return json({ error: "submit must be true or false" }, 400);
+        submit = body.submit === true;
+        try {
+          text = textToSend(body, profile);
+        } catch (err) {
+          return json({ error: describeError(err) }, 400);
+        }
+      }
+
+      let started: boolean;
+      try {
+        if (profile?.harness === "claude")
+          await refreshMcpMirrors(db, config.stateDir).catch((err: unknown) => {
+            log.warn(`could not refresh mcp configs: ${describeError(err)}`);
+          });
+        started = await startSession(
+          { config, ca, hostKey },
+          target,
+          profile,
+          () => takeResume(db, id),
+        );
+        if (text !== undefined) {
+          await sendText(config, target.session, text, { submit });
+          // The window has its instructions, so the band has nothing to offer.
+          updateWindow(db, id, { promptDone: true });
+        }
+      } catch (err) {
+        const message = describeError(err);
+        log.warn(`${startMatch[2]} ${target.session} failed: ${message}`);
+        return json({ error: message }, 502);
+      }
+      return json({
+        started,
+        window: summarise(target, new Set([target.session])),
+      });
     }
 
     // How to reach this window from a real terminal. Read-only: it composes

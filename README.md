@@ -809,7 +809,8 @@ Two checks run in front of it:
 
 Open the URL with `?token=…` once and the server sets an `HttpOnly` cookie, then
 redirects without the token so it does not linger in history. Scripts can send
-`Authorization: Bearer <token>`. Comparison is constant-time.
+`Authorization: Bearer <token>` (see the [API reference](docs/api.md)).
+Comparison is constant-time.
 
 The cookie value is the token rather than a derived session id, so there is no
 per-browser session to revoke. Rotating means changing it on the server.
@@ -835,6 +836,13 @@ in a session could otherwise ask what you last copied.
 | `sudo vibe-os install-browser` | run one Chrome on a virtual display |
 | `vibe-os connect-hermes` | point Hermes' browser tools at that Chrome |
 | `vibe-os fetch-wasm` | re-download the SSH WASM runtime |
+| `vibe-os ls` | list windows, and which are running |
+| `vibe-os workspace new <project>` | create a workspace, optionally `--from <branch>` |
+| `vibe-os open <workspace>` | open a window, optionally `--profile`, `--prompt` and `--submit` |
+| `vibe-os close <window>` | close a window and end its session |
+
+`ls`, `workspace`, `open` and `close` drive a running server over its
+[API](docs/api.md), on the box or from elsewhere with `--url` and `--token`.
 
 ```
 --port <n>          HTTP port (default 80)

@@ -12,7 +12,7 @@ import {
   bridgeConnections,
   createBridgeHandlers,
 } from "./bridge.ts";
-import type { Config } from "./config.ts";
+import { type Config, savePersisted } from "./config.ts";
 import { openDb } from "./db.ts";
 import { discoverClaude, discoverCursor, discoverHermes } from "./harness.ts";
 import { json } from "./http.ts";
@@ -426,6 +426,18 @@ export async function startServer(config: Config): Promise<RunningServer> {
     httpServer = makeServer(port, false);
     log.warn(`listening on ${port} instead of ${config.port}`);
   }
+
+  // Where the client verbs on this box find the server: the port it actually
+  // bound, which may be the fallback, on an address that reaches it.
+  const loopback =
+    config.host === "0.0.0.0" || config.host === "::"
+      ? "127.0.0.1"
+      : config.host;
+  await savePersisted(config.stateDir, {
+    localUrl: `http://${loopback.includes(":") ? `[${loopback}]` : loopback}:${port}`,
+  }).catch((err: unknown) => {
+    log.warn(`could not record the local url: ${describeError(err)}`);
+  });
 
   let httpsServer: Server<BridgeData> | undefined;
   let stopRenewal: (() => void) | undefined;

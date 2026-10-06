@@ -4,7 +4,7 @@ import { writeClipboard } from "../clipboard";
 /** Long enough to see the button confirm before the band folds away. */
 const DISMISS_DELAY_MS = 450;
 
-import { fillPrompt, parsePrompt } from "./blanks";
+import { fillPrompt, parsePrompt } from "../../shared/blanks";
 
 export interface PromptBandProps {
   profileName: string;

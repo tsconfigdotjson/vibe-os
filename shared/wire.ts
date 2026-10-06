@@ -253,3 +253,38 @@ export interface ProfileInput {
   memoryMax?: string | null;
   position?: number;
 }
+
+/** `GET /api/workspaces` — every workspace on the box, with its project. */
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  branch: string;
+  path: string;
+  projectId: string;
+  project: string;
+  lastOpenedAt: number;
+}
+
+/** `GET /api/windows` — every window on the box, and whether it is running. */
+export interface WindowSummary {
+  id: string;
+  /** What `vibe-os attach` takes: `quiet-amber-otter-1`. */
+  ref: string;
+  session: string;
+  workspace: string;
+  project: string;
+  /** The profile it was opened as, or null for a plain terminal. */
+  role: string | null;
+  /** Its session is running. Always false with `--no-sessions`. */
+  live: boolean;
+}
+
+/** `POST /api/windows/:id/send` */
+export interface SendInput {
+  /** The text to paste. Absent means the window's profile prompt. */
+  text?: string;
+  /** Values for the profile prompt's `{{blanks}}`, by label. */
+  blanks?: Record<string, string>;
+  /** Press Enter after the paste. */
+  submit?: boolean;
+}
