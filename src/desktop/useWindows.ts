@@ -8,6 +8,7 @@ import {
   MIN_WINDOW_ROWS,
 } from "../../shared/grid";
 import {
+  ApiError,
   nudgeWindows,
   useWindowRows,
   type WindowRow,
@@ -240,9 +241,9 @@ export function useWindows(workspaceId: string | null) {
   );
 
   const spawn = useCallback(
-    async (profileId?: string | null) => {
+    async (profileId?: string | null, force = false) => {
       if (!workspaceId) return;
-      const created = await windowApi.create(workspaceId, profileId);
+      const created = await windowApi.create(workspaceId, profileId, force);
       await mutate((current) => [...(current ?? []), created], {
         revalidate: false,
       });
@@ -380,7 +381,15 @@ export function useWindows(workspaceId: string | null) {
           return;
         }
       }
-      await spawn(profileId);
+      try {
+        await spawn(profileId);
+      } catch (err) {
+        // The server's "this box cannot fit another agent". Its message says
+        // why; the person decides.
+        if (!(err instanceof ApiError && err.body.capacity === true)) throw err;
+        if (window.confirm(`${err.message}\n\nOpen it anyway?`))
+          await spawn(profileId, true);
+      }
     },
     [windows, raise, spawn],
   );

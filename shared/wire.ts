@@ -45,6 +45,29 @@ export interface ClientConfig {
   themeColor: string;
   /** Colour tokens a profile may use; `--profile-<token>` resolves each one. */
   palette: readonly string[];
+  /** The scope limits a window gets when its profile sets none. */
+  memory: { high: string | null; max: string | null; swapMax: string | null };
+}
+
+/** `GET /api/workspaces/:id/memory` — what the box has and each window costs. */
+export interface MemoryReport {
+  box: {
+    total: number;
+    available: number;
+    swapTotal: number;
+    swapFree: number;
+    pressure: { some10: number; full10: number } | null;
+  } | null;
+  /**
+   * What opening another agent would be warned with right now, or null when
+   * there is room. The dock shows it, so it never disagrees with the question.
+   */
+  warning: string | null;
+  /** Keyed by window id. A window with no live session is absent. */
+  windows: Record<
+    string,
+    { bytes: number; high: number | null; max: number | null; scoped: boolean }
+  >;
 }
 
 /** `GET /api/harness/claude` — what the installed Claude CLI accepts. */
@@ -204,6 +227,9 @@ export interface Profile {
   /** argv tokens, already split and validated by the server. */
   args: string[];
   prompt: string;
+  /** systemd sizes (`2G`, `40%`, `infinity`), or null for the server default. */
+  memoryHigh: string | null;
+  memoryMax: string | null;
   position: number;
   createdAt: number;
 }
@@ -222,5 +248,8 @@ export interface ProfileInput {
   command?: string | null;
   args?: string;
   prompt?: string;
+  /** Empty or null goes back to the server default. */
+  memoryHigh?: string | null;
+  memoryMax?: string | null;
   position?: number;
 }

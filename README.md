@@ -50,6 +50,7 @@ edit, no `sshd_config` change, and no root.
   - [Behind Tailscale](#behind-tailscale)
   - [Firewall](#firewall)
   - [Running it as a service](#running-it-as-a-service)
+  - [Memory](#memory)
   - [An always-on browser](#an-always-on-browser)
   - [Giving the box a GitHub identity](#giving-the-box-a-github-identity)
   - [Updating a running box](#updating-a-running-box)
@@ -176,6 +177,8 @@ so three roles running at once are distinguishable without reading anything.
   **+** to open a second one.
 - **Flags are stored as a list of arguments**, quoted individually when the
   command is built. The browser never sends a command at all.
+- **Memory** sets this role's own limits, overriding the server's. See
+  [Memory](#memory).
 
 The editor gives you a model dropdown, a thinking dropdown (`--effort`), a
 permission dropdown and a few switches, with the generated flags and a preview
@@ -341,6 +344,11 @@ or right edge to bring them back.
 Closing a window ends its session. **Minimise** puts it away and keeps it
 running.
 
+Each dock entry shows what its window is using, in amber once it is being
+throttled and red near its limit. A throttled window stays slow until it is
+closed. The **mem** readout is the whole box, with the share of time something
+spent stalled on memory, a throttled window included.
+
 The dock's **◑** opens the wallpaper picker. Uploads are stored on the server,
 so the same desktop appears on every device. **Dim** darkens the wallpaper
 behind the windows.
@@ -379,9 +387,10 @@ installation without one.
 | `hermes` | the Hermes harness (optional) | those profiles open a window that closes immediately |
 | `cursor-agent` | the Cursor harness (optional) | those profiles open a window that closes immediately |
 | `uv` | `uvx browser-use`, for Hermes' Browser Use mode (optional) | Hermes keeps its twelve built-in browser tools |
+| `earlyoom` | ending a runaway process when memory runs out | a box with swap thrashes until someone intervenes |
 
 ```bash
-sudo apt update && sudo apt install -y openssh-server openssh-client dtach git gh
+sudo apt update && sudo apt install -y openssh-server openssh-client dtach git gh earlyoom
 curl -fsSL https://claude.ai/install.sh | bash      # standalone, needs no Node
 
 # Optional, for the Hermes harness
@@ -554,6 +563,34 @@ sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/vibe-os
 ```
 
 Otherwise vibe-os falls back to port 8080 and says so.
+
+### Memory
+
+An agent session uses 300 to 700 MB, and grows the longer it runs. Budget:
+
+| RAM | Agent sessions |
+| --- | --- |
+| 2 GB | 1 |
+| 4 GB | 3 to 4 |
+| 8 GB | 8 to 10 |
+| 16 GB | 20 or so |
+
+Past that the box runs out of page cache and stalls, and with swap the kernel
+never kills anything to recover. Three things keep that from happening:
+
+- **Each window runs in its own systemd scope** with `MemoryHigh=40%`,
+  `MemoryMax=50%` and `MemorySwapMax=10%` of RAM. Past the first it is slowed
+  down; past the second, with its swap used up, it is ended. Change the
+  defaults with `--memory-high`, `--memory-max` and `--memory-swap-max`, and the
+  first two per profile in the editor. Sizes are systemd's: `1500M`, `2G`,
+  `40%`, `infinity`.
+  Scopes need the user to linger (`sudo loginctl enable-linger $USER`, which
+  `vibe-os setup` offers); without that, or without user systemd as in most
+  containers, windows start unscoped.
+- **Opening an agent asks first** when the box is short on memory.
+- **An OOM daemon** ends one process instead of letting the box thrash. Install
+  `earlyoom`, or let `vibe-os setup` do it. `vibe-os doctor` warns when there is
+  none.
 
 ### An always-on browser
 
@@ -817,6 +854,13 @@ in a session could otherwise ask what you last copied.
                     the name the browser reached the desktop on
 --user <name>       unix user to log in as (default: current user)
 --no-sessions       plain login shells instead of persistent dtach sessions
+--memory-high <size>
+                    throttle a window past this (default 40%, of RAM)
+--memory-max <size> kill a window past this (default 50%)
+--memory-swap-max <size>
+                    swap a window may use (default 10%, of RAM). Sizes
+                    are systemd's: 1500M, 2G, 40%, infinity
+--no-memory-limit   start windows without a memory scope
 --cert-ttl <secs>   certificate lifetime (default 43200)
 
 --theme-color <hex> window chrome colour for the installed app (default #1c2128)

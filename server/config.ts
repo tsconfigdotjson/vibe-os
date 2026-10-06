@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
+import { type MemoryLimits, parseSize } from "./memory.ts";
 
 const run = promisify(execFile);
 
@@ -63,6 +64,12 @@ export interface Config {
    * from whether dtach is installed, unless forced.
    */
   sessions: boolean;
+  /**
+   * The MemoryHigh and MemoryMax each window's scope gets unless its profile
+   * says otherwise, and the MemorySwapMax every window gets. All null
+   * (`--no-memory-limit`) starts windows without a scope at all.
+   */
+  memory: MemoryLimits;
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -90,6 +97,10 @@ export const OPTION_SPEC = {
   "theme-color": { type: "string" as const },
   sessions: { type: "boolean" as const },
   "no-sessions": { type: "boolean" as const },
+  "memory-high": { type: "string" as const },
+  "memory-max": { type: "string" as const },
+  "memory-swap-max": { type: "string" as const },
+  "no-memory-limit": { type: "boolean" as const },
   // doctor only, same reasoning as the install-browser block below: parseArgs
   // is strict, so a flag it has never heard of is an error.
   reap: { type: "boolean" as const },
@@ -223,6 +234,40 @@ function userName(value: unknown, label: string): string {
   if (!/^[a-z_][a-z0-9_-]*\$?$/.test(name))
     throw new Error(`invalid --${label}: ${name}`);
   return name;
+}
+
+/**
+ * Defaults that leave room for one runaway on a small box and change nothing
+ * on a large one: on 4 GB a window is throttled at 1.6 GB and killed at 2 GB.
+ */
+export const DEFAULT_MEMORY_HIGH = "40%";
+export const DEFAULT_MEMORY_MAX = "50%";
+/** Of RAM, as systemd reads it: about 400 MB of swap per window on 4 GB. */
+export const DEFAULT_MEMORY_SWAP_MAX = "10%";
+
+function memoryLimits(values: RawOptions): MemoryLimits {
+  if (flag(values["no-memory-limit"] ?? process.env.VIBE_OS_NO_MEMORY_LIMIT))
+    return { high: null, max: null, swapMax: null };
+  return {
+    high: parseSize(
+      values["memory-high"] ??
+        process.env.VIBE_OS_MEMORY_HIGH ??
+        DEFAULT_MEMORY_HIGH,
+      "--memory-high",
+    ),
+    max: parseSize(
+      values["memory-max"] ??
+        process.env.VIBE_OS_MEMORY_MAX ??
+        DEFAULT_MEMORY_MAX,
+      "--memory-max",
+    ),
+    swapMax: parseSize(
+      values["memory-swap-max"] ??
+        process.env.VIBE_OS_MEMORY_SWAP_MAX ??
+        DEFAULT_MEMORY_SWAP_MAX,
+      "--memory-swap-max",
+    ),
+  };
 }
 
 function num(value: unknown, fallback: number, label: string): number {
@@ -381,5 +426,6 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
       "cert-ttl",
     ),
     sessions,
+    memory: memoryLimits(values),
   };
 }

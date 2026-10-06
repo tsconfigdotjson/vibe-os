@@ -62,6 +62,9 @@ export const profiles = sqliteTable(
     /** JSON array of argv tokens, so each can be quoted on its own. */
     args: text("args").notNull().default("[]"),
     prompt: text("prompt").notNull().default(""),
+    /** systemd sizes for this role's scope, or null to use the server's. */
+    memoryHigh: text("memory_high"),
+    memoryMax: text("memory_max"),
     /** Order in the rail. */
     position: integer("position").notNull(),
     createdAt: integer("created_at").notNull(),
@@ -131,6 +134,8 @@ const DDL = [
      command TEXT,
      args TEXT NOT NULL DEFAULT '[]',
      prompt TEXT NOT NULL DEFAULT '',
+     memory_high TEXT,
+     memory_max TEXT,
      position INTEGER NOT NULL,
      created_at INTEGER NOT NULL
    )`,
@@ -173,6 +178,8 @@ const ADDED_COLUMNS: [table: string, column: string, decl: string][] = [
   ["windows", "handoff", "TEXT"],
   ["windows", "handoff_at", "INTEGER"],
   ["windows", "handoff_seen", "INTEGER NOT NULL DEFAULT 0"],
+  ["profiles", "memory_high", "TEXT"],
+  ["profiles", "memory_max", "TEXT"],
 ];
 
 function ensureColumn(

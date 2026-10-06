@@ -33,6 +33,13 @@ import {
   HERMES_INSTALL,
   UV_INSTALL,
 } from "./harness.ts";
+import {
+  type MemoryLimits,
+  type OomState,
+  oomState,
+  type ScopeState,
+  scopeState,
+} from "./memory.ts";
 import { findLeaks } from "./reaper.ts";
 import { IS_COMPILED } from "./runtime.ts";
 import { discoverHostKey, SshCa } from "./ssh-ca.ts";
@@ -591,6 +598,110 @@ async function tailscaleAddress(): Promise<string | null> {
   return null;
 }
 
+/**
+ * Whether one session can take the box down, and whether anything would stop
+ * it if one did. Pure, so every combination is testable off a real box.
+ */
+export function memoryChecks(
+  user: string,
+  limits: MemoryLimits,
+  scope: ScopeState,
+  oom: OomState,
+): Check[] {
+  const checks: Check[] = [];
+  const set = [
+    limits.high !== null ? `MemoryHigh=${limits.high}` : null,
+    limits.max !== null ? `MemoryMax=${limits.max}` : null,
+    limits.swapMax !== null ? `MemorySwapMax=${limits.swapMax}` : null,
+  ].filter(Boolean);
+
+  if (set.length === 0) {
+    checks.push(
+      ok("memory limits", "off (--no-memory-limit): windows start unscoped"),
+    );
+  } else if (!scope.systemd) {
+    checks.push(
+      bad(
+        "memory limits",
+        "no systemd here, so windows start without their memory limits and one runaway agent can take the box down",
+        "run on a systemd host, or rely on the OOM daemon below",
+      ),
+    );
+  } else if (!scope.linger) {
+    checks.push(
+      bad(
+        "memory limits",
+        `lingering is off for ${user}, so windows start without their memory limits (a scope would end when the last login did)`,
+        `sudo loginctl enable-linger ${user}   # or vibe-os setup`,
+      ),
+    );
+  } else if (!scope.cgroup2) {
+    checks.push(
+      bad(
+        "memory limits",
+        `this box uses cgroup v1, where a user's scopes cannot be limited, so ${set.join(" ")} is set but not enforced`,
+        "boot with systemd.unified_cgroup_hierarchy=1, or rely on the OOM daemon below",
+      ),
+    );
+  } else if (scope.controllers && !scope.controllers.includes("memory")) {
+    checks.push(
+      bad(
+        "memory limits",
+        `the user manager is not delegated the memory controller (it has: ${scope.controllers.join(" ") || "none"}), so ${set.join(" ")} is set but not enforced`,
+        "sudo systemctl edit user@.service   # [Service] Delegate=pids memory cpu",
+      ),
+    );
+  } else {
+    checks.push(
+      ok(
+        "memory limits",
+        `each window runs in its own scope: ${set.join(" ")}`,
+      ),
+    );
+  }
+
+  const swap = oom.swapTotal > 0;
+  if (oom.oomd || oom.earlyoom === "active") {
+    checks.push(
+      ok(
+        "oom daemon",
+        `${oom.oomd ? "systemd-oomd" : "earlyoom"} is running, so a box out of memory recovers on its own`,
+      ),
+    );
+  } else if (oom.earlyoom === "installed") {
+    checks.push(
+      bad(
+        "oom daemon",
+        "earlyoom is installed but not running",
+        "sudo systemctl enable --now earlyoom",
+      ),
+    );
+  } else {
+    checks.push(
+      bad(
+        "oom daemon",
+        swap
+          ? "swap and no OOM daemon: out of memory, this box thrashes for as long as it takes someone to notice, instead of killing one process"
+          : "no OOM daemon: out of memory, the kernel kills something only after the box has stalled",
+        "sudo apt install earlyoom   # or vibe-os setup",
+      ),
+    );
+  }
+  return checks;
+}
+
+/** A user's uid, or null when there is no such user. */
+async function uidOf(user: string): Promise<number | null> {
+  if (user === os.userInfo().username) return process.getuid?.() ?? null;
+  try {
+    const { stdout } = await run("id", ["-u", user], { timeout: 5_000 });
+    const uid = Number(stdout.trim());
+    return Number.isInteger(uid) ? uid : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runDoctor(config: Config): Promise<Check[]> {
   const checks: Check[] = [];
   const user = config.user;
@@ -912,6 +1023,21 @@ export async function runDoctor(config: Config): Promise<Check[]> {
   // without a browser on the box, and a machine that never asked for one should
   // not be told about four things it does not have.
   checks.push(...(await browserChecks()));
+
+  // ── memory ───────────────────────────────────────────────────────────────
+  //
+  // Linux only: the scope and both daemons are systemd and /proc things, and a
+  // Mac running vibe-os locally has none of them to report on.
+  if (process.platform === "linux") {
+    checks.push(
+      ...memoryChecks(
+        user,
+        config.memory,
+        await scopeState(user, await uidOf(user)),
+        await oomState(),
+      ),
+    );
+  }
 
   // ── leaked processes ─────────────────────────────────────────────────────
   //

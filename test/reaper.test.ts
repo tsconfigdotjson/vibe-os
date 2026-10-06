@@ -138,6 +138,16 @@ describe("classifyLeak", () => {
       opts(),
     );
     expect(leak?.reason).toBe("its session socket is gone");
+    // Including a scoped one, which systemd-run started by its full path.
+    expect(
+      classifyLeak(
+        proc({
+          args: `/usr/bin/dtach -n ${SESSIONS}/vibe-w-1.sock -E -z /bin/sh -c 'x'`,
+          age: 9000,
+        }),
+        opts(),
+      )?.reason,
+    ).toBe("its session socket is gone");
     // And so is a client still attached to one.
     expect(
       classifyLeak(

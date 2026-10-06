@@ -7,6 +7,7 @@ import type {
   HarnessInfo,
   HermesInfo,
   McpServer,
+  MemoryReport,
   Profile,
   ProfileInput,
 } from "../shared/wire";
@@ -127,12 +128,31 @@ export async function request<T>(
     body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
   });
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({}) as { error?: string });
-    throw new Error(detail.error ?? `${url}: HTTP ${res.status}`);
+    const detail = await res
+      .json()
+      .catch(() => ({}) as Record<string, unknown>);
+    throw new ApiError(
+      typeof detail.error === "string"
+        ? detail.error
+        : `${url}: HTTP ${res.status}`,
+      res.status,
+      detail,
+    );
   }
   // 204 and friends have no body; the callers that expect nothing pass `void`.
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** A failed request, keeping the status and body for callers that branch on them. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: Record<string, unknown>,
+  ) {
+    super(message);
+  }
 }
 
 const fetcher = <T>(url: string): Promise<T> => request<T>(url);
@@ -394,10 +414,31 @@ export function nudgeWindows(workspaceId: string): void {
   postOnce(WINDOWS_CHANNEL, { workspaceId });
 }
 
+/**
+ * What the box has and what each window in the workspace costs.
+ *
+ * Polled, unlike the window rows: memory moves on its own, and the point of
+ * showing it is to see it climb. SWR skips the poll while the tab is hidden.
+ */
+export const MEMORY_POLL_MS = 10_000;
+
+export function useMemory(workspaceId: string | null) {
+  const key = workspaceId ? `/api/workspaces/${workspaceId}/memory` : null;
+  const { data } = useSWR<MemoryReport>(key, fetcher, {
+    refreshInterval: MEMORY_POLL_MS,
+  });
+  return data ?? null;
+}
+
 export const windowApi = {
-  create: (workspaceId: string, profileId?: string | null) =>
+  /**
+   * `force` opens it even when the server says the box cannot fit another
+   * agent, which it answers with a 409 carrying `capacity: true`.
+   */
+  create: (workspaceId: string, profileId?: string | null, force = false) =>
     send<WindowRow>(`/api/workspaces/${workspaceId}/windows`, "POST", {
       profileId: profileId ?? null,
+      ...(force ? { force: true } : {}),
     }),
   patch: (id: string, patch: Partial<WindowRow> & { raise?: boolean }) =>
     send<WindowRow>(`/api/windows/${id}`, "PATCH", patch),
@@ -419,6 +460,7 @@ export type {
   HarnessInfo,
   HermesInfo,
   McpServer,
+  MemoryReport,
   Profile,
   ProfileInput,
 };

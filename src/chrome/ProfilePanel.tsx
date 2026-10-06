@@ -39,6 +39,8 @@ export interface ProfilePanelProps {
   /** The profile being edited, or null when creating a new one. */
   profile: Profile | null;
   palette: readonly string[];
+  /** The server's scope limits, shown as what an empty field means. */
+  memoryDefaults: { high: string | null; max: string | null };
   /** What the installed CLI accepts, or null while it is still being read. */
   harnessInfo: HarnessInfo | null;
   /** What Hermes on the box is configured for, or null while it is read. */
@@ -86,6 +88,7 @@ const SCOPE_NOTE: Record<McpServer["scope"], string> = {
 export function ProfilePanel({
   profile,
   palette,
+  memoryDefaults,
   harnessInfo,
   hermesInfo,
   cursorInfo,
@@ -99,6 +102,8 @@ export function ProfilePanel({
   const [harness, setHarness] = useState<Harness>(profile?.harness ?? "claude");
   const [command, setCommand] = useState(profile?.command ?? "");
   const [prompt, setPrompt] = useState(profile?.prompt ?? "");
+  const [memoryHigh, setMemoryHigh] = useState(profile?.memoryHigh ?? "");
+  const [memoryMax, setMemoryMax] = useState(profile?.memoryMax ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -230,6 +235,8 @@ export function ProfilePanel({
                   ? customArgs
                   : "",
         prompt,
+        memoryHigh,
+        memoryMax,
       });
       // onClose unmounts this panel, so clearing `busy` afterwards would write
       // state to a component that is gone. Only the failure path stays mounted.
@@ -1040,6 +1047,33 @@ export function ProfilePanel({
             )}
           </p>
         </div>
+
+        <fieldset className="field">
+          <legend className="field-label">Memory</legend>
+          <div className="switches">
+            <input
+              aria-label="Throttle past"
+              className="text-input mono"
+              value={memoryHigh}
+              placeholder={`throttle past ${memoryDefaults.high ?? "infinity"}`}
+              onChange={(event) => setMemoryHigh(event.target.value)}
+            />
+            <input
+              aria-label="Kill past"
+              className="text-input mono"
+              value={memoryMax}
+              placeholder={`kill past ${memoryDefaults.max ?? "infinity"}`}
+              onChange={(event) => setMemoryMax(event.target.value)}
+            />
+          </div>
+          <p className="field-hint">
+            Each window runs in its own systemd scope. Past the first limit it
+            is slowed down; past the second, once its share of swap is used, it
+            is ended. Sizes like <code>1500M</code>, <code>2G</code>,{" "}
+            <code>40%</code> of the box&apos;s RAM, or <code>infinity</code>.
+            Empty uses the server&apos;s.
+          </p>
+        </fieldset>
 
         <div className="panel-actions">
           {onDelete ? (

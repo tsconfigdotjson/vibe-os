@@ -40,6 +40,7 @@ import {
   UV_INSTALL,
 } from "./harness.ts";
 import { color, describeError } from "./log.ts";
+import { type OomState, oomState, scopeState } from "./memory.ts";
 import { ENTRY, IS_COMPILED, invocation } from "./runtime.ts";
 
 export const TAILSCALE_INSTALL =
@@ -596,6 +597,74 @@ async function packagesStep(
   if (await s.runAll(commands, true)) s.done("installed");
 }
 
+/**
+ * What it takes to get an OOM daemon running: nothing when one already is,
+ * starting earlyoom when it is installed, installing it otherwise. null when
+ * it has to be installed and there is no package manager to do it with. Same
+ * package name on every manager.
+ */
+export function oomCommands(
+  oom: OomState,
+  manager: Manager | null,
+): string[][] | null {
+  if (oom.oomd || oom.earlyoom === "active") return [];
+  const enable = ["systemctl", "enable", "--now", "earlyoom"];
+  if (oom.earlyoom === "installed") return [enable];
+  if (!manager) return null;
+  return [...installCommands(manager, ["earlyoom"]), enable];
+}
+
+/**
+ * An OOM daemon, so a box out of memory kills one process instead of
+ * thrashing until someone notices.
+ */
+async function oomStep(s: Session, manager: Manager | null): Promise<void> {
+  if (process.platform !== "linux") return;
+  const oom = await oomState();
+  const commands = oomCommands(oom, manager);
+  if (commands?.length === 0) {
+    s.done(`${oom.oomd ? "systemd-oomd" : "earlyoom"} running`);
+    return;
+  }
+  s.heading("oom daemon");
+  s.note(
+    oom.swapTotal > 0
+      ? "with swap and nothing watching, running out of memory stalls the box instead of ending one process"
+      : "nothing ends a runaway process before the box stalls",
+  );
+  if (commands === null) {
+    s.warn("no package manager this knows; install earlyoom by hand");
+    return;
+  }
+  const question =
+    oom.earlyoom === "installed"
+      ? "Start earlyoom, and on every boot?"
+      : "Install earlyoom?";
+  if (!(await s.confirm(question, true, commands))) return;
+  if (await s.runAll(commands, true)) s.done("earlyoom running");
+}
+
+/**
+ * Lingering, without which windows get no memory limits: a scope lives under
+ * the user's manager, and logind stops that manager with the last login.
+ */
+async function lingerStep(s: Session, config: Config): Promise<void> {
+  if (process.platform !== "linux") return;
+  const scope = await scopeState(config.user, null);
+  if (!scope.systemd) return;
+  if (scope.linger) {
+    s.done(`${config.user} lingers, so windows get memory limits`);
+    return;
+  }
+  s.heading("memory limits");
+  s.note(
+    "each window runs in its own scope under your user manager, which has to outlive your logins",
+  );
+  const command = ["loginctl", "enable-linger", config.user];
+  if (await s.confirm("Keep your user manager running?", true, [command]))
+    if (await s.run(command, true)) s.done("lingering on");
+}
+
 async function sshdStep(s: Session, config: Config): Promise<void> {
   if (await probeTcp(config.sshHost, config.sshPort)) {
     s.done(`sshd answering on ${config.sshHost}:${config.sshPort}`);
@@ -1099,6 +1168,8 @@ export async function runSetup(
     if (!(await sudoStep(s))) return 1;
     const manager = await detectManager();
     await packagesStep(s, manager);
+    await oomStep(s, manager);
+    await lingerStep(s, config);
     await sshdStep(s, config);
     await harnessStep(s);
     const tailnet = await tailscaleStep(s);

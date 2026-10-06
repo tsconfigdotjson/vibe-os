@@ -174,7 +174,7 @@ export function classifyLeak(
   if (p.sock && gone(p.sock))
     return { pid: p.pid, args: p.args, reason: "its session socket is gone" };
 
-  const dtach = p.args.match(/^dtach -[nap] (\S+\.sock)\b/);
+  const dtach = p.args.match(/^(?:\S*\/)?dtach -[nap] (\S+\.sock)\b/);
   if (dtach && gone(dtach[1]))
     return { pid: p.pid, args: p.args, reason: "its session socket is gone" };
 
@@ -225,7 +225,9 @@ export async function findLeaks(config: Config): Promise<Leak[]> {
 export async function sessionProcesses(sock: string): Promise<number[]> {
   const pids = new Set<number>();
 
-  const masters = await pgrep(["-f", `^dtach -n ${sock}`]);
+  // A scoped session's master is `/usr/bin/dtach`: systemd-run execs the
+  // resolved path, so the name alone does not anchor at the start.
+  const masters = await pgrep(["-f", `^([^ ]*/)?dtach -n ${sock}`]);
   for (const pid of masters) pids.add(pid);
 
   const leaders = new Set<number>();

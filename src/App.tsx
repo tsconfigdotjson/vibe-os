@@ -10,6 +10,7 @@ import {
   useHarness,
   useHermes,
   useMcpServers,
+  useMemory,
   useProfiles,
   useProjects,
   useServerConfig,
@@ -125,6 +126,7 @@ function Desktop() {
   const hermesInfo = useHermes();
   const cursorInfo = useCursor();
   const { servers: mcpServers } = useMcpServers(projectId);
+  const memory = useMemory(workspaceId);
 
   const {
     windows,
@@ -556,6 +558,7 @@ function Desktop() {
         hues={hues}
         labels={labels}
         focused={focused}
+        memory={memory}
         canTile={tileable}
         onSpawn={() => void spawn()}
         onSelect={raise}
@@ -572,6 +575,7 @@ function Desktop() {
             editing === "new" ? null : (profileById.get(editing) ?? null)
           }
           palette={server.palette}
+          memoryDefaults={server.memory}
           harnessInfo={harnessInfo}
           hermesInfo={hermesInfo}
           cursorInfo={cursorInfo}

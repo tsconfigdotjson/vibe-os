@@ -165,6 +165,8 @@ describe("harnessCommand", () => {
       command: null,
       args,
       prompt: "",
+      memoryHigh: null,
+      memoryMax: null,
       position: 0,
       createdAt: 0,
     }) as Parameters<typeof harnessCommand>[0];
@@ -234,6 +236,8 @@ describe("the Cursor MCP credential link", () => {
       command: harness === "custom" ? "vim" : null,
       args: [],
       prompt: "",
+      memoryHigh: null,
+      memoryMax: null,
       position: 0,
       createdAt: 0,
     }) as Parameters<typeof harnessCommand>[0];

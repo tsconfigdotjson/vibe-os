@@ -86,6 +86,13 @@ const HELP = `
                         one the browser reached the desktop on
     --user <name>       unix user to log in as (default: current user)
     --no-sessions       plain login shells instead of persistent dtach sessions
+    --memory-high <size>
+                        throttle a window past this (default 40%, of RAM)
+    --memory-max <size> kill a window past this (default 50%)
+    --memory-swap-max <size>
+                        swap a window may use (default 10%, of RAM). Sizes
+                        are systemd's: 1500M, 2G, 40%, infinity
+    --no-memory-limit   start windows without a memory scope
     --cert-ttl <secs>   certificate lifetime (default 43200)
 
     --workspace <dir>   root for projects and worktrees (default ~/workspace)

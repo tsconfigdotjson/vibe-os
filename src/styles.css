@@ -858,6 +858,35 @@ button {
   font-size: 11px;
 }
 
+.dock-mem {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.dock-mem[data-level="warn"],
+.dock-box[data-level="warn"] {
+  color: var(--warn);
+}
+
+.dock-mem[data-level="err"],
+.dock-box[data-level="err"] {
+  color: var(--err);
+}
+
+.dock-box {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  padding: 0 6px;
+  flex: none;
+}
+
+.dock-box-label {
+  color: var(--muted);
+}
+
 .dock-icon {
   width: 32px;
   height: 32px;
@@ -1399,7 +1428,9 @@ legend.field-label {
     display: none;
   }
 
-  .dock-label {
+  .dock-label,
+  .dock-mem,
+  .dock-box-psi {
     display: none;
   }
 }
