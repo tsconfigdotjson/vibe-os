@@ -15,7 +15,7 @@ release is the only supported version.
 
 vibe-os hands out shell access to the machine it runs on. Anyone who passes the
 token gate can run anything the vibe-os user can, and that is by design.
-[Security](README.md#security) in the README describes the model.
+[docs/security.md](docs/security.md) describes the model.
 
 A vulnerability is anything that gets past that model:
 

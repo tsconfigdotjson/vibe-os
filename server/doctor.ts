@@ -109,7 +109,7 @@ async function firewallState(): Promise<FirewallState> {
     directUdpAllowed: false,
   };
 
-  // ufw first: it is what the README documents, and its status output says
+  // ufw first: it is what docs/deploying.md documents, and its status output says
   // plainly whether it is switched on, which a raw ruleset does not.
   const ufw = await run("ufw", ["status", "verbose"], { timeout: 5000 })
     .then((r) => r.stdout)
@@ -904,7 +904,7 @@ export async function runDoctor(config: Config): Promise<Check[]> {
       bad(
         "firewall",
         "could not read any firewall — needs root, or none is installed",
-        "sudo vibe-os doctor    (and see the firewall rules in the README)",
+        "sudo vibe-os doctor    (firewall rules: https://github.com/tsconfigdotjson/vibe-os/blob/main/docs/deploying.md#firewall)",
       ),
     );
   } else if (!fw.active) {
@@ -1013,7 +1013,7 @@ export async function runDoctor(config: Config): Promise<Check[]> {
       bad(
         "exposure",
         `no token and bound to every interface — Tailscale is up (${tailnet}), but so is any public address`,
-        `bind to the tailnet only:  --host ${tailnet}   (and see the firewall rules in the README)`,
+        `bind to the tailnet only:  --host ${tailnet}   (firewall rules: https://github.com/tsconfigdotjson/vibe-os/blob/main/docs/deploying.md#firewall)`,
       ),
     );
   } else {
