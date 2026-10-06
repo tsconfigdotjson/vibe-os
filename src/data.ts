@@ -2,10 +2,9 @@ import { useEffect } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import type {
   AttachInfo,
-  CursorInfo,
   Harness,
-  HarnessInfo,
-  HermesInfo,
+  HarnessReport,
+  HarnessSpec,
   McpServer,
   MemoryReport,
   Profile,
@@ -299,14 +298,13 @@ export function useProfiles(projectId: string | null) {
 }
 
 /**
- * Read from the binary on the server rather than hardcoded here.
+ * Every harness a profile can launch, as the specs the editor renders.
  *
- * Claude ships models faster than this project ships anything, so a list baked
- * into the UI would be wrong within a release or two. Fetched once — it
- * describes an installed binary, which does not change while the page is open.
+ * Fetched once: the list is the server's built-ins plus the box's own
+ * `harnesses/*.json`, and both are read when the server starts.
  */
-export function useHarness() {
-  const { data } = useSWR<HarnessInfo>("/api/harness/claude", fetcher, {
+export function useHarnesses(): HarnessSpec[] | null {
+  const { data } = useSWR<HarnessSpec[]>("/api/harnesses", fetcher, {
     revalidateOnFocus: false,
     refreshInterval: 0,
   });
@@ -314,33 +312,20 @@ export function useHarness() {
 }
 
 /**
- * What Hermes on the box is set up for.
+ * What one harness found on the box: models and options read off the installed
+ * binary, its defaults, whether it is logged in.
  *
- * Read from the server for a different reason than the Claude side: not because
- * the list changes faster than this project ships, but because the answers are
- * that box's own configuration. Which providers it has, and which browser its
- * tools will drive, are things only the server can see.
+ * Read from the server rather than hardcoded here. Models ship faster than this
+ * project does, and some answers (a provider list, a login) belong to the box.
+ * Fetched once per harness: it describes an installed binary, which does not
+ * change while the page is open.
  */
-export function useHermes() {
-  const { data } = useSWR<HermesInfo>("/api/harness/hermes", fetcher, {
-    revalidateOnFocus: false,
-    refreshInterval: 0,
-  });
-  return data ?? null;
-}
-
-/**
- * What Cursor on the box is set up for.
- *
- * Server-read for the Hermes reason, not the Claude one: the model list and
- * the login state belong to the account the box is signed in as, which only
- * the server can ask.
- */
-export function useCursor() {
-  const { data } = useSWR<CursorInfo>("/api/harness/cursor", fetcher, {
-    revalidateOnFocus: false,
-    refreshInterval: 0,
-  });
+export function useHarnessReport(id: string | null): HarnessReport | null {
+  const { data } = useSWR<HarnessReport>(
+    id ? `/api/harness/${encodeURIComponent(id)}` : null,
+    fetcher,
+    { revalidateOnFocus: false, refreshInterval: 0 },
+  );
   return data ?? null;
 }
 
@@ -463,10 +448,9 @@ export const windowApi = {
 
 export type {
   AttachInfo,
-  CursorInfo,
   Harness,
-  HarnessInfo,
-  HermesInfo,
+  HarnessReport,
+  HarnessSpec,
   McpServer,
   MemoryReport,
   Profile,

@@ -39,7 +39,7 @@ import {
 } from "./config.ts";
 import { openDb } from "./db.ts";
 import { type Check, homeFor, onPath, runDoctor } from "./doctor.ts";
-import { HERMES_INSTALL } from "./harness.ts";
+import { HERMES_INSTALL, loadHarnesses } from "./harness.ts";
 import { startServer } from "./index.ts";
 import { color, describeError, log } from "./log.ts";
 import { reapLeaks } from "./reaper.ts";
@@ -829,6 +829,7 @@ export async function main(argv: string[]): Promise<number> {
   let config: Awaited<ReturnType<typeof resolveConfig>>;
   try {
     config = await resolveConfig(values);
+    loadHarnesses(config.stateDir);
   } catch (err) {
     log.error(describeError(err));
     console.log(HELP);

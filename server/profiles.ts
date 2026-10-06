@@ -9,6 +9,7 @@ import { asc, eq } from "drizzle-orm";
 import { detokenize, tokenize } from "../shared/args.ts";
 import type { Harness, Profile, ProfileInput } from "../shared/wire.ts";
 import { type Db, newId, profiles, windows } from "./db.ts";
+import { isHarness } from "./harness.ts";
 import { parseSize } from "./memory.ts";
 
 /**
@@ -30,18 +31,6 @@ export const PALETTE = [
   "violet",
   "blue",
 ] as const;
-
-/**
- * `satisfies` rather than a plain literal: it is what makes the runtime list and
- * the wire type fail to compile if they ever stop agreeing.
- */
-export const HARNESSES = [
-  "claude",
-  "hermes",
-  "cursor",
-  "shell",
-  "custom",
-] as const satisfies readonly Harness[];
 
 const MAX_NAME = 40;
 const MAX_PROMPT = 16_000;
@@ -88,9 +77,17 @@ type Fields = Partial<typeof profiles.$inferInsert>;
 type CompleteFields = Fields &
   Required<Pick<typeof profiles.$inferInsert, "name" | "color" | "harness">>;
 
-function validate(input: ProfileInput, partial: true): Fields;
+function validate(
+  input: ProfileInput,
+  partial: true,
+  current?: Harness,
+): Fields;
 function validate(input: ProfileInput, partial: false): CompleteFields;
-function validate(input: ProfileInput, partial: boolean): Fields {
+function validate(
+  input: ProfileInput,
+  partial: boolean,
+  current?: Harness,
+): Fields {
   const out: Fields = {};
 
   if (input.name !== undefined || !partial) {
@@ -110,7 +107,9 @@ function validate(input: ProfileInput, partial: boolean): Fields {
 
   if (input.harness !== undefined || !partial) {
     const harness = input.harness ?? "claude";
-    if (!(HARNESSES as readonly string[]).includes(harness))
+    // The harness a profile already has stays valid even if its spec file has
+    // since gone, so the rest of the profile can still be edited.
+    if (!isHarness(harness) && harness !== current)
       throw new Error(`unknown harness ${harness}`);
     out.harness = harness;
   }
@@ -214,6 +213,7 @@ export function updateProfile(
   const fields = validate(
     { harness: current.harness, command: current.command, ...input },
     true,
+    current.harness,
   );
   if (Object.keys(fields).length > 0) {
     db.update(profiles).set(fields).where(eq(profiles.id, id)).run();

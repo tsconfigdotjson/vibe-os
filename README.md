@@ -40,6 +40,8 @@ edit, no `sshd_config` change, and no root.
     - [Hermes](#hermes)
     - [Hermes and the browser](#hermes-and-the-browser)
     - [Cursor](#cursor)
+    - [Codex](#codex)
+    - [Other harnesses](#other-harnesses)
   - [Popping a terminal out](#popping-a-terminal-out)
   - [The desktop](#the-desktop)
     - [Keyboard shortcuts](#keyboard-shortcuts)
@@ -165,8 +167,9 @@ If two pieces of work need to proceed independently, give them a workspace each.
 
 ### Profiles
 
-A profile is a name, a colour, a harness (`claude`, `hermes`, `cursor`, a
-shell, or any command on the box) with its flags, and a standing prompt. Profiles belong to a
+A profile is a name, a colour, a harness (`claude`, `hermes`, `cursor`,
+`codex`, [one you add](docs/harnesses.md), a shell, or any command on the box)
+with its flags, and a standing prompt. Profiles belong to a
 project and appear in every workspace of it.
 
 The colour is the point: it tints the window, its title bar and its dock entry,
@@ -231,14 +234,13 @@ here more than anywhere else: every workspace is a freshly cut worktree, which
 to Cursor is a directory it has never seen, so without it every new window opens
 on the trust prompt instead of the conversation.
 
-Models are typed with real suggestions behind them. `cursor-agent models` is a
-proper listing mode — the only harness with one — but the list belongs to the
-account rather than the binary: it needs a login, and sometimes the network, so
-when it cannot be read the field is plain free text and typed ids still work.
+Models come from `cursor-agent models`. The list belongs to the account rather
+than the binary: it needs a login, and sometimes the network, so when it cannot
+be read the field is plain free text and typed ids still work.
 
 Logging in is a property of the box, not of a profile: run `cursor-agent
 login` once on the box. Logged out, a Cursor window opens and sits at the
-login prompt — `vibe-os doctor` says so before you find out that way.
+login prompt. `vibe-os doctor` says so before you find out that way.
 
 MCP servers are a property of the box as well. Configure them in
 `~/.cursor/mcp.json`, then log in once, from inside any window:
@@ -252,6 +254,22 @@ workspace. vibe-os points every workspace at a single store under the state dir
 instead, so that one login covers the ones opened later too. A switch,
 `--approve-mcps`, skips the approval prompt each new workspace would otherwise
 ask for.
+
+#### Codex
+
+Picking the Codex harness runs `codex` in the worktree, and the editor offers a
+model, a thinking dropdown, a sandbox, an approval policy and a few switches,
+`--dangerously-bypass-approvals-and-sandbox` among them. Models and thinking
+levels come from `codex debug models`, so they follow the installed CLI.
+
+Log in once on the box with `codex login --device-auth`. Logged out, a Codex
+window sits at the login screen, and `vibe-os doctor` says so.
+
+#### Other harnesses
+
+A JSON file in `~/.vibe-os/harnesses/` adds a harness to the box: the command,
+and the flags the editor should offer for it. See
+[docs/harnesses.md](docs/harnesses.md).
 
 #### MCP servers
 
@@ -410,6 +428,7 @@ installation without one.
 | `claude` | the Claude harness | those profiles open a window that closes immediately |
 | `hermes` | the Hermes harness (optional) | those profiles open a window that closes immediately |
 | `cursor-agent` | the Cursor harness (optional) | those profiles open a window that closes immediately |
+| `codex` | the Codex harness (optional) | those profiles open a window that closes immediately |
 | `uv` | `uvx browser-use`, for Hermes' Browser Use mode (optional) | Hermes keeps its twelve built-in browser tools |
 | `earlyoom` | ending a runaway process when memory runs out | a box with swap thrashes until someone intervenes |
 
@@ -425,6 +444,10 @@ hermes setup                                        # pick a provider
 # Optional, for the Cursor harness
 curl https://cursor.com/install -fsS | bash
 cursor-agent login                                  # one login per box
+
+# Optional, for the Codex harness
+npm install -g @openai/codex
+codex login --device-auth                           # one login per box
 ```
 
 Verified on Debian 12 and 13, Ubuntu 24.04 and 26.04 LTS, x86\_64.
@@ -789,7 +812,8 @@ Nothing is lost by that restart. Two things it does not pick up:
 
 A reboot is different: dtach sessions do not survive one. Afterwards, each
 window whose session was cut off offers **Resume conversation**, which restarts
-Claude, Hermes or Cursor with `--continue`, or **Start fresh**. A plain shell
+the agent on its last conversation (`--continue`, or `codex resume --last`), or
+**Start fresh**. A plain shell
 window offers **Reopen**. The same offer appears for a session the OOM killer
 ended, the next time the server starts.
 

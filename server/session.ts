@@ -11,7 +11,9 @@
 // too, and api.ts needs attach.ts — importing in a circle to share three pure
 // functions is not a trade worth making.
 
+import { CUSTOM } from "../shared/harness.ts";
 import type { Config } from "./config.ts";
+import { harness } from "./harness.ts";
 import { effectiveLimits, SCOPE_PROBE, scopePrefix } from "./memory.ts";
 import type { Profile } from "./profiles.ts";
 import { SOCK_VAR } from "./reaper.ts";
@@ -22,88 +24,15 @@ export function shellQuote(value: string): string {
 }
 
 /**
- * Cursor's name for a directory, as it spells it under `~/.cursor/projects`.
- *
- * Every run of anything that is not a letter or a digit becomes one dash, and
- * the leading one that a path always starts with is dropped. Case survives.
- * Read off a real install rather than from documentation, which does not
- * mention the directory at all: `/home/ubuntu` is `home-ubuntu`, and
- * `/tmp/Cursor.Test_1 space/sub` is `tmp-Cursor-Test-1-space-sub`.
- */
-export function cursorProjectSlug(dir: string): string {
-  return dir.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-/**
- * Shell that points this worktree's Cursor project at the box's MCP credentials.
- *
- * Cursor keeps MCP OAuth tokens per working directory, in
- * `~/.cursor/projects/<slug of the directory>/mcp-auth.json`. The server list is
- * global — `~/.cursor/mcp.json` — so a new window shows Linear as configured and
- * then says `requires_authentication`, because the tokens are somewhere else.
- * Every workspace here is a freshly cut worktree at a path Cursor has never
- * seen, which makes "log in once on this box" mean "log in once per window"
- * unless something intervenes.
- *
- * A symlink is what intervenes, and it is a symlink rather than a copy because
- * Cursor writes through it: an access token lasts a day, so the refresh that
- * happens in whichever window is open has to be the refresh every other window
- * sees. Copies would go stale a day apart and each one would race the others
- * for a refresh token the provider rotates.
- *
- * The link is only ever created where there is nothing at all. An existing file
- * is somebody's real per-directory login and is left alone; an existing link is
- * this, already done. Neither is worth overwriting to save a stat.
- *
- * The shared store is deliberately allowed not to exist yet. Writing through a
- * dangling symlink creates the target, so `cursor-agent mcp login linear` in any
- * window is the one login the box needs, wherever it happens — which is why the
- * store's directory is created here even though the file is not.
- *
- * Failure is silent on purpose, and inert rather than fatal. If Cursor ever
- * changes how it names these directories, or `CURSOR_DATA_DIR` moves them, the
- * link lands somewhere Cursor does not read and windows behave exactly as they
- * did before: a login prompt, not a broken window.
- */
-function cursorMcpLink(cwd: string, stateDir: string): string {
-  const store = `${stateDir}/cursor/mcp-auth.json`;
-  const storeDir = shellQuote(`${stateDir}/cursor`);
-  // The slug is letters, digits and dashes by construction, so it needs no
-  // quoting of its own; `$HOME` is left to the shell because the session runs as
-  // the user whose credentials these are.
-  const dir = `"$HOME/.cursor/projects/${cursorProjectSlug(cwd)}"`;
-  const link = `"$HOME/.cursor/projects/${cursorProjectSlug(cwd)}/mcp-auth.json"`;
-  return [
-    `mkdir -p ${dir} ${storeDir} 2>/dev/null`,
-    // Refresh tokens, so no wider than the state dir this sits in.
-    `chmod 700 ${storeDir} 2>/dev/null`,
-    `{ [ -e ${link} ] || [ -L ${link} ] || ln -s ${shellQuote(store)} ${link} 2>/dev/null; }`,
-  ].join("; ");
-}
-
-/**
- * Flags that already pick a conversation, in any harness that resumes.
- *
- * `-c` and `-r` are the short forms in Claude and Hermes; Cursor has no short
- * form. A profile with "Resume last conversation" switched on is already doing
- * what resuming would add.
- */
-const PICKS_CONVERSATION = new Set(["--continue", "-c", "--resume", "-r"]);
-
-/**
  * Whether a profile's harness can pick its last conversation back up.
  *
- * All three agents spell it `--continue`, and all three mean the most recent
- * conversation in the working directory. That is the window's own conversation
- * as long as it is the only one of its harness in the worktree, which is what
- * opening a profile normally guarantees.
+ * Every agent harness here resumes the most recent conversation in the working
+ * directory. That is the window's own conversation as long as it is the only
+ * one of its harness in the worktree, which is what opening a profile normally
+ * guarantees.
  */
 export function canResume(profile: Profile | null | undefined): boolean {
-  return (
-    profile?.harness === "claude" ||
-    profile?.harness === "hermes" ||
-    profile?.harness === "cursor"
-  );
+  return Boolean(profile && harness(profile.harness)?.spec.resume);
 }
 
 /**
@@ -128,48 +57,43 @@ export function canResume(profile: Profile | null | undefined): boolean {
  */
 export function harnessCommand(
   profile: Profile,
-  /** The worktree it runs in and the state dir, for the Cursor MCP link. */
+  /** The worktree it runs in and the state dir, for the harness's own setup. */
   where: { cwd: string; stateDir: string },
   /** Pick up the last conversation instead of starting a new one. */
   resume = false,
 ): string | undefined {
-  const executable =
-    profile.harness === "claude"
-      ? "claude"
-      : profile.harness === "hermes"
-        ? "hermes"
-        : // The unambiguous of the two names its installer symlinks — `agent`
-          // is the other, and too generic to be the one a PATH lookup bets on.
-          profile.harness === "cursor"
-          ? "cursor-agent"
-          : profile.harness === "custom"
-            ? profile.command
-            : null;
-  if (!executable) return undefined;
-  /*
-   * `hermes` on its own opens a chat, but `--model` and `--provider` belong to
-   * the `chat` subcommand rather than to the top-level command, so a profile
-   * that picks a model has to name it. It is prepended here rather than stored
-   * in the profile's argv because it is not a flag anyone should be able to
-   * delete in the editor: without it every model selection is silently ignored.
-   */
-  const leading = profile.harness === "hermes" ? ["chat"] : [];
-  const trailing =
+  if (profile.harness === CUSTOM) {
+    if (!profile.command) return undefined;
+    return launch(profile.command, profile.args, "");
+  }
+  const adapter = harness(profile.harness);
+  if (!adapter) return undefined;
+  const { spec } = adapter;
+
+  const before: string[] = [...(spec.leading ?? [])];
+  const after: string[] = [];
+  const unless = new Set(spec.resume?.unless ?? []);
+  if (
     resume &&
-    canResume(profile) &&
-    !profile.args.some((a) => PICKS_CONVERSATION.has(a.split("=")[0]))
-      ? ["--continue"]
-      : [];
-  const argv = [executable, ...leading, ...profile.args, ...trailing]
-    .map(shellQuote)
-    .join(" ");
+    spec.resume &&
+    !profile.args.some((a) => unless.has(a.split("=")[0]))
+  ) {
+    if (spec.resume.subcommand) before.push(...spec.resume.args);
+    else after.push(...spec.resume.args);
+  }
 
-  // Only Cursor keeps credentials per directory, so only Cursor pays for this.
-  const setup =
-    profile.harness === "cursor"
-      ? `${cursorMcpLink(where.cwd, where.stateDir)}; `
-      : "";
+  const setup = adapter.setup ? `${adapter.setup(where)}; ` : "";
+  return launch(spec.command, [...before, ...profile.args, ...after], setup);
+}
 
+/**
+ * The shell line that runs a harness: PATH restored, setup, then exec.
+ *
+ * Every token is quoted individually so a flag can contain spaces and cannot
+ * contain a second command.
+ */
+function launch(executable: string, args: string[], setup: string): string {
+  const argv = [executable, ...args].map(shellQuote).join(" ");
   /*
    * The PATH a forced command gets is not the PATH you get when you log in.
    *

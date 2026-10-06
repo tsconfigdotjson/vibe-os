@@ -86,7 +86,7 @@ prompt. Profiles belong to a project.
 
 `POST /api/projects/:project/profiles` creates one, and
 `PATCH /api/profiles/:profile` changes one. Fields: `name`, `color`, `harness`
-(`claude`, `hermes`, `cursor`, `shell` or `custom`), `command` (for `custom`),
+(an id from `GET /api/harnesses`, `shell` or `custom`), `command` (for `custom`),
 `args` (a string, split like a shell would), `prompt`, `memoryHigh`, `memoryMax`,
 `position`.
 
@@ -163,7 +163,8 @@ These serve the desktop and are not stable.
 | route | |
 | --- | --- |
 | `GET /api/config` | what the desktop needs to start |
-| `GET /api/harness/claude`, `/hermes`, `/cursor` | flags and models for the profile editor |
+| `GET /api/harnesses` | every harness, as the specs the profile editor renders |
+| `GET /api/harness/:harness` | what the box has for one: version, login, models and options |
 | `GET /api/projects/:project/mcp` | MCP servers a profile can be given |
 | `POST /api/workspaces/:workspace` | marks a workspace as opened |
 | `GET /api/workspaces/:workspace/memory` | memory use per window, for the dock |

@@ -2,7 +2,7 @@ import type { Terminal } from "@xterm/xterm";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerConfig } from "../api";
 import { windowSshConfig } from "../api";
-import type { Profile } from "../data";
+import { type Profile, useHarnesses } from "../data";
 import { SshTerminal } from "../sshterm";
 import {
   clampBox,
@@ -119,6 +119,7 @@ export const TermWindow = memo(function TermWindow({
   );
 
   const anchored = rectToPixels(win, view);
+  const specs = useHarnesses();
   const [live, setLive] = useState<typeof anchored | null>(null);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<DragState | null>(null);
@@ -263,10 +264,9 @@ export const TermWindow = memo(function TermWindow({
   // Held until someone says what to bring back: mounting the terminal would log
   // in, and logging in starts a session.
   const waiting = win.interrupted && !poppedOut;
-  const resumable =
-    profile?.harness === "claude" ||
-    profile?.harness === "hermes" ||
-    profile?.harness === "cursor";
+  const resumable = Boolean(
+    profile && specs?.find((s) => s.id === profile.harness)?.resume,
+  );
 
   /** Takes the terminal back from wherever it went. */
   const reclaim = () =>

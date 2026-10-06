@@ -25,14 +25,7 @@ import {
   vncPasswordFileFromUnit,
 } from "./browser.ts";
 import type { Config } from "./config.ts";
-import {
-  CLAUDE_INSTALL,
-  CURSOR_INSTALL,
-  discoverCursor,
-  discoverHermes,
-  HERMES_INSTALL,
-  UV_INSTALL,
-} from "./harness.ts";
+import { discover, harnesses, harnessProblems } from "./harness.ts";
 import {
   type MemoryLimits,
   type OomState,
@@ -356,114 +349,60 @@ async function browserChecks(): Promise<Check[]> {
 }
 
 /**
- * Hermes, and whether its browser tools land anywhere useful.
+ * Every harness: installed, logged in, and whatever else its adapter checks.
  *
- * Three questions, and the second two only make sense once the first is yes.
- * None of them is fatal: a box that never installs Hermes is a working box, the
- * same way one without Claude is.
+ * None of it is fatal. A box that never installs a given harness is a working
+ * box; only the profiles that use it are affected. The login check exists
+ * because its failure is quiet in exactly the way this file cares about: the
+ * window opens, the harness runs, and it sits at a login prompt.
  */
-async function hermesChecks(): Promise<Check[]> {
-  // Cheap when it is missing — this returns as soon as the binary is not found,
-  // which is the answer on most boxes.
-  const hermes = await discoverHermes();
-  if (!hermes.available) {
-    return [
-      bad(
-        "hermes",
-        "not on PATH — profiles using the Hermes harness fall back to a shell",
-        HERMES_INSTALL,
-      ),
-    ];
-  }
+async function harnessChecks(): Promise<Check[]> {
+  const checks: Check[] = [];
+  for (const { file, error } of harnessProblems())
+    checks.push(bad("harness file", `${file}: ${error} — skipped`));
 
-  const checks: Check[] = [
-    ok(
-      "hermes",
-      `${hermes.version ?? "installed"} — the Hermes harness will run`,
+  // Concurrently: each is its own few process starts, and the slow ones go to
+  // the network.
+  const adapters = harnesses();
+  const found = await Promise.all(
+    adapters.map(
+      (a) => discover(a.spec.id) as NonNullable<ReturnType<typeof discover>>,
     ),
-  ];
-
-  // Without the CLI, Browser Use mode silently does not engage. Hermes keeps
-  // working with its twelve built-in browser tools, so nothing looks wrong;
-  // you just pay for a dozen tool schemas in every request and never find out.
-  checks.push(
-    hermes.browser.browserUse
-      ? ok("browser-use", "runnable — Hermes gets the single browser_exec tool")
-      : bad(
-          "browser-use",
-          "no browser-use or uvx on PATH — Hermes keeps its twelve built-in browser tools",
-          UV_INSTALL,
-        ),
   );
-
-  // Only worth asking when there is a browser here to be pointed at. On a box
-  // with no `install-browser`, an unset cdp_url is the correct configuration.
-  if (hermes.browser.cdpPort !== null) {
-    checks.push(
-      hermes.browser.connected
-        ? ok(
-            "hermes browser",
-            `driving this box's Chrome on 127.0.0.1:${hermes.browser.cdpPort}`,
-          )
-        : bad(
-            "hermes browser",
-            hermes.browser.cdpUrl
-              ? `browser.cdp_url is ${hermes.browser.cdpUrl}, not this box's Chrome on ${hermes.browser.cdpPort}`
-              : "browser.cdp_url is unset — Hermes will not use the browser running here",
-            "vibe-os connect-hermes",
-          ),
-    );
-  }
-
-  return checks;
-}
-
-/**
- * Cursor, and whether a window opened as it would get past the login prompt.
- *
- * Two questions. Neither is fatal, for the reason the Hermes checks give: a box
- * that never installs Cursor is a working box. The login check exists because
- * its failure is quiet in exactly the way this file cares about — the window
- * opens, the harness runs, and it sits asking for a browser login on a box that
- * may not have one attached.
- */
-async function cursorChecks(): Promise<Check[]> {
-  const cursor = await discoverCursor();
-  if (!cursor.available) {
-    return [
-      bad(
-        "cursor",
-        "not on PATH — profiles using the Cursor harness fall back to a shell",
-        CURSOR_INSTALL,
-      ),
-    ];
-  }
-
-  const checks: Check[] = [
-    ok(
-      "cursor",
-      `${cursor.version ?? "installed"} — the Cursor harness will run`,
-    ),
-  ];
-
-  if (cursor.loggedIn === false) {
-    checks.push(
-      bad(
-        "cursor login",
-        "not logged in — Cursor windows will sit at a login prompt",
-        "cursor-agent login",
-      ),
-    );
-  } else if (cursor.loggedIn === true) {
+  adapters.forEach((adapter, i) => {
+    const { spec } = adapter;
+    const { report, detail } = found[i];
+    if (!report.available) {
+      checks.push(
+        bad(
+          spec.id,
+          `not on PATH — profiles using the ${spec.label} harness open a window that closes immediately`,
+          spec.install,
+        ),
+      );
+      return;
+    }
     checks.push(
       ok(
-        "cursor login",
-        `logged in${cursor.models.length > 0 ? `, ${cursor.models.length} models offered` : ""}`,
+        spec.id,
+        `${report.version ?? "installed"} — the ${spec.label} harness will run`,
       ),
     );
-  }
-  // null stays silent: status output this build cannot read is not a finding.
-
+    if (spec.login && report.loggedIn === false) {
+      checks.push(
+        bad(
+          `${spec.id} login`,
+          `not logged in — ${spec.label} windows will sit at a login prompt`,
+          spec.login.fix,
+        ),
+      );
+    } else if (spec.login && report.loggedIn === true) {
+      checks.push(ok(`${spec.id} login`, "logged in"));
+    }
+    // null stays silent: status output this build cannot read is not a finding.
+    for (const c of adapter.checks?.(report, detail) ?? [])
+      checks.push(c.ok ? ok(c.label, c.detail) : bad(c.label, c.detail, c.fix));
+  });
   return checks;
 }
 
@@ -754,19 +693,7 @@ export async function runDoctor(config: Config): Promise<Check[]> {
         ),
   );
 
-  const claude = await onPath("claude");
-  checks.push(
-    claude
-      ? ok("claude", "on PATH — the Claude harness will run")
-      : bad(
-          "claude",
-          "not on PATH — profiles using the Claude harness fall back to a shell",
-          CLAUDE_INSTALL,
-        ),
-  );
-
-  checks.push(...(await hermesChecks()));
-  checks.push(...(await cursorChecks()));
+  checks.push(...(await harnessChecks()));
 
   // ── can a browser actually log in? ───────────────────────────────────────
   const sshdUp = await probeTcp(config.sshHost, config.sshPort);

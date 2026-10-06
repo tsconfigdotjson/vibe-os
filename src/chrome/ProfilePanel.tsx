@@ -1,39 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { detokenize } from "../../shared/args";
 import { countBlanks } from "../../shared/blanks";
+import {
+  buildArgs,
+  type ChoiceOption,
+  CUSTOM,
+  type FlagSettings,
+  initialSettings,
+  type McpField,
+  type McpMode,
+  parseArgs,
+  type SelectField,
+  SHELL,
+} from "../../shared/harness";
 import type {
-  CursorInfo,
   Harness,
-  HarnessInfo,
-  HermesInfo,
+  HarnessReport,
+  HarnessSpec,
   McpServer,
   Profile,
   ProfileInput,
 } from "../data";
-import { describeError } from "../data";
-import {
-  buildArgs,
-  type ClaudeSettings,
-  detokenize,
-  effortLabel,
-  type McpMode,
-  modeLabel,
-  parseSettings,
-  TOGGLES,
-} from "./claudeFlags";
-import {
-  buildArgs as buildCursorArgs,
-  TOGGLES as CURSOR_TOGGLES,
-  type CursorSettings,
-  parseSettings as parseCursorSettings,
-} from "./cursorFlags";
-import {
-  buildArgs as buildHermesArgs,
-  TOGGLES as HERMES_TOGGLES,
-  type HermesSettings,
-  type Interface,
-  interfaceLabel,
-  parseSettings as parseHermesSettings,
-} from "./hermesFlags";
+import { describeError, useHarnessReport } from "../data";
 
 export interface ProfilePanelProps {
   /** The profile being edited, or null when creating a new one. */
@@ -41,36 +29,14 @@ export interface ProfilePanelProps {
   palette: readonly string[];
   /** The server's scope limits, shown as what an empty field means. */
   memoryDefaults: { high: string | null; max: string | null };
-  /** What the installed CLI accepts, or null while it is still being read. */
-  harnessInfo: HarnessInfo | null;
-  /** What Hermes on the box is configured for, or null while it is read. */
-  hermesInfo: HermesInfo | null;
-  /** What Cursor on the box is set up for, or null while it is read. */
-  cursorInfo: CursorInfo | null;
+  /** Every harness the server knows, or null while it is still being read. */
+  harnesses: HarnessSpec[] | null;
   /** MCP servers configured on the box, for this project. */
   mcpServers: McpServer[];
   onSave: (input: ProfileInput) => Promise<unknown>;
   onDelete: (() => Promise<unknown>) | null;
   onClose: () => void;
 }
-
-const HARNESSES: { value: Harness; label: string; hint: string }[] = [
-  { value: "claude", label: "Claude", hint: "runs `claude` in the worktree" },
-  {
-    value: "hermes",
-    label: "Hermes",
-    hint: "runs `hermes chat` in the worktree",
-  },
-  {
-    value: "cursor",
-    label: "Cursor",
-    hint: "runs `cursor-agent` in the worktree",
-  },
-  { value: "shell", label: "Shell", hint: "a plain shell, tinted and named" },
-  { value: "custom", label: "Custom", hint: "any command on the box" },
-];
-
-const INTERFACES: Interface[] = ["", "cli", "tui"];
 
 const MCP_MODES: { value: McpMode; label: string }[] = [
   { value: "all", label: "Everything configured on this box" },
@@ -85,13 +51,446 @@ const SCOPE_NOTE: Record<McpServer["scope"], string> = {
   local: "one directory",
 };
 
+/** Text from a spec or a report, with `backticks` shown as code. */
+function Rich({ text }: { text: string }) {
+  return (
+    <>
+      {text.split("`").map((part, i) =>
+        // Odd segments sat between a pair of backticks.
+        i % 2 === 1 ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the split is fixed for a given text
+          <code key={i}>{part}</code>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the split is fixed for a given text
+          <Fragment key={i}>{part}</Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
+/** The command a harness runs, as the advanced preview shows it. */
+const commandLine = (spec: HarnessSpec) =>
+  [spec.command, ...(spec.leading ?? [])].join(" ");
+
+/**
+ * One select field: a dropdown when there is something to pick from, a typed
+ * field with suggestions when the spec says free or there is nothing to offer.
+ *
+ * Every form makes the same round-trip guarantee: a stored value this build has
+ * not heard of is offered back rather than reset, so opening and saving a
+ * profile never changes what it runs.
+ */
+function SelectControl({
+  spec,
+  field,
+  report,
+  settings,
+  patch,
+}: {
+  spec: HarnessSpec;
+  field: SelectField;
+  report: HarnessReport | null;
+  settings: FlagSettings;
+  patch: (next: Partial<FlagSettings>) => void;
+}) {
+  const id = `${spec.id}-${field.key}`;
+  const value = settings.values[field.key] ?? "";
+  const options: ChoiceOption[] =
+    report?.options[field.key] ?? field.options ?? [];
+  const specials = field.specials ?? [];
+  const fallback = report?.defaults[field.key];
+  const none = fallback
+    ? `Default — ${fallback}`
+    : (field.none ?? `Default — whatever ${spec.label} picks`);
+  const typed = field.free || (options.length === 0 && specials.length === 0);
+  const special = specials.find((s) => s.value === value);
+  const set = (next: string) =>
+    patch({ values: { ...settings.values, [field.key]: next } });
+
+  // Ungrouped first, then each group in the order it first appears.
+  const groups = [...new Set(options.map((o) => o.group ?? ""))];
+  const known =
+    options.some((o) => o.value === value) ||
+    specials.some((s) => s.value === value);
+
+  const control = typed ? (
+    <>
+      <input
+        id={id}
+        className="text-input mono"
+        list={options.length > 0 ? `${id}-options` : undefined}
+        value={value}
+        placeholder={
+          fallback
+            ? `Default — ${fallback}`
+            : (field.placeholder ?? `Default — whatever ${spec.label} picks`)
+        }
+        onChange={(event) => set(event.target.value)}
+      />
+      {options.length > 0 ? (
+        <datalist id={`${id}-options`}>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </datalist>
+      ) : null}
+    </>
+  ) : (
+    <select
+      id={id}
+      className="text-input select"
+      data-warn={special?.warn ? true : undefined}
+      value={value}
+      onChange={(event) => set(event.target.value)}
+    >
+      <option value="">{none}</option>
+      {groups.map((group) => {
+        const items = options
+          .filter((o) => (o.group ?? "") === group)
+          .map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label ?? o.value}
+            </option>
+          ));
+        return group ? (
+          <optgroup key={group} label={group}>
+            {items}
+          </optgroup>
+        ) : (
+          <Fragment key="">{items}</Fragment>
+        );
+      })}
+      {specials.map((s) => (
+        <option key={s.value} value={s.value}>
+          {s.label}
+        </option>
+      ))}
+      {value && !known ? <option value={value}>{value}</option> : null}
+    </select>
+  );
+
+  const hint =
+    options.length === 0 && field.emptyHint ? field.emptyHint : field.hint;
+
+  return (
+    <div className="field">
+      <label htmlFor={id}>{field.label}</label>
+      {field.suffix ? (
+        <div className="row">
+          {control}
+          <label className="check" title={field.suffix.hint}>
+            <input
+              type="checkbox"
+              checked={Boolean(settings.suffixes[field.key])}
+              disabled={!value}
+              onChange={(event) =>
+                patch({
+                  suffixes: {
+                    ...settings.suffixes,
+                    [field.key]: event.target.checked,
+                  },
+                })
+              }
+            />
+            {field.suffix.label}
+          </label>
+        </div>
+      ) : (
+        control
+      )}
+      {hint ? (
+        <p className="field-hint">
+          <Rich text={hint} />
+        </p>
+      ) : null}
+      {special?.warn ? (
+        <p className="field-hint field-warn">{special.warn}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Which of the box's MCP servers a session gets. */
+function McpControl({
+  spec,
+  field,
+  servers,
+  settings,
+  patch,
+}: {
+  spec: HarnessSpec;
+  field: McpField;
+  servers: McpServer[];
+  settings: FlagSettings;
+  patch: (next: Partial<FlagSettings>) => void;
+}) {
+  const id = `${spec.id}-${field.key}`;
+  /**
+   * Selections whose server is not on the box.
+   *
+   * A profile can outlive the server it named. Showing the leftover path as
+   * its own row keeps it visible and keeps it selected; dropping it silently
+   * would change what the profile does without saying so.
+   */
+  const strays = settings.mcpConfigs.filter(
+    (p) => !servers.some((s) => s.configPath === p),
+  );
+  const toggle = (configPath: string, on: boolean) =>
+    patch({
+      // Rebuilt from the discovered order rather than appended to, so the
+      // command line does not depend on the order boxes were clicked in.
+      mcpConfigs: [
+        ...servers
+          .map((s) => s.configPath)
+          .filter((p) =>
+            p === configPath ? on : settings.mcpConfigs.includes(p),
+          ),
+        ...strays.filter((p) => p !== configPath || on),
+      ],
+    });
+
+  return (
+    <div className="field">
+      <label htmlFor={id}>{field.label}</label>
+      <select
+        id={id}
+        className="text-input select"
+        value={settings.mcp}
+        onChange={(event) => patch({ mcp: event.target.value as McpMode })}
+      >
+        {MCP_MODES.map((mode) => (
+          <option key={mode.value} value={mode.value}>
+            {mode.label}
+          </option>
+        ))}
+      </select>
+
+      {settings.mcp === "pick" ? (
+        servers.length > 0 || strays.length > 0 ? (
+          <div className="mcp-list">
+            {servers.map((server) => (
+              <label
+                key={server.configPath}
+                className="check mcp-item"
+                // The row shows what a name cannot: two servers called the
+                // same thing are told apart by where they point and which file
+                // says so.
+                title={[server.detail, `defined in ${server.source}`]
+                  .filter(Boolean)
+                  .join("\n")}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.mcpConfigs.includes(server.configPath)}
+                  onChange={(event) =>
+                    toggle(server.configPath, event.target.checked)
+                  }
+                />
+                <span className="mcp-name">{server.name}</span>
+                <span className="mcp-meta">
+                  {server.transport} · {SCOPE_NOTE[server.scope]}
+                </span>
+              </label>
+            ))}
+            {strays.map((configPath) => (
+              <label
+                key={configPath}
+                className="check mcp-item"
+                title={configPath}
+              >
+                <input
+                  type="checkbox"
+                  checked
+                  onChange={() => toggle(configPath, false)}
+                />
+                <span className="mcp-name mcp-stray">
+                  {configPath.split("/").pop()}
+                </span>
+                <span className="mcp-meta field-warn">not on this box</span>
+              </label>
+            ))}
+          </div>
+        ) : field.emptyHint ? (
+          <p className="field-hint">
+            <Rich text={field.emptyHint} />
+          </p>
+        ) : null
+      ) : null}
+
+      {settings.mcp === "pick" &&
+      settings.mcpConfigs.length === 0 &&
+      servers.length > 0 ? (
+        <p className="field-hint">
+          Nothing picked, so this profile gets no MCP servers at all.
+        </p>
+      ) : null}
+      {settings.mcp === "none" ? (
+        <p className="field-hint">
+          Fewer tools to choose between, and a shorter prompt. Worth it for a
+          role that only reads and writes code.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Everything the editor shows for one harness, rendered from its spec.
+ *
+ * Selects and the MCP picker in spec order, then what the box said about
+ * itself, then the switches, then the advanced field with everything the
+ * controls do not own.
+ */
+function HarnessControls({
+  spec,
+  report,
+  servers,
+  settings,
+  patch,
+}: {
+  spec: HarnessSpec;
+  report: HarnessReport | null;
+  servers: McpServer[];
+  settings: FlagSettings;
+  patch: (next: Partial<FlagSettings>) => void;
+}) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const composed = useMemo(() => buildArgs(spec, settings), [spec, settings]);
+  const toggles = spec.fields.filter((f) => f.kind === "toggle");
+
+  // Facts about the box, not about this profile, so said rather than offered
+  // as controls that would imply a choice the profile does not have.
+  const notes: { label: string; text: string; warn?: boolean }[] = [];
+  if (report && !report.available) {
+    notes.push({
+      label: "Install",
+      text: `${spec.label} is not installed here, so this profile opens a window that closes immediately. \`vibe-os doctor\` has the install line.`,
+      warn: true,
+    });
+  } else if (report?.loggedIn === false && spec.login) {
+    notes.push({
+      label: "Account",
+      text: `Not logged in, so this profile opens a window that sits at the login prompt. Run \`${spec.login.fix}\` on the box.`,
+      warn: true,
+    });
+  }
+  notes.push(...(report?.notes ?? []));
+
+  return (
+    <>
+      {spec.fields.map((field) =>
+        field.kind === "select" ? (
+          <SelectControl
+            key={field.key}
+            spec={spec}
+            field={field}
+            report={report}
+            settings={settings}
+            patch={patch}
+          />
+        ) : field.kind === "mcp" ? (
+          <McpControl
+            key={field.key}
+            spec={spec}
+            field={field}
+            servers={servers}
+            settings={settings}
+            patch={patch}
+          />
+        ) : null,
+      )}
+
+      {notes.map((note) => (
+        <div className="field" key={`${note.label}:${note.text}`}>
+          <span className="field-label">{note.label}</span>
+          <p className="field-hint">
+            {note.warn ? (
+              <span className="field-warn">
+                <Rich text={note.text} />
+              </span>
+            ) : (
+              <Rich text={note.text} />
+            )}
+          </p>
+        </div>
+      ))}
+
+      {toggles.length > 0 ? (
+        <fieldset className="field">
+          <legend className="field-label">Options</legend>
+          <div className="switches">
+            {toggles.map((toggle) => (
+              <label key={toggle.flag} className="check" title={toggle.hint}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(settings.toggles[toggle.flag])}
+                  onChange={(event) =>
+                    patch({
+                      toggles: {
+                        ...settings.toggles,
+                        [toggle.flag]: event.target.checked,
+                      },
+                    })
+                  }
+                />
+                {toggle.label}
+              </label>
+            ))}
+          </div>
+          {toggles
+            .filter((t) => t.warn && settings.toggles[t.flag])
+            .map((t) => (
+              <p key={t.flag} className="field-hint field-warn">
+                {t.warn}
+              </p>
+            ))}
+        </fieldset>
+      ) : null}
+
+      <div className="field">
+        <button
+          type="button"
+          className="disclosure"
+          aria-expanded={showAdvanced}
+          onClick={() => setShowAdvanced((open) => !open)}
+        >
+          <span className="disclosure-caret" aria-hidden="true">
+            {showAdvanced ? "▾" : "▸"}
+          </span>
+          Advanced
+        </button>
+        {showAdvanced ? (
+          <>
+            <input
+              className="text-input mono"
+              value={settings.extra}
+              placeholder={spec.extraPlaceholder}
+              onChange={(event) => patch({ extra: event.target.value })}
+            />
+            <p className="field-hint">
+              Anything else to pass through. The controls above own their own
+              flags; whatever you put here is kept exactly as typed.
+            </p>
+            {/* A leading subcommand is not part of the stored flags. The
+                server puts it there, because the flags belong to it. */}
+            <p className="field-hint mono command-preview">
+              {commandLine(spec)} {composed || "(no arguments)"}
+            </p>
+          </>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 export function ProfilePanel({
   profile,
   palette,
   memoryDefaults,
-  harnessInfo,
-  hermesInfo,
-  cursorInfo,
+  harnesses,
   mcpServers,
   onSave,
   onDelete,
@@ -119,31 +518,30 @@ export function ProfilePanel({
     nameRef.current?.focus();
   }, []);
 
-  // The dropdowns and the advanced field are two views of one argv list. State
+  const spec = harnesses?.find((h) => h.id === harness);
+  const report = useHarnessReport(spec ? spec.id : null);
+
+  // The controls and the advanced field are two views of one argv list. State
   // is held in the structured shape and flattened on save, so the raw text can
   // never drift out of step with the controls above it.
   //
-  // Two shapes rather than one, because a profile stores one argv list and the
-  // two harnesses share no flags. Each reads the stored list only when the
-  // profile is already of its own kind: parsing a Claude profile's flags as
-  // Hermes ones would dump the lot into the advanced field, and switching the
-  // segment back would then have destroyed them. The other side seeds with its
-  // own sensible default instead, which is what a switch should land you on.
-  const argsFor = (kind: Harness, fallback: string[]) =>
-    profile?.harness === kind ? profile.args : fallback;
-  const [settings, setSettings] = useState<ClaudeSettings>(() =>
-    parseSettings(argsFor("claude", ["--dangerously-skip-permissions"])),
-  );
-  const [hermes, setHermes] = useState<HermesSettings>(() =>
-    parseHermesSettings(argsFor("hermes", ["--yolo"])),
-  );
-  // The Cursor seed carries --trust as well: every workspace is a fresh
-  // worktree, which to Cursor is an untrusted directory, and a role window
-  // should open on the conversation rather than on the trust prompt.
-  const [cursor, setCursor] = useState<CursorSettings>(() =>
-    parseCursorSettings(argsFor("cursor", ["--force", "--trust"])),
-  );
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // One shape per harness, kept as the segment is switched. Each reads the
+  // stored list only when the profile is already of its own kind: parsing a
+  // Claude profile's flags as Hermes ones would dump the lot into the advanced
+  // field, and switching back would then have destroyed them. The others seed
+  // with their own defaults instead, which is what a switch should land on.
+  const [edited, setEdited] = useState<Record<string, FlagSettings>>({});
+  const seed = (s: HarnessSpec): FlagSettings =>
+    profile?.harness === s.id ? parseArgs(s, profile.args) : initialSettings(s);
+  const settings = spec ? (edited[spec.id] ?? seed(spec)) : null;
+  const patch = (next: Partial<FlagSettings>) => {
+    if (!spec) return;
+    setEdited((all) => ({
+      ...all,
+      [spec.id]: { ...(all[spec.id] ?? seed(spec)), ...next },
+    }));
+  };
+
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   /**
@@ -169,51 +567,33 @@ export function ProfilePanel({
       field.setSelectionRange(caret, caret + label.length);
     });
   };
-  const patch = (next: Partial<ClaudeSettings>) =>
-    setSettings((s) => ({ ...s, ...next }));
-  const patchHermes = (next: Partial<HermesSettings>) =>
-    setHermes((s) => ({ ...s, ...next }));
-  const patchCursor = (next: Partial<CursorSettings>) =>
-    setCursor((s) => ({ ...s, ...next }));
-
-  /**
-   * Selections whose server is not on the box.
-   *
-   * A profile can outlive the server it named — someone runs `claude mcp
-   * remove`, or the workspace a local-scope server lived in is deleted. Showing
-   * the leftover path as its own row keeps it visible and keeps it selected;
-   * dropping it silently would change what the profile does without saying so.
-   */
-  const strays = useMemo(
-    () =>
-      settings.mcpConfigs.filter(
-        (p) => !mcpServers.some((s) => s.configPath === p),
-      ),
-    [settings.mcpConfigs, mcpServers],
-  );
-
-  const toggleMcp = (configPath: string, on: boolean) =>
-    patch({
-      // Rebuilt from the discovered order rather than appended to, so the
-      // command line does not depend on the order boxes were clicked in.
-      mcpConfigs: [
-        ...mcpServers
-          .map((s) => s.configPath)
-          .filter((p) =>
-            p === configPath ? on : settings.mcpConfigs.includes(p),
-          ),
-        ...strays.filter((p) => p !== configPath || on),
-      ],
-    });
 
   // For the custom harness there are no known flags to offer, so the whole
-  // argument list is free text and the structured controls stay out of it.
+  // argument list is free text and the structured controls stay out of it. The
+  // same goes for a harness whose spec has left the box: its stored argv is
+  // shown raw rather than lost.
   const [customArgs, setCustomArgs] = useState(detokenize(profile?.args ?? []));
-
-  const composed = useMemo(() => buildArgs(settings), [settings]);
-  const composedHermes = useMemo(() => buildHermesArgs(hermes), [hermes]);
-  const composedCursor = useMemo(() => buildCursorArgs(cursor), [cursor]);
   const blanks = useMemo(() => countBlanks(prompt), [prompt]);
+
+  const options = [
+    ...(harnesses ?? []).map((h) => ({
+      value: h.id,
+      label: h.label,
+      hint: `runs \`${commandLine(h)}\` in the worktree`,
+    })),
+    { value: SHELL, label: "Shell", hint: "a plain shell, tinted and named" },
+    { value: CUSTOM, label: "Custom", hint: "any command on the box" },
+  ];
+  // Still loading, or a harness whose spec file was removed. Either way the
+  // profile keeps the one it has until someone picks another.
+  const orphan =
+    harnesses !== null && !spec && harness !== SHELL && harness !== CUSTOM;
+  if (orphan)
+    options.push({
+      value: harness,
+      label: harness,
+      hint: "this harness is no longer defined on the box",
+    });
 
   const submit = async () => {
     setBusy(true);
@@ -223,17 +603,13 @@ export function ProfilePanel({
         name,
         color,
         harness,
-        command: harness === "custom" ? command : null,
+        command: harness === CUSTOM ? command : null,
         args:
-          harness === "claude"
-            ? composed
-            : harness === "hermes"
-              ? composedHermes
-              : harness === "cursor"
-                ? composedCursor
-                : harness === "custom"
-                  ? customArgs
-                  : "",
+          spec && settings
+            ? buildArgs(spec, settings)
+            : harness === SHELL
+              ? ""
+              : customArgs,
         prompt,
         memoryHigh,
         memoryMax,
@@ -325,13 +701,13 @@ export function ProfilePanel({
         <fieldset className="field">
           <legend className="field-label">Harness</legend>
           <div className="segmented">
-            {HARNESSES.map((option) => (
+            {options.map((option) => (
               <button
                 key={option.value}
                 type="button"
                 data-active={harness === option.value || undefined}
                 onClick={() => setHarness(option.value)}
-                title={option.hint}
+                title={option.hint.replaceAll("`", "")}
               >
                 {option.label}
               </button>
@@ -339,7 +715,7 @@ export function ProfilePanel({
           </div>
         </fieldset>
 
-        {harness === "custom" ? (
+        {harness === CUSTOM ? (
           <div className="field">
             <label htmlFor="profile-command">Command</label>
             <input
@@ -352,648 +728,20 @@ export function ProfilePanel({
           </div>
         ) : null}
 
-        {harness === "claude" ? (
-          <>
-            <div className="field">
-              <label htmlFor="profile-model">Model</label>
-              <div className="row">
-                <select
-                  id="profile-model"
-                  className="text-input select"
-                  value={settings.model}
-                  onChange={(event) => patch({ model: event.target.value })}
-                >
-                  <option value="">Default — whatever Claude picks</option>
-                  {/* Aliases first, and they are the right answer for almost
-                      every profile: they always mean the newest model of that
-                      tier, so a role written today does not quietly get worse
-                      as better models ship. */}
-                  <optgroup label="Latest of its tier">
-                    {(harnessInfo?.aliases ?? [])
-                      .filter((a) => a !== "default")
-                      .map((alias) => (
-                        <option key={alias} value={alias}>
-                          {alias[0].toUpperCase() + alias.slice(1)}
-                        </option>
-                      ))}
-                  </optgroup>
-                  {harnessInfo && harnessInfo.models.length > 0 ? (
-                    <optgroup label="Pinned to one version">
-                      {harnessInfo.models.map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null}
-                  {/* A model this build has not heard of still has to survive a
-                      round trip, so it is offered back rather than reset. */}
-                  {settings.model &&
-                  !(harnessInfo?.aliases ?? []).includes(settings.model) &&
-                  !(harnessInfo?.models ?? []).includes(settings.model) ? (
-                    <option value={settings.model}>{settings.model}</option>
-                  ) : null}
-                </select>
-                <label
-                  className="check"
-                  title="Ask for the million-token context window"
-                >
-                  <input
-                    type="checkbox"
-                    checked={settings.longContext}
-                    disabled={!settings.model}
-                    onChange={(event) =>
-                      patch({ longContext: event.target.checked })
-                    }
-                  />
-                  1M context
-                </label>
-              </div>
-            </div>
-
-            <div className="field">
-              <label htmlFor="profile-effort">Thinking</label>
-              <select
-                id="profile-effort"
-                className="text-input select"
-                value={settings.effort}
-                onChange={(event) => patch({ effort: event.target.value })}
-              >
-                <option value="">Default — whatever the harness picks</option>
-                {(harnessInfo?.effortLevels ?? []).map((level) => (
-                  <option key={level} value={level}>
-                    {effortLabel(level)}
-                  </option>
-                ))}
-                {/* Same round-trip guarantee the model dropdown makes: a level
-                    this build has not heard of is offered back, not reset. */}
-                {settings.effort &&
-                !(harnessInfo?.effortLevels ?? []).includes(settings.effort) ? (
-                  <option value={settings.effort}>{settings.effort}</option>
-                ) : null}
-              </select>
-              <p className="field-hint">
-                How long the session reasons before it acts. Higher is slower
-                and costs more tokens; it is worth it for work where being wrong
-                is expensive.
-              </p>
-            </div>
-
-            <div className="field">
-              <label htmlFor="profile-permission">Permissions</label>
-              <select
-                id="profile-permission"
-                className="text-input select"
-                data-warn={settings.permission === "skip" || undefined}
-                value={settings.permission}
-                onChange={(event) => patch({ permission: event.target.value })}
-              >
-                <option value="">Ask before each action</option>
-                {(harnessInfo?.permissionModes ?? []).map((mode) => (
-                  <option key={mode} value={mode}>
-                    {modeLabel(mode)}
-                  </option>
-                ))}
-                <option value="skip">
-                  Skip every check — no prompts at all
-                </option>
-              </select>
-              {settings.permission === "skip" ? (
-                <p className="field-hint field-warn">
-                  This session will not ask before editing, running or deleting
-                  anything. Reasonable on a box that is already a sandbox; think
-                  twice anywhere else.
-                </p>
-              ) : null}
-            </div>
-
-            <div className="field">
-              <label htmlFor="profile-mcp">MCP servers</label>
-              <select
-                id="profile-mcp"
-                className="text-input select"
-                value={settings.mcp}
-                onChange={(event) =>
-                  patch({ mcp: event.target.value as McpMode })
-                }
-              >
-                {MCP_MODES.map((mode) => (
-                  <option key={mode.value} value={mode.value}>
-                    {mode.label}
-                  </option>
-                ))}
-              </select>
-
-              {settings.mcp === "pick" ? (
-                mcpServers.length > 0 || strays.length > 0 ? (
-                  <div className="mcp-list">
-                    {mcpServers.map((server) => (
-                      <label
-                        key={server.configPath}
-                        className="check mcp-item"
-                        // The row shows what a name cannot: two servers called
-                        // the same thing are told apart by where they point and
-                        // which file says so.
-                        title={[server.detail, `defined in ${server.source}`]
-                          .filter(Boolean)
-                          .join("\n")}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={settings.mcpConfigs.includes(
-                            server.configPath,
-                          )}
-                          onChange={(event) =>
-                            toggleMcp(server.configPath, event.target.checked)
-                          }
-                        />
-                        <span className="mcp-name">{server.name}</span>
-                        <span className="mcp-meta">
-                          {server.transport} · {SCOPE_NOTE[server.scope]}
-                        </span>
-                      </label>
-                    ))}
-                    {strays.map((configPath) => (
-                      <label
-                        key={configPath}
-                        className="check mcp-item"
-                        title={configPath}
-                      >
-                        <input
-                          type="checkbox"
-                          checked
-                          onChange={() => toggleMcp(configPath, false)}
-                        />
-                        <span className="mcp-name mcp-stray">
-                          {configPath.split("/").pop()}
-                        </span>
-                        <span className="mcp-meta field-warn">
-                          not on this box
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="field-hint">
-                    Nothing configured yet. Add one on the box with{" "}
-                    <code>claude mcp add --scope user …</code> and it appears
-                    here. The scope matters: without it Claude files the server
-                    under whichever directory you ran the command in, and in a
-                    workspace that goes when the worktree does.
-                  </p>
-                )
-              ) : null}
-
-              {settings.mcp === "pick" &&
-              settings.mcpConfigs.length === 0 &&
-              mcpServers.length > 0 ? (
-                <p className="field-hint">
-                  Nothing picked, so this profile gets no MCP servers at all.
-                </p>
-              ) : null}
-              {settings.mcp === "none" ? (
-                <p className="field-hint">
-                  Fewer tools to choose between, and a shorter prompt. Worth it
-                  for a role that only reads and writes code.
-                </p>
-              ) : null}
-            </div>
-
-            <fieldset className="field">
-              <legend className="field-label">Options</legend>
-              <div className="switches">
-                {TOGGLES.map((toggle) => (
-                  <label
-                    key={toggle.flag}
-                    className="check"
-                    title={toggle.hint}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={Boolean(settings.toggles[toggle.flag])}
-                      onChange={(event) =>
-                        patch({
-                          toggles: {
-                            ...settings.toggles,
-                            [toggle.flag]: event.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    {toggle.label}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-
-            <div className="field">
-              <button
-                type="button"
-                className="disclosure"
-                aria-expanded={showAdvanced}
-                onClick={() => setShowAdvanced((open) => !open)}
-              >
-                <span className="disclosure-caret" aria-hidden="true">
-                  {showAdvanced ? "\u25be" : "\u25b8"}
-                </span>
-                Advanced
-              </button>
-              {showAdvanced ? (
-                <>
-                  <input
-                    className="text-input mono"
-                    value={settings.extra}
-                    placeholder="--append-system-prompt &quot;…&quot;"
-                    onChange={(event) => patch({ extra: event.target.value })}
-                  />
-                  <p className="field-hint">
-                    Anything else to pass through. The controls above own their
-                    own flags; whatever you put here is kept exactly as typed.
-                  </p>
-                  <p className="field-hint mono command-preview">
-                    claude {composed || "(no arguments)"}
-                  </p>
-                </>
-              ) : null}
-            </div>
-          </>
+        {spec && settings ? (
+          <HarnessControls
+            // Remounts on a switch, so the advanced disclosure starts closed
+            // for each harness rather than carrying over.
+            key={spec.id}
+            spec={spec}
+            report={report}
+            servers={mcpServers}
+            settings={settings}
+            patch={patch}
+          />
         ) : null}
 
-        {harness === "hermes" ? (
-          <>
-            {/* Typed, not picked. `hermes model` is an interactive wizard with
-                no listing mode, so there is nothing authoritative to read off
-                the box — the datalists carry what it is already configured for
-                and everything else is free text. */}
-            <div className="field">
-              <label htmlFor="hermes-model">Model</label>
-              <input
-                id="hermes-model"
-                className="text-input mono"
-                list="hermes-models"
-                value={hermes.model}
-                placeholder={
-                  hermesInfo?.defaultModel
-                    ? `Default — ${hermesInfo.defaultModel}`
-                    : "Default — whatever Hermes is set to"
-                }
-                onChange={(event) => patchHermes({ model: event.target.value })}
-              />
-              <datalist id="hermes-models">
-                {hermesInfo?.defaultModel ? (
-                  <option value={hermesInfo.defaultModel} />
-                ) : null}
-              </datalist>
-            </div>
-
-            <div className="field">
-              <label htmlFor="hermes-provider">Provider</label>
-              <input
-                id="hermes-provider"
-                className="text-input mono"
-                list="hermes-providers"
-                value={hermes.provider}
-                placeholder={
-                  hermesInfo?.defaultProvider
-                    ? `Default — ${hermesInfo.defaultProvider}`
-                    : "Default — whatever Hermes is set to"
-                }
-                onChange={(event) =>
-                  patchHermes({ provider: event.target.value })
-                }
-              />
-              <datalist id="hermes-providers">
-                {(hermesInfo?.providers ?? []).map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
-              <p className="field-hint">
-                Providers this box is set up with. Add one with{" "}
-                <code>hermes model</code> on the box and it appears here.
-              </p>
-            </div>
-
-            <div className="field">
-              <label htmlFor="hermes-reasoning">Thinking</label>
-              <select
-                id="hermes-reasoning"
-                className="text-input select"
-                value={hermes.reasoning}
-                onChange={(event) =>
-                  patchHermes({ reasoning: event.target.value })
-                }
-              >
-                <option value="">Default — whatever Hermes picks</option>
-                {(hermesInfo?.reasoningLevels ?? []).map((level) => (
-                  <option key={level} value={level}>
-                    {level}
-                  </option>
-                ))}
-                {/* Same round-trip guarantee the Claude side makes: a level
-                    this build has not heard of is offered back, not reset. */}
-                {hermes.reasoning &&
-                !(hermesInfo?.reasoningLevels ?? []).includes(
-                  hermes.reasoning,
-                ) ? (
-                  <option value={hermes.reasoning}>{hermes.reasoning}</option>
-                ) : null}
-              </select>
-              <p className="field-hint">
-                Read off <code>hermes chat --help</code> on the box, so the
-                ladder follows Hermes' releases.
-              </p>
-            </div>
-
-            <div className="field">
-              <label htmlFor="hermes-interface">Interface</label>
-              <select
-                id="hermes-interface"
-                className="text-input select"
-                value={hermes.interface}
-                onChange={(event) =>
-                  patchHermes({ interface: event.target.value as Interface })
-                }
-              >
-                {INTERFACES.map((value) => (
-                  <option key={value || "default"} value={value}>
-                    {interfaceLabel(value)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Where the browser tools land is a property of the box, not of
-                this profile: Hermes reads its CDP target from config.yaml and
-                has no flag for it. Said rather than offered as a switch, so the
-                editor cannot imply a choice it does not have. */}
-            <div className="field">
-              <span className="field-label">Browser tools</span>
-              <p className="field-hint">
-                {hermesInfo?.browser.connected ? (
-                  <>
-                    Driving the box's Chrome on{" "}
-                    <code>127.0.0.1:{hermesInfo.browser.cdpPort}</code>. Watch
-                    it over VNC.
-                    {hermesInfo.browser.browserUse ? null : (
-                      <>
-                        {" "}
-                        <span className="field-warn">
-                          No browser-use CLI, so this falls back to the twelve
-                          built-in tools.
-                        </span>
-                      </>
-                    )}
-                  </>
-                ) : hermesInfo?.available ? (
-                  <span className="field-warn">
-                    Not pointed at this box's browser. Run{" "}
-                    <code>vibe-os connect-hermes</code> on the box.
-                  </span>
-                ) : (
-                  <span className="field-warn">
-                    Hermes is not installed here, so this profile opens a window
-                    that closes immediately. <code>vibe-os doctor</code> has the
-                    install line.
-                  </span>
-                )}
-              </p>
-            </div>
-
-            <fieldset className="field">
-              <legend className="field-label">Options</legend>
-              <div className="switches">
-                {HERMES_TOGGLES.map((toggle) => (
-                  <label
-                    key={toggle.flag}
-                    className="check"
-                    title={toggle.hint}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={Boolean(hermes.toggles[toggle.flag])}
-                      onChange={(event) =>
-                        patchHermes({
-                          toggles: {
-                            ...hermes.toggles,
-                            [toggle.flag]: event.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    {toggle.label}
-                  </label>
-                ))}
-              </div>
-              {hermes.toggles["--yolo"] ? (
-                <p className="field-hint field-warn">
-                  This session will not ask before running anything. Reasonable
-                  on a box that is already a sandbox; think twice anywhere else.
-                </p>
-              ) : null}
-            </fieldset>
-
-            <div className="field">
-              <button
-                type="button"
-                className="disclosure"
-                aria-expanded={showAdvanced}
-                onClick={() => setShowAdvanced((open) => !open)}
-              >
-                <span className="disclosure-caret" aria-hidden="true">
-                  {showAdvanced ? "▾" : "▸"}
-                </span>
-                Advanced
-              </button>
-              {showAdvanced ? (
-                <>
-                  <input
-                    className="text-input mono"
-                    value={hermes.extra}
-                    placeholder="--append-system-prompt &quot;…&quot;"
-                    onChange={(event) =>
-                      patchHermes({ extra: event.target.value })
-                    }
-                  />
-                  <p className="field-hint">
-                    Anything else to pass through. The controls above own their
-                    own flags; whatever you put here is kept exactly as typed.
-                  </p>
-                  {/* `chat` is not part of the stored flags. The server puts it
-                      there, because --model belongs to that subcommand. */}
-                  <p className="field-hint mono command-preview">
-                    hermes chat {composedHermes || "(no arguments)"}
-                  </p>
-                </>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-
-        {harness === "cursor" ? (
-          <>
-            {/* A real dropdown when the list could be read, free text when it
-                could not. `cursor-agent models` is a proper listing mode — the
-                first harness to have one — so when it answers, the select is
-                authoritative. It started as a type-ahead datalist, which
-                filters its suggestions by the field's current text: a profile
-                already set to `auto` showed exactly one suggestion — `auto` —
-                and read as an empty list twice in one afternoon. */}
-            <div className="field">
-              <label htmlFor="cursor-model">Model</label>
-              {(cursorInfo?.models.length ?? 0) > 0 ? (
-                <>
-                  <select
-                    id="cursor-model"
-                    className="text-input select"
-                    value={cursor.model}
-                    onChange={(event) =>
-                      patchCursor({ model: event.target.value })
-                    }
-                  >
-                    <option value="">
-                      {cursorInfo?.defaultModel
-                        ? `Default — ${cursorInfo.defaultModel}`
-                        : "Default — whatever Cursor picks"}
-                    </option>
-                    {/* Cursor's own order, which leads with auto and its
-                        recommendations — a better sort than alphabetical for
-                        a 200-entry list. */}
-                    {(cursorInfo?.models ?? []).map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                    {/* Same round-trip guarantee the other harnesses make: a
-                        model this account no longer lists is offered back
-                        rather than reset. */}
-                    {cursor.model &&
-                    !(cursorInfo?.models ?? []).includes(cursor.model) ? (
-                      <option value={cursor.model}>{cursor.model}</option>
-                    ) : null}
-                  </select>
-                  <p className="field-hint">
-                    Read off <code>cursor-agent models</code>, so the list
-                    follows your account.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <input
-                    id="cursor-model"
-                    className="text-input mono"
-                    value={cursor.model}
-                    placeholder="Default — whatever Cursor picks"
-                    onChange={(event) =>
-                      patchCursor({ model: event.target.value })
-                    }
-                  />
-                  <p className="field-hint">
-                    Nothing to offer — <code>cursor-agent models</code> could
-                    not be read, which usually means the box is not logged in.
-                    Typed ids still work.
-                  </p>
-                </>
-              )}
-            </div>
-
-            {/* Login is a property of the box, not of this profile: the CLI
-                holds one credential per user. Said rather than offered as a
-                control, like the Hermes browser note above. */}
-            {cursorInfo?.available && cursorInfo.loggedIn === false ? (
-              <div className="field">
-                <span className="field-label">Account</span>
-                <p className="field-hint">
-                  <span className="field-warn">
-                    Not logged in, so this profile opens a window that sits at
-                    the login prompt. Run <code>cursor-agent login</code> on the
-                    box.
-                  </span>
-                </p>
-              </div>
-            ) : null}
-            {cursorInfo && !cursorInfo.available ? (
-              <div className="field">
-                <span className="field-label">Account</span>
-                <p className="field-hint">
-                  <span className="field-warn">
-                    Cursor is not installed here, so this profile opens a window
-                    that closes immediately. <code>vibe-os doctor</code> has the
-                    install line.
-                  </span>
-                </p>
-              </div>
-            ) : null}
-
-            <fieldset className="field">
-              <legend className="field-label">Options</legend>
-              <div className="switches">
-                {CURSOR_TOGGLES.map((toggle) => (
-                  <label
-                    key={toggle.flag}
-                    className="check"
-                    title={toggle.hint}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={Boolean(cursor.toggles[toggle.flag])}
-                      onChange={(event) =>
-                        patchCursor({
-                          toggles: {
-                            ...cursor.toggles,
-                            [toggle.flag]: event.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    {toggle.label}
-                  </label>
-                ))}
-              </div>
-              {cursor.toggles["--force"] ? (
-                <p className="field-hint field-warn">
-                  This session will not ask before editing or running anything.
-                  Reasonable on a box that is already a sandbox; think twice
-                  anywhere else.
-                </p>
-              ) : null}
-            </fieldset>
-
-            <div className="field">
-              <button
-                type="button"
-                className="disclosure"
-                aria-expanded={showAdvanced}
-                onClick={() => setShowAdvanced((open) => !open)}
-              >
-                <span className="disclosure-caret" aria-hidden="true">
-                  {showAdvanced ? "▾" : "▸"}
-                </span>
-                Advanced
-              </button>
-              {showAdvanced ? (
-                <>
-                  <input
-                    className="text-input mono"
-                    value={cursor.extra}
-                    placeholder="--resume &quot;…&quot;"
-                    onChange={(event) =>
-                      patchCursor({ extra: event.target.value })
-                    }
-                  />
-                  <p className="field-hint">
-                    Anything else to pass through. The controls above own their
-                    own flags; whatever you put here is kept exactly as typed.
-                  </p>
-                  <p className="field-hint mono command-preview">
-                    cursor-agent {composedCursor || "(no arguments)"}
-                  </p>
-                </>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-
-        {harness === "custom" ? (
+        {harness === CUSTOM || orphan ? (
           <div className="field">
             <label htmlFor="profile-args">Arguments</label>
             <input
@@ -1111,7 +859,9 @@ export function ProfilePanel({
             <button
               type="button"
               className="btn btn-primary"
-              disabled={busy}
+              // Until the harness list arrives there are no controls to
+              // compose a command line from.
+              disabled={busy || harnesses === null}
               onClick={() => void submit()}
             >
               {busy ? "saving…" : profile ? "Save" : "Create"}
