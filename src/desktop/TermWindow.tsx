@@ -53,6 +53,8 @@ export interface TermWindowProps {
   onPopOut: (id: string) => boolean;
   /** Hands the terminal to a real terminal, or takes it back with null. */
   onHandoff: (id: string, mode: "ssh" | null) => void;
+  /** Starts a session in an interrupted window, resuming its conversation or not. */
+  onBringBack: (id: string, resume: boolean) => void;
   onReclaim: (id: string) => void;
   focused: boolean;
   view: Viewport;
@@ -88,6 +90,7 @@ export const TermWindow = memo(function TermWindow({
   poppedTo,
   onPopOut,
   onHandoff,
+  onBringBack,
   onReclaim,
   focused,
   view,
@@ -239,6 +242,13 @@ export const TermWindow = memo(function TermWindow({
     profile && profile.prompt.trim() !== "" && !win.promptDone,
   );
   const poppedOut = poppedTo !== null;
+  // Held until someone says what to bring back: mounting the terminal would log
+  // in, and logging in starts a session.
+  const waiting = win.interrupted && !poppedOut;
+  const resumable =
+    profile?.harness === "claude" ||
+    profile?.harness === "hermes" ||
+    profile?.harness === "cursor";
 
   /** Takes the terminal back from wherever it went. */
   const reclaim = () =>
@@ -251,7 +261,7 @@ export const TermWindow = memo(function TermWindow({
       // A popped-out window has no connection of its own, so its last status is
       // meaningless here — reporting it would leave the dot pulsing at
       // "connecting" forever for something that is not connecting.
-      data-status={poppedOut ? "popped" : win.status}
+      data-status={poppedOut ? "popped" : waiting ? "interrupted" : win.status}
       data-dragging={dragging || undefined}
       data-profile={profile ? "" : undefined}
       style={{
@@ -290,7 +300,9 @@ export const TermWindow = memo(function TermWindow({
             ? "in a terminal"
             : poppedTo === "browser"
               ? "popped out"
-              : STATUS_LABEL[win.status]}
+              : waiting
+                ? "interrupted"
+                : STATUS_LABEL[win.status]}
         </span>
         <span className="win-buttons">
           <span className="win-menu-anchor" ref={menuAnchor}>
@@ -405,6 +417,31 @@ export const TermWindow = memo(function TermWindow({
         */}
         {poppedTo === "ssh" ? (
           <SshHandoff windowId={win.id} onReclaim={reclaim} />
+        ) : waiting ? (
+          <div className="popped">
+            <p className="popped-line">This window's session was stopped.</p>
+            <div className="restore-actions">
+              {resumable ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => onBringBack(win.id, true)}
+                >
+                  Resume conversation
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => onBringBack(win.id, false)}
+              >
+                {resumable ? "Start fresh" : "Reopen"}
+              </button>
+            </div>
+            <p className="popped-hint">
+              The machine restarted, or something ended it from outside.
+            </p>
+          </div>
         ) : poppedTo === "browser" ? (
           <div className="popped">
             <p className="popped-line">Open in its own window.</p>

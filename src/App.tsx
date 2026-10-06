@@ -136,6 +136,7 @@ function Desktop() {
     openProfile,
     markPromptDone,
     handoff,
+    bringBack,
     close,
     restart,
     move,
@@ -465,6 +466,7 @@ function Desktop() {
                   }
                   onPopOut={openPopout}
                   onHandoff={handoff}
+                  onBringBack={bringBack}
                   onReclaim={popouts.reclaim}
                   focused={win.id === focused}
                   view={view}

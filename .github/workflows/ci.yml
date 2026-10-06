@@ -42,5 +42,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Tests that probe a real session skip themselves without it.
+      - name: Install dtach
+        run: sudo apt-get install -y dtach
+
       - name: Test
         run: bun test

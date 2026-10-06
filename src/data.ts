@@ -91,6 +91,11 @@ export interface WindowRow {
   handoffAt: number | null;
   /** A terminal has actually attached, so its departure is reaped at once. */
   handoffSeen: boolean;
+  /**
+   * 'ask' when the session died under the window, by a restart or a kill, and
+   * the desktop should offer to bring it back before starting a new one.
+   */
+  restore: "ask" | "resume" | null;
   createdAt: number;
 }
 
@@ -451,6 +456,9 @@ export const windowApi = {
    */
   handoff: (id: string, mode: "ssh" | null) =>
     send<WindowRow>(`/api/windows/${id}/handoff`, "POST", { mode }),
+  /** Brings back a window whose session died, resuming its conversation or not. */
+  restore: (id: string, resume: boolean) =>
+    send<WindowRow>(`/api/windows/${id}/restore`, "POST", { resume }),
 };
 
 export type {

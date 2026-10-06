@@ -63,7 +63,9 @@ import {
   deleteWindow,
   getWindow,
   listWindows,
+  restoreWindow,
   sessionNameFor,
+  takeResume,
   updateWindow,
 } from "./windows.ts";
 
@@ -401,6 +403,20 @@ export function createApi(deps: ApiDeps) {
       return json(getWindow(db, id) ?? { ok: true });
     }
 
+    // The answer to "bring this window back?" after its session died under it.
+    // Recorded here and acted on by the next certificate, which is what creates
+    // the session.
+    const restoreMatch = /^\/api\/windows\/([^/]+)\/restore$/.exec(p);
+    if (restoreMatch && req.method === "POST") {
+      const id = decodeURIComponent(restoreMatch[1]);
+      if (!ID_PATTERN.test(id)) return badId("window");
+      const body = await readJson<{ resume?: unknown }>(req);
+      if (typeof body.resume !== "boolean")
+        return json({ error: "resume must be true or false" }, 400);
+      const row = restoreWindow(db, id, body.resume);
+      return row ? json(row) : json({ error: "unknown window" }, 404);
+    }
+
     const windowMatch = /^\/api\/windows\/([^/]+)$/.exec(p);
     if (windowMatch) {
       const id = decodeURIComponent(windowMatch[1]);
@@ -469,6 +485,7 @@ export function createApi(deps: ApiDeps) {
           target.cwd,
           config,
           profile,
+          { resume: takeResume(db, windowId) },
         );
         const cert = await ca.signUserCert({
           publicKey,

@@ -20,7 +20,7 @@
 // process that owns the pty is `dtach -n <socket> …` and every attachment is
 // `dtach -a <socket>`. They differ in argv, so the two are never confused.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readdir, rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import { and, desc, eq } from "drizzle-orm";
@@ -189,41 +189,86 @@ export function commandFor(
   db: Db,
   config: Config,
   target: AttachTarget,
+  opts?: { resume?: boolean },
 ): string | undefined {
   const profile = target.profileId
     ? getProfile(db, target.profileId)
     : undefined;
-  return windowCommand(target.session, target.cwd, config, profile);
+  return windowCommand(target.session, target.cwd, config, profile, opts);
 }
 
 // ── talking to dtach ─────────────────────────────────────────────────────────
 
-/** Sessions with something still holding the other end of their socket. */
-export async function liveSessions(config: Config): Promise<Set<string>> {
+/**
+ * Whether something still holds the other end of a session socket.
+ *
+ * Writing nothing to it succeeds only then, which is what separates a live
+ * session from a socket a killed one left behind. "Nothing" has to be an empty
+ * stdin: `dtach -p` sends stdin until EOF, and execFile hands it a pipe that is
+ * never closed, so every probe ran to its timeout and read as dead.
+ */
+function answers(sock: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("dtach", ["-p", sock], {
+      stdio: "ignore",
+      timeout: 10_000,
+    });
+    child.on("error", () => resolve(false));
+    child.on("exit", (code) => resolve(code === 0));
+  });
+}
+
+/**
+ * Every socket in the sessions directory, split by whether anything answers.
+ *
+ * A dead one is a session that died without its harness exiting: dtach removes
+ * its socket when the program underneath exits, and only a kill (a reboot, the
+ * OOM killer) leaves the file behind with nothing holding it.
+ */
+async function probeSessions(
+  config: Config,
+): Promise<{ live: Set<string>; dead: Set<string> }> {
+  const live = new Set<string>();
+  const dead = new Set<string>();
   try {
     const dir = `${config.stateDir}/sessions`;
     const names = await readdir(dir);
-    const live = new Set<string>();
     await Promise.all(
       names
         .filter((n) => n.endsWith(".sock"))
         .map(async (n) => {
-          // Writing nothing to the socket succeeds only if something is still
-          // holding the other end, which is what separates a live session from
-          // a socket a crashed one left behind.
-          const ok = await run("dtach", ["-p", `${dir}/${n}`], {
-            timeout: 10_000,
-          })
-            .then(() => true)
-            .catch(() => false);
-          if (ok) live.add(n.replace(/\.sock$/, ""));
+          const ok = await answers(`${dir}/${n}`);
+          (ok ? live : dead).add(n.replace(/\.sock$/, ""));
         }),
     );
-    return live;
   } catch {
     // No sessions directory yet: nothing has ever been opened.
-    return new Set();
   }
+  return { live, dead };
+}
+
+/** Sessions with something still holding the other end of their socket. */
+export async function liveSessions(config: Config): Promise<Set<string>> {
+  return (await probeSessions(config)).live;
+}
+
+/**
+ * Windows whose session died under them rather than ending.
+ *
+ * Meant for server start, before any browser logs in: the first login to a
+ * window removes its dead socket on the way to creating a new session, and
+ * with it the only evidence there was something to bring back.
+ */
+export async function interruptedWindows(
+  db: Db,
+  config: Config,
+): Promise<string[]> {
+  if (!config.sessions) return [];
+  const { dead } = await probeSessions(config);
+  if (dead.size === 0) return [];
+  return listTargets(db)
+    .filter((t) => dead.has(t.session))
+    .map((t) => t.windowId);
 }
 
 /**

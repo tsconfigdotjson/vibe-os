@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { Server } from "bun";
 import { Acme } from "./acme.ts";
 import { createApi } from "./api.ts";
+import { interruptedWindows } from "./attach.ts";
 import { createGate, hostAllowed, hostName, originAllowed } from "./auth.ts";
 import {
   type BridgeData,
@@ -27,6 +28,7 @@ import {
 } from "./ssh-ca.ts";
 import { createStaticServer } from "./static.ts";
 import { WallpaperStore } from "./wallpapers.ts";
+import { markInterrupted } from "./windows.ts";
 
 const run = promisify(execFile);
 
@@ -229,6 +231,19 @@ export async function startServer(config: Config): Promise<RunningServer> {
   // Warm the project list before the first request so the picker is populated
   // on the very first page load rather than one poll later.
   await scanProjects(db, config);
+
+  // Before listening: the first browser to log in to one of these windows would
+  // otherwise quietly start a fresh session in it.
+  const interrupted = markInterrupted(
+    db,
+    await interruptedWindows(db, config).catch(() => []),
+  );
+  if (interrupted > 0)
+    log.info(
+      interrupted === 1
+        ? "1 window lost its session; the desktop will offer to bring it back"
+        : `${interrupted} windows lost their sessions; the desktop will offer to bring them back`,
+    );
 
   // Warmed here, deliberately not awaited: asking the Claude binary what it
   // supports costs a few seconds of its startup, and the answer is only needed

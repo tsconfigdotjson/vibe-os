@@ -58,6 +58,8 @@ export interface WindowState {
   promptDone: boolean;
   /** 'ssh' while a real terminal holds this window's session. */
   handoff: "ssh" | null;
+  /** Its session died under it, and it waits to be asked back. */
+  interrupted: boolean;
   status: SshStatus;
   detail?: string;
   title?: string;
@@ -182,6 +184,7 @@ export function useWindows(workspaceId: string | null) {
       profileId: r.profileId,
       promptDone: r.promptDone,
       handoff: r.handoff ?? null,
+      interrupted: r.restore === "ask",
       status: "loading" as SshStatus,
       ...runtime[r.id],
     }));
@@ -444,6 +447,29 @@ export function useWindows(workspaceId: string | null) {
     [applyRow, mutate, workspaceId],
   );
 
+  /**
+   * Starts a new session in a window whose last one died under it.
+   *
+   * Waits for the server before showing the terminal, for the same reason
+   * taking a handoff back does: mounting it is what logs in, and the login is
+   * what reads the answer.
+   */
+  const bringBack = useCallback(
+    async (id: string, resume: boolean) => {
+      try {
+        const row = await windowApi.restore(id, resume);
+        await mutate(
+          (current) =>
+            (current ?? []).map((r) => (r.id === id ? { ...r, ...row } : r)),
+          { revalidate: false },
+        );
+      } catch {
+        void mutate();
+      }
+    },
+    [mutate],
+  );
+
   const setStatus = useCallback(
     (id: string, status: SshStatus, detail?: string) => {
       patchRuntime(id, {
@@ -486,6 +512,7 @@ export function useWindows(workspaceId: string | null) {
     openProfile,
     markPromptDone,
     handoff,
+    bringBack,
     close,
     restart,
     move,

@@ -82,6 +82,31 @@ function cursorMcpLink(cwd: string, stateDir: string): string {
 }
 
 /**
+ * Flags that already pick a conversation, in any harness that resumes.
+ *
+ * `-c` and `-r` are the short forms in Claude and Hermes; Cursor has no short
+ * form. A profile with "Resume last conversation" switched on is already doing
+ * what resuming would add.
+ */
+const PICKS_CONVERSATION = new Set(["--continue", "-c", "--resume", "-r"]);
+
+/**
+ * Whether a profile's harness can pick its last conversation back up.
+ *
+ * All three agents spell it `--continue`, and all three mean the most recent
+ * conversation in the working directory. That is the window's own conversation
+ * as long as it is the only one of its harness in the worktree, which is what
+ * opening a profile normally guarantees.
+ */
+export function canResume(profile: Profile | null | undefined): boolean {
+  return (
+    profile?.harness === "claude" ||
+    profile?.harness === "hermes" ||
+    profile?.harness === "cursor"
+  );
+}
+
+/**
  * The command a profile window starts its pane with.
  *
  * **Quitting the harness ends the window.** tmux ends a session when its last
@@ -105,6 +130,8 @@ export function harnessCommand(
   profile: Profile,
   /** The worktree it runs in and the state dir, for the Cursor MCP link. */
   where: { cwd: string; stateDir: string },
+  /** Pick up the last conversation instead of starting a new one. */
+  resume = false,
 ): string | undefined {
   const executable =
     profile.harness === "claude"
@@ -127,7 +154,13 @@ export function harnessCommand(
    * delete in the editor: without it every model selection is silently ignored.
    */
   const leading = profile.harness === "hermes" ? ["chat"] : [];
-  const argv = [executable, ...leading, ...profile.args]
+  const trailing =
+    resume &&
+    canResume(profile) &&
+    !profile.args.some((a) => PICKS_CONVERSATION.has(a.split("=")[0]))
+      ? ["--continue"]
+      : [];
+  const argv = [executable, ...leading, ...profile.args, ...trailing]
     .map(shellQuote)
     .join(" ");
 
@@ -210,14 +243,17 @@ export function windowCommand(
   cwd: string,
   config: Config,
   profile?: Profile | null,
-  /** `forDisplay` drops the locking wrapper, leaving the readable essentials. */
-  opts?: { forDisplay?: boolean },
+  /**
+   * `forDisplay` drops the locking wrapper, leaving the readable essentials.
+   * `resume` only matters if the session is created rather than attached to.
+   */
+  opts?: { forDisplay?: boolean; resume?: boolean },
 ): string | undefined {
   if (!config.sessions) return undefined;
 
   const sock = socketPath(config, session);
   const harness = profile
-    ? harnessCommand(profile, { cwd, stateDir: config.stateDir })
+    ? harnessCommand(profile, { cwd, stateDir: config.stateDir }, opts?.resume)
     : undefined;
   // Falls back to the login shell, so a window with no profile is still a
   // session that survives a reload rather than a bare ssh command.
