@@ -812,7 +812,8 @@ Nothing is lost by that restart. Two things it does not pick up:
 
 A reboot is different: dtach sessions do not survive one. Afterwards, each
 window whose session was cut off offers **Resume conversation**, which restarts
-Claude, Hermes or Cursor with `--continue`, or **Start fresh**. A plain shell
+the agent on its last conversation (`--continue`, or `codex resume --last`), or
+**Start fresh**. A plain shell
 window offers **Reopen**. The same offer appears for a session the OOM killer
 ended, the next time the server starts.
 

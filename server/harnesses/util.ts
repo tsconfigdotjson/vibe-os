@@ -8,9 +8,29 @@ import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { HarnessReport, HarnessSpec } from "../../shared/harness.ts";
 
-export const run = promisify(execFile);
-
 export const home = process.env.HOME ?? "";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The PATH a window's harness gets, so discovery sees what a window will.
+ *
+ * A window exports `$HOME/.local/bin` ahead of everything (see `launch` in
+ * `session.ts`). Without the same here, a CLI that is a Node script, like
+ * Codex, resolves but cannot start when `node` itself lives in
+ * `~/.local/bin`: `vibe-os doctor` over a plain `ssh host 'command'` called
+ * it installed with no version and could not read its login.
+ */
+const env = {
+  ...process.env,
+  PATH: `${home}/.local/bin:${process.env.PATH ?? ""}`,
+};
+
+export const run = (
+  file: string,
+  args: string[],
+  opts: { timeout?: number; maxBuffer?: number } = {},
+) => execFileAsync(file, args, { ...opts, env, encoding: "utf8" });
 
 /** `~/x` to `$HOME/x`, for the paths a spec lists. */
 export const expandHome = (p: string): string =>
