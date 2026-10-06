@@ -14,7 +14,7 @@ import {
 } from "./bridge.ts";
 import { type Config, savePersisted } from "./config.ts";
 import { openDb } from "./db.ts";
-import { discoverClaude, discoverCursor, discoverHermes } from "./harness.ts";
+import { discover, harnesses } from "./harness.ts";
 import { json } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { ensureWasm, ensureWebRoot } from "./preflight.ts";
@@ -245,17 +245,11 @@ export async function startServer(config: Config): Promise<RunningServer> {
         : `${interrupted} windows lost their sessions; the desktop will offer to bring them back`,
     );
 
-  // Warmed here, deliberately not awaited: asking the Claude binary what it
-  // supports costs a few seconds of its startup, and the answer is only needed
-  // the first time someone opens the profile editor. Doing it now means it is
-  // ready by then; doing it there would make the panel hang on first open.
-  void discoverClaude();
-  // Hermes is Python and answers three `config get` calls, so it is slower
-  // still. Same reasoning, more of it.
-  void discoverHermes();
-  // Cursor asks its own service for the model list and login state, so this
-  // one can wait on the network rather than a binary. Same reasoning again.
-  void discoverCursor();
+  // Warmed here, deliberately not awaited: asking a binary what it supports
+  // costs seconds of its startup (Hermes is Python; Cursor goes to the
+  // network), and the answer is only needed the first time someone opens the
+  // profile editor. Doing it now means it is ready by then.
+  for (const adapter of harnesses()) void discover(adapter.spec.id);
 
   const gate = createGate(config.token);
   // Only consulted without a token, so only worth the Tailscale probe then.

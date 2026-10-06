@@ -10,13 +10,25 @@
  * Types only, deliberately. Every import of this file is an `import type` and
  * erases at build time, so nothing here has to be packaged, compiled into the
  * standalone binary, or resolved at runtime by either side. Runtime values that
- * happen to describe the same things — `PALETTE`, `HARNESSES` — stay in
- * `server/profiles.ts`, where they are used, and are shipped to the browser as
- * data on `ClientConfig` rather than duplicated as a second literal.
+ * happen to describe the same things — `PALETTE`, the harness specs — stay on
+ * the server, where they are used, and are shipped to the browser as data
+ * rather than duplicated as a second literal.
  */
 
-/** Which program a profile launches. */
-export type Harness = "claude" | "hermes" | "cursor" | "shell" | "custom";
+/**
+ * Which program a profile launches: a harness id from `GET /api/harnesses`,
+ * or `shell` or `custom`.
+ */
+export type Harness = string;
+
+export type {
+  ChoiceOption,
+  Field,
+  FlagSettings,
+  HarnessReport,
+  HarnessSpec,
+  McpMode,
+} from "./harness";
 
 /** Whether a window has been handed off to a real terminal. */
 export type Handoff = "ssh" | null;
@@ -68,99 +80,6 @@ export interface MemoryReport {
     string,
     { bytes: number; high: number | null; max: number | null; scoped: boolean }
   >;
-}
-
-/** `GET /api/harness/claude` — what the installed Claude CLI accepts. */
-export interface HarnessInfo {
-  available: boolean;
-  version: string | null;
-  /**
-   * Aliases like `opus`, which always resolve to the newest model of that tier.
-   *
-   * These are the right default for a profile precisely because they do not
-   * pin: a role called "Backend Manager" wants the best Opus, not the one that
-   * was current the day it was written.
-   */
-  aliases: string[];
-  /** Full model ids, for pinning a profile to one exact model. */
-  models: string[];
-  /** Values `--permission-mode` accepts. */
-  permissionModes: string[];
-  /** Values `--effort` accepts, weakest first — the order is the scale. */
-  effortLevels: string[];
-}
-
-/**
- * Where Hermes' browser tools will land, and whether they will be the good ones.
- *
- * Hermes takes its CDP target from `browser.cdp_url` in `~/.hermes/config.yaml`
- * and offers no per-invocation flag for it, so this is a property of the box
- * rather than of a profile. The editor reads it to say which browser a role will
- * drive instead of implying a choice it does not have.
- */
-export interface HermesBrowser {
-  /** `browser.cdp_url` as configured, or null when nothing is set. */
-  cdpUrl: string | null;
-  /** `browser.backend`, or null when unset, which means Browser Use mode. */
-  backend: string | null;
-  /** The port the installed Chrome unit actually opened, when there is one. */
-  cdpPort: number | null;
-  /** Whether `cdpUrl` names that port. False is the whole reason this exists. */
-  connected: boolean;
-  /**
-   * Whether the `browser-use` CLI could run, directly or through `uvx`.
-   *
-   * Without it Hermes quietly keeps its twelve built-in browser tools, which
-   * works but costs the token saving that Browser Use mode is for.
-   */
-  browserUse: boolean;
-}
-
-/** `GET /api/harness/hermes` — what the installed Hermes CLI is set up for. */
-export interface HermesInfo {
-  available: boolean;
-  version: string | null;
-  /**
-   * Providers to offer in the datalist.
-   *
-   * A floor of the ones Hermes ships support for, merged with whatever its own
-   * config reports. `hermes model` is an interactive wizard with no listing
-   * mode, so unlike the Claude harness there is nothing authoritative to read.
-   */
-  providers: string[];
-  /** The provider `hermes chat` would use with no `--provider`, if readable. */
-  defaultProvider: string | null;
-  /** The model `hermes chat` would use with no `--model`, if readable. */
-  defaultModel: string | null;
-  /** Values `--reasoning` accepts, weakest first — the order is the scale. */
-  reasoningLevels: string[];
-  browser: HermesBrowser;
-}
-
-/** `GET /api/harness/cursor` — what the installed Cursor CLI is set up for. */
-export interface CursorInfo {
-  available: boolean;
-  version: string | null;
-  /**
-   * Model ids `cursor-agent models` reports, in the order it printed them.
-   *
-   * Unlike Hermes, Cursor has a real listing mode — but the list is the
-   * account's, not the binary's: it needs a login and sometimes the network,
-   * so an empty list means "could not read", never "no models exist". The
-   * editor keeps the field free text with these as suggestions.
-   */
-  models: string[];
-  /** The model `models` marked as current, when it marked one. */
-  defaultModel: string | null;
-  /**
-   * Whether `cursor-agent status` says someone is logged in.
-   *
-   * Three-valued on purpose: null is "could not tell", which covers a status
-   * output this build cannot read as well as a command that failed to run.
-   * Only a definite false is worth warning about — a profile launched while
-   * logged out opens a window that sits at the login prompt.
-   */
-  loggedIn: boolean | null;
 }
 
 /**

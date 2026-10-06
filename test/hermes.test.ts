@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { hermesVersion, reasoningLevels } from "../server/harness.ts";
+import { hermes, reasoningLevels } from "../server/harnesses/hermes.ts";
+import { versionToken as hermesVersion } from "../server/harnesses/util.ts";
 import { tokenize } from "../server/profiles.ts";
 import {
-  buildArgs,
-  type HermesSettings,
-  parseSettings,
-} from "../src/chrome/hermesFlags.ts";
+  buildArgs as build,
+  type FlagSettings,
+  parseArgs,
+} from "../shared/harness.ts";
+
+const parseSettings = (argv: string[]) => parseArgs(hermes.spec, argv);
+const buildArgs = (settings: FlagSettings) => build(hermes.spec, settings);
 
 /**
  * The contract this file exists to hold.
@@ -114,13 +118,13 @@ describe("flags the controls do not own", () => {
    */
   test("a trailing --model is kept, not swallowed", () => {
     const parsed = parseSettings(["--yolo", "--model"]);
-    expect(parsed.model).toBe("");
+    expect(parsed.values.model).toBeUndefined();
     expect(parsed.extra).toBe("--model");
   });
 
   test("--model followed by a flag does not eat it", () => {
     const parsed = parseSettings(["--model", "--yolo"]);
-    expect(parsed.model).toBe("");
+    expect(parsed.values.model).toBeUndefined();
     expect(parsed.toggles["--yolo"]).toBe(true);
   });
 });
@@ -129,17 +133,17 @@ describe("the interface segment", () => {
   /** One value, so there is no state in which both flags can be written. */
   test("never writes both", () => {
     const both = parseSettings(["--tui", "--cli"]);
-    expect(both.interface).toBe("cli");
+    expect(both.values.interface).toBe("cli");
     expect(cycle(["--tui", "--cli"])).toEqual(["--cli"]);
   });
 
   test("empty writes neither", () => {
-    const settings: HermesSettings = {
-      model: "",
-      provider: "",
-      reasoning: "",
-      interface: "",
+    const settings: FlagSettings = {
+      values: {},
+      suffixes: {},
       toggles: {},
+      mcp: "all",
+      mcpConfigs: [],
       extra: "",
     };
     expect(buildArgs(settings)).toBe("");

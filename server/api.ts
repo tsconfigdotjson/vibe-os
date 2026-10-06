@@ -22,7 +22,7 @@ import {
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
-import { discoverClaude, discoverCursor, discoverHermes } from "./harness.ts";
+import { discover, specs } from "./harness.ts";
 import { sendText, startSession } from "./headless.ts";
 import {
   badId,
@@ -196,21 +196,18 @@ export function createApi(deps: ApiDeps) {
 
     if (p === "/api/health") return json({ ok: true });
 
-    // What the installed Claude CLI accepts, so the editor can offer it as
-    // dropdowns rather than asking people to remember flag spellings.
-    if (p === "/api/harness/claude" && req.method === "GET") {
-      return json(await discoverClaude());
+    // Every harness a profile can launch, as the specs the editor renders.
+    if (p === "/api/harnesses" && req.method === "GET") {
+      return json(specs());
     }
 
-    // The same question for Hermes, which answers a narrower version of it:
-    // configured providers, its own defaults, and where its browser tools land.
-    if (p === "/api/harness/hermes" && req.method === "GET") {
-      return json(await discoverHermes());
-    }
-
-    // And for Cursor: the account's model list, and whether anyone is logged in.
-    if (p === "/api/harness/cursor" && req.method === "GET") {
-      return json(await discoverCursor());
+    // What one harness found on the box: models and options read off the
+    // installed binary, its defaults, whether it is logged in.
+    const harnessMatch = /^\/api\/harness\/([a-z][a-z0-9-]*)$/.exec(p);
+    if (harnessMatch && req.method === "GET") {
+      const found = discover(harnessMatch[1]);
+      if (!found) return json({ error: "unknown harness" }, 404);
+      return json((await found).report);
     }
 
     if (p === "/api/config" && req.method === "GET") {

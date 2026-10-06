@@ -1,16 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import {
-  cursorLoggedIn,
-  cursorVersion,
+  cursor,
+  cursorProjectSlug,
   parseCursorModels,
-} from "../server/harness.ts";
-import { tokenize } from "../server/profiles.ts";
-import { cursorProjectSlug, harnessCommand } from "../server/session.ts";
+} from "../server/harnesses/cursor.ts";
 import {
-  buildArgs,
-  type CursorSettings,
-  parseSettings,
-} from "../src/chrome/cursorFlags.ts";
+  loggedIn as cursorLoggedIn,
+  versionToken as cursorVersion,
+} from "../server/harnesses/util.ts";
+import { tokenize } from "../server/profiles.ts";
+import { harnessCommand } from "../server/session.ts";
+import {
+  buildArgs as build,
+  type FlagSettings,
+  parseArgs,
+} from "../shared/harness.ts";
+
+const parseSettings = (argv: string[]) => parseArgs(cursor.spec, argv);
+const buildArgs = (settings: FlagSettings) => build(cursor.spec, settings);
 
 /**
  * The same contract hermes.test.ts holds, for the third harness.
@@ -118,13 +125,13 @@ describe("flags the controls do not own", () => {
    */
   test("a trailing --model is kept, not swallowed", () => {
     const parsed = parseSettings(["--force", "--model"]);
-    expect(parsed.model).toBe("");
+    expect(parsed.values.model).toBeUndefined();
     expect(parsed.extra).toBe("--model");
   });
 
   test("--model followed by a flag does not eat it", () => {
     const parsed = parseSettings(["--model", "--force"]);
-    expect(parsed.model).toBe("");
+    expect(parsed.values.model).toBeUndefined();
     expect(parsed.toggles["--force"]).toBe(true);
   });
 });
@@ -142,7 +149,14 @@ describe("values that need quoting", () => {
   });
 
   test("empty settings write nothing", () => {
-    const settings: CursorSettings = { model: "", toggles: {}, extra: "" };
+    const settings: FlagSettings = {
+      values: {},
+      suffixes: {},
+      toggles: {},
+      mcp: "all",
+      mcpConfigs: [],
+      extra: "",
+    };
     expect(buildArgs(settings)).toBe("");
   });
 });
