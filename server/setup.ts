@@ -40,7 +40,7 @@ import {
   UV_INSTALL,
 } from "./harness.ts";
 import { color, describeError } from "./log.ts";
-import { oomState, scopeState } from "./memory.ts";
+import { type OomState, oomState, scopeState } from "./memory.ts";
 import { ENTRY, IS_COMPILED, invocation } from "./runtime.ts";
 
 export const TAILSCALE_INSTALL =
@@ -598,13 +598,31 @@ async function packagesStep(
 }
 
 /**
+ * What it takes to get an OOM daemon running: nothing when one already is,
+ * starting earlyoom when it is installed, installing it otherwise. null when
+ * it has to be installed and there is no package manager to do it with. Same
+ * package name on every manager.
+ */
+export function oomCommands(
+  oom: OomState,
+  manager: Manager | null,
+): string[][] | null {
+  if (oom.oomd || oom.earlyoom === "active") return [];
+  const enable = ["systemctl", "enable", "--now", "earlyoom"];
+  if (oom.earlyoom === "installed") return [enable];
+  if (!manager) return null;
+  return [...installCommands(manager, ["earlyoom"]), enable];
+}
+
+/**
  * An OOM daemon, so a box out of memory kills one process instead of
- * thrashing until someone notices. Same package name on every manager.
+ * thrashing until someone notices.
  */
 async function oomStep(s: Session, manager: Manager | null): Promise<void> {
   if (process.platform !== "linux") return;
   const oom = await oomState();
-  if (oom.oomd || oom.earlyoom === "active") {
+  const commands = oomCommands(oom, manager);
+  if (commands?.length === 0) {
     s.done(`${oom.oomd ? "systemd-oomd" : "earlyoom"} running`);
     return;
   }
@@ -614,18 +632,15 @@ async function oomStep(s: Session, manager: Manager | null): Promise<void> {
       ? "with swap and nothing watching, running out of memory stalls the box instead of ending one process"
       : "nothing ends a runaway process before the box stalls",
   );
-  const enable = ["systemctl", "enable", "--now", "earlyoom"];
-  if (oom.earlyoom === "installed") {
-    if (await s.confirm("Start earlyoom, and on every boot?", true, [enable]))
-      if (await s.run(enable, true)) s.done("earlyoom running");
-    return;
-  }
-  if (!manager) {
+  if (commands === null) {
     s.warn("no package manager this knows; install earlyoom by hand");
     return;
   }
-  const commands = [...installCommands(manager, ["earlyoom"]), enable];
-  if (!(await s.confirm("Install earlyoom?", true, commands))) return;
+  const question =
+    oom.earlyoom === "installed"
+      ? "Start earlyoom, and on every boot?"
+      : "Install earlyoom?";
+  if (!(await s.confirm(question, true, commands))) return;
   if (await s.runAll(commands, true)) s.done("earlyoom running");
 }
 

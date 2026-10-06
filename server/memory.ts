@@ -382,6 +382,11 @@ export interface ScopeState {
   /** The user's manager outlives their logins, which a scope needs. */
   linger: boolean;
   /**
+   * The unified hierarchy. Under cgroup v1 a user manager is never delegated
+   * memory, so a scope is created and its limits silently do nothing.
+   */
+  cgroup2: boolean;
+  /**
    * The user manager's delegated controllers, or null when they could not be
    * read: no manager running for that user yet, or no cgroup v2.
    */
@@ -397,7 +402,9 @@ export async function scopeState(
     ((await exists("/usr/bin/systemd-run")) ||
       (await exists("/bin/systemd-run")));
   const linger = await exists(`${LINGER_DIR}/${user}`);
-  if (!systemd || uid === null) return { systemd, linger, controllers: null };
+  const cgroup2 = await exists("/sys/fs/cgroup/cgroup.controllers");
+  if (!systemd || uid === null)
+    return { systemd, linger, cgroup2, controllers: null };
   const text = await readFile(
     `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers`,
     "utf8",
@@ -405,6 +412,7 @@ export async function scopeState(
   return {
     systemd,
     linger,
+    cgroup2,
     controllers: text === null ? null : text.trim().split(/\s+/),
   };
 }

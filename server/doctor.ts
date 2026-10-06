@@ -635,6 +635,14 @@ export function memoryChecks(
         `sudo loginctl enable-linger ${user}   # or vibe-os setup`,
       ),
     );
+  } else if (!scope.cgroup2) {
+    checks.push(
+      bad(
+        "memory limits",
+        `this box uses cgroup v1, where a user's scopes cannot be limited, so ${set.join(" ")} is set but not enforced`,
+        "boot with systemd.unified_cgroup_hierarchy=1, or rely on the OOM daemon below",
+      ),
+    );
   } else if (scope.controllers && !scope.controllers.includes("memory")) {
     checks.push(
       bad(

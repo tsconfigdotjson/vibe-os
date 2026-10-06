@@ -66,8 +66,8 @@ export interface Config {
   sessions: boolean;
   /**
    * The MemoryHigh and MemoryMax each window's scope gets unless its profile
-   * says otherwise, and the MemorySwapMax every window gets. All null (`--no-memory-limit`) starts windows without a
-   * scope at all.
+   * says otherwise, and the MemorySwapMax every window gets. All null
+   * (`--no-memory-limit`) starts windows without a scope at all.
    */
   memory: MemoryLimits;
 }

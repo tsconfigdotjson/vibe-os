@@ -19,6 +19,7 @@ import {
 } from "../server/memory.ts";
 import { createProfile, updateProfile } from "../server/profiles.ts";
 import { windowCommand } from "../server/session.ts";
+import { oomCommands } from "../server/setup.ts";
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -278,6 +279,7 @@ describe("doctor memoryChecks", () => {
   const scoped = {
     systemd: true,
     linger: true,
+    cgroup2: true,
     controllers: ["cpu", "memory", "pids"],
   };
   const healthy = { oomd: false, earlyoom: "active" as const, swapTotal: GB };
@@ -293,7 +295,7 @@ describe("doctor memoryChecks", () => {
     const [scope] = memoryChecks(
       "vibe",
       limits,
-      { systemd: false, linger: false, controllers: null },
+      { systemd: false, linger: false, cgroup2: true, controllers: null },
       healthy,
     );
     expect(scope.ok).toBe(false);
@@ -310,11 +312,22 @@ describe("doctor memoryChecks", () => {
     expect(scope.fix).toContain("enable-linger vibe");
   });
 
+  test("cgroup v1 cannot enforce anything", () => {
+    const [scope] = memoryChecks(
+      "vibe",
+      limits,
+      { ...scoped, cgroup2: false, controllers: null },
+      healthy,
+    );
+    expect(scope.ok).toBe(false);
+    expect(scope.detail).toContain("cgroup v1");
+  });
+
   test("memory controller not delegated", () => {
     const [scope] = memoryChecks(
       "vibe",
       limits,
-      { systemd: true, linger: true, controllers: ["pids"] },
+      { ...scoped, controllers: ["pids"] },
       healthy,
     );
     expect(scope.ok).toBe(false);
@@ -362,5 +375,33 @@ describe("profile memory fields", () => {
     expect(() =>
       createProfile(db, "proj", { name: "Bad", memoryMax: "$(id)" }),
     ).toThrow();
+  });
+});
+
+describe("setup oomCommands", () => {
+  const none = { oomd: false, earlyoom: null, swapTotal: GB } as const;
+  test("nothing to do when a daemon runs", () => {
+    expect(oomCommands({ ...none, oomd: true }, "apt")).toEqual([]);
+    expect(oomCommands({ ...none, earlyoom: "active" }, "apt")).toEqual([]);
+  });
+  test("installed but stopped only needs starting", () => {
+    expect(oomCommands({ ...none, earlyoom: "installed" }, null)).toEqual([
+      ["systemctl", "enable", "--now", "earlyoom"],
+    ]);
+  });
+  test("absent: install, then start", () => {
+    const commands = oomCommands(none, "apt") ?? [];
+    expect(
+      commands.some((c) => c.includes("earlyoom") && c.includes("install")),
+    ).toBe(true);
+    expect(commands.at(-1)).toEqual([
+      "systemctl",
+      "enable",
+      "--now",
+      "earlyoom",
+    ]);
+  });
+  test("absent with no package manager cannot be fixed here", () => {
+    expect(oomCommands(none, null)).toBe(null);
   });
 });
