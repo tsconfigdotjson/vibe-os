@@ -2909,6 +2909,131 @@ legend.field-label {
   margin-top: 10px;
 }
 
+/* ── keyboard shortcuts ──────────────────────────────────────────────── */
+
+/* Where the leader is written down, and a way to arm it with the mouse. */
+.menu-keys {
+  margin-left: auto;
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid rgb(255 255 255 / 10%);
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.menu-keys:hover,
+.desktop[data-keys] .menu-keys {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--accent) 60%, transparent);
+}
+
+.menu-keys + .menu-right {
+  margin-left: 0;
+}
+
+/* A pending command brings out what it can act on: the dock carries the
+   window numbers, the rail the profile ones. */
+.desktop[data-keys="armed"] .dock,
+.desktop[data-keys="profile"] .rail {
+  translate: 0;
+  transition-delay: 0ms;
+}
+
+.keys-hud {
+  position: fixed;
+  left: 50%;
+  bottom: 74px;
+  translate: -50% 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(94vw, 900px);
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  animation: keys-in 120ms ease-out;
+}
+
+@keyframes keys-in {
+  from {
+    opacity: 0;
+    translate: -50% 6px;
+  }
+}
+
+.keys-hud kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  background: rgb(255 255 255 / 8%);
+  border: 1px solid rgb(255 255 255 / 12%);
+}
+
+.keys-lead {
+  display: inline-flex;
+  gap: 4px;
+  flex: none;
+}
+
+.keys-lead kbd {
+  color: #05070a;
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.keys-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.keys-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.keys-prompt {
+  color: var(--text);
+}
+
+.keys-esc {
+  margin-left: auto;
+  flex: none;
+  opacity: 0.7;
+}
+
+/* The rail chip grows to hold its number while a profile is being picked. */
+.rail-chip:not(:empty) {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: #05070a;
+  opacity: 1;
+}
+
 /* The rail used to be dropped here at 1180px, because it was a column and the
    surface could not spare one. It costs no width now. */
 @media (max-width: 900px) {

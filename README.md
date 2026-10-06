@@ -42,6 +42,7 @@ edit, no `sshd_config` change, and no root.
     - [Cursor](#cursor)
   - [Popping a terminal out](#popping-a-terminal-out)
   - [The desktop](#the-desktop)
+    - [Keyboard shortcuts](#keyboard-shortcuts)
   - [Installing it as an app](#installing-it-as-an-app)
 - [Deploying on a VPS](#deploying-on-a-vps)
   - [What the box needs](#what-the-box-needs)
@@ -335,9 +336,6 @@ type `dtach -a`.
 Windows snap to a 24 × 14 grid. Drag a title bar to move, any edge to resize,
 double-click to fill the desktop. **⊞** on the dock tiles up to four windows.
 
-There are no keyboard chords. The terminal has focus nearly all the time, and
-every key the desktop took would be a key the session could not have.
-
 The dock and the profile rail hide themselves. Push the pointer into the bottom
 or right edge to bring them back.
 
@@ -352,6 +350,32 @@ spent stalled on memory, a throttled window included.
 The dock's **◑** opens the wallpaper picker. Uploads are stored on the server,
 so the same desktop appears on every device. **Dim** darkens the wallpaper
 behind the windows.
+
+#### Keyboard shortcuts
+
+Press `` Ctrl+` ``, let go, then press one key. A panel above the dock lists the
+keys while it waits. **Esc**, or `` Ctrl+` `` again, backs out.
+
+| Key | Does |
+| --- | --- |
+| **1**–**9** | Brings up the window with that number on the dock, restoring it if it is minimised |
+| **←** **→** | Previous or next window on screen, in dock order |
+| **↑** **↓** | Previous or next workspace in the sidebar |
+| **p**, then **1**–**9** | Opens a profile, numbered down the rail, or brings up its window |
+| **t** | Opens a terminal |
+| **m** | Minimises the focused window |
+| **f** | Fills the desktop with the focused window, or puts it back |
+| **g** | Tiles the windows |
+
+Whatever the command brings up gets the keyboard, so you can type straight into
+it. Any other key after `` Ctrl+` `` is dropped, not passed to the terminal.
+
+Programs in the terminal never receive `` Ctrl+` ``: xterm.js sends nothing for
+it. It is matched by physical key, the one left of **1**, on every keyboard
+layout. The `` Ctrl+` `` button at the right of the menu bar does the same as
+pressing it. Pop-out windows have no shortcuts.
+
+Shortcuts are off while a profile or wallpaper panel is open.
 
 ### Installing it as an app
 
@@ -999,8 +1023,6 @@ Known gaps:
 - **IPv6 reachability is unverified.** The v4 firewall rules were tested from
   outside; the v6 rules mirror them and default to `DROP`, but that was read
   from the box rather than probed.
-- **No keyboard shortcuts.** Deliberate, see [the desktop](#the-desktop), but
-  something that does not steal keys from the terminal is worth having.
 - **MCP servers can be picked but not added.** Adding them is `claude mcp` on
   the box.
 - **Hermes models are typed, not listed.** `hermes model` is interactive and

@@ -8,6 +8,8 @@ export interface ProfileRailProps {
   activeId: string | null;
   projectName: string | null;
   canOpen: boolean;
+  /** Shows each profile's shortcut number, while one is being picked. */
+  numbered: boolean;
   onOpen: (id: string, opts: { forceNew?: boolean }) => void;
   onEdit: (id: string) => void;
   onCreate: () => void;
@@ -29,6 +31,7 @@ export function ProfileRail({
   activeId,
   projectName,
   canOpen,
+  numbered,
   onOpen,
   onEdit,
   onCreate,
@@ -60,7 +63,7 @@ export function ProfileRail({
         </p>
       ) : (
         <ul className="rail-list">
-          {profiles.map((profile) => {
+          {profiles.map((profile, index) => {
             const live = running.has(profile.id);
             return (
               <li
@@ -82,7 +85,9 @@ export function ProfileRail({
                       : `Open a terminal as ${profile.name}`
                   }
                 >
-                  <span className="rail-chip" aria-hidden="true" />
+                  <span className="rail-chip" aria-hidden="true">
+                    {numbered && index < 9 ? index + 1 : null}
+                  </span>
                   <span className="rail-text">
                     <span className="rail-name">{profile.name}</span>
                     <span className="rail-meta">{profile.harness}</span>

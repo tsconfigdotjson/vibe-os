@@ -309,12 +309,21 @@ export function useWindows(workspaceId: string | null) {
     [applyRow],
   );
 
+  /**
+   * Puts a window away and hands focus to the topmost one still on screen.
+   *
+   * Picked here rather than left to the fallback effect, which reads `ordered`
+   * before the optimistic row lands and would pick the window just minimised.
+   */
   const minimize = useCallback(
-    (id: string) =>
+    (id: string) => {
+      const next = ordered.filter((w) => !w.minimized && w.id !== id).at(-1);
+      setFocused((f) => (f === id ? (next?.id ?? null) : f));
       applyRow(id, { minimized: true }, () =>
         windowApi.patch(id, { minimized: true }),
-      ),
-    [applyRow],
+      );
+    },
+    [applyRow, ordered],
   );
 
   const maximize = useCallback(
@@ -374,24 +383,29 @@ export function useWindows(workspaceId: string | null) {
    * A profile is a role, and a workspace normally wants one of each: two
    * "Backend Manager" sessions on the same worktree is usually a mistake, not
    * an intention. `forceNew` is the escape hatch for when it is an intention.
+   *
+   * Resolves to the window it raised or opened, or undefined if none.
    */
   const openProfile = useCallback(
-    async (profileId: string, opts: { forceNew?: boolean } = {}) => {
+    async (
+      profileId: string,
+      opts: { forceNew?: boolean } = {},
+    ): Promise<string | undefined> => {
       if (!opts.forceNew) {
         const existing = windows.find((w) => w.profileId === profileId);
         if (existing) {
           raise(existing.id);
-          return;
+          return existing.id;
         }
       }
       try {
-        await spawn(profileId);
+        return (await spawn(profileId))?.id;
       } catch (err) {
         // The server's "this box cannot fit another agent". Its message says
         // why; the person decides.
         if (!(err instanceof ApiError && err.body.capacity === true)) throw err;
         if (window.confirm(`${err.message}\n\nOpen it anyway?`))
-          await spawn(profileId, true);
+          return (await spawn(profileId, true))?.id;
       }
     },
     [windows, raise, spawn],
