@@ -33,12 +33,7 @@ import {
   parseUfw,
   probeTcp,
 } from "./doctor.ts";
-import {
-  CLAUDE_INSTALL,
-  CURSOR_INSTALL,
-  HERMES_INSTALL,
-  UV_INSTALL,
-} from "./harness.ts";
+import { CLAUDE_INSTALL, CURSOR_INSTALL, HERMES_INSTALL } from "./harness.ts";
 import { color, describeError } from "./log.ts";
 import { type OomState, oomState, scopeState } from "./memory.ts";
 import { ENTRY, IS_COMPILED, invocation } from "./runtime.ts";
@@ -690,7 +685,7 @@ async function harnessStep(s: Session): Promise<void> {
     {
       name: "Hermes",
       command: "hermes",
-      scripts: [HERMES_INSTALL, UV_INSTALL],
+      scripts: [HERMES_INSTALL],
       def: s.opts.hermes,
       after: "run hermes setup to pick a provider",
     },

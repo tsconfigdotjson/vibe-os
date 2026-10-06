@@ -4,6 +4,60 @@ A harness is the program a profile launches. vibe-os ships Claude, Hermes,
 Cursor and Codex, plus a plain shell and a custom command. You can add your own
 without changing vibe-os.
 
+## Built in
+
+### Hermes
+
+Picking the Hermes harness runs `hermes chat` in the worktree, and the editor
+offers a model, a provider, a thinking dropdown (`--reasoning`), an interface
+(`--cli` or `--tui`) and the same kind of switches, `--yolo` among them.
+
+Models are typed rather than picked. `hermes model` is an interactive wizard
+with no listing mode, so there is nothing to read off the box. The provider list
+is real: it is whatever `~/.hermes/config.yaml` has been set up with, so adding
+one with `hermes model` makes it appear here. Reasoning levels are read off
+`hermes chat --help`, so that ladder follows Hermes' releases.
+
+### Cursor
+
+Picking the Cursor harness runs `cursor-agent` in the worktree, and the editor
+offers a model and a handful of switches. Two of them matter most: `--force`,
+which is Cursor's spelling of skip-every-check, and `--trust`, which matters
+here more than anywhere else: every workspace is a freshly cut worktree, which
+to Cursor is a directory it has never seen, so without it every new window opens
+on the trust prompt instead of the conversation.
+
+Models come from `cursor-agent models`. The list belongs to the account rather
+than the binary: it needs a login, and sometimes the network, so when it cannot
+be read the field is plain free text and typed ids still work.
+
+Logging in is a property of the box, not of a profile: run `cursor-agent
+login` once on the box. Logged out, a Cursor window opens and sits at the
+login prompt. `vibe-os doctor` says so before you find out that way.
+
+MCP servers are a property of the box as well. Configure them in
+`~/.cursor/mcp.json`, then log in once, from inside any window:
+
+```sh
+cursor-agent mcp login linear
+```
+
+Cursor files MCP credentials per directory, which would mean one login per
+workspace. vibe-os points every workspace at a single store under the state dir
+instead, so that one login covers the ones opened later too. A switch,
+`--approve-mcps`, skips the approval prompt each new workspace would otherwise
+ask for.
+
+### Codex
+
+Picking the Codex harness runs `codex` in the worktree, and the editor offers a
+model, a thinking dropdown, a sandbox, an approval policy and a few switches,
+`--dangerously-bypass-approvals-and-sandbox` among them. Models and thinking
+levels come from `codex debug models`, so they follow the installed CLI.
+
+Log in once on the box with `codex login --device-auth`. Logged out, a Codex
+window sits at the login screen, and `vibe-os doctor` says so.
+
 ## Adding one to a box
 
 Put a JSON file in `~/.vibe-os/harnesses/` (or `harnesses/` under your

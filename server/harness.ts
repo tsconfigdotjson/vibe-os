@@ -35,7 +35,7 @@ import { log } from "./log.ts";
 export { CLAUDE_INSTALL } from "./harnesses/claude.ts";
 export { CODEX_INSTALL } from "./harnesses/codex.ts";
 export { CURSOR_INSTALL } from "./harnesses/cursor.ts";
-export { HERMES_INSTALL, UV_INSTALL } from "./harnesses/hermes.ts";
+export { HERMES_INSTALL } from "./harnesses/hermes.ts";
 export type { HarnessAdapter, HarnessCheck } from "./harnesses/util.ts";
 
 const BUILT_IN: HarnessAdapter[] = [

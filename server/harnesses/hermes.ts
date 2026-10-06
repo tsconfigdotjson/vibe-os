@@ -2,27 +2,18 @@
 //
 // It has no listing mode at all (`hermes model` is an interactive wizard), so
 // what is discoverable is its own configuration: which providers it has been
-// set up with, what it would use by default, and where its browser tools will
-// land. The model and provider fields stay free text with those as suggestions.
+// set up with and what it would use by default. The model and provider fields
+// stay free text with those as suggestions.
 //
 // No floor of well-known provider names. A Hermes provider id is account
 // configuration, so offering one that is not on this box would suggest a choice
 // that can only fail at launch.
 
-import { readFile } from "node:fs/promises";
-import { CHROME_UNIT_PATH, cdpUrlMatches, portsFromUnits } from "../browser.ts";
 import { log } from "../log.ts";
-import {
-  type HarnessAdapter,
-  home,
-  looksLikeLadder,
-  resolveBinary,
-  run,
-} from "./util.ts";
+import { type HarnessAdapter, looksLikeLadder, run } from "./util.ts";
 
 export const HERMES_INSTALL =
   "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
-export const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
 /**
  * The reasoning ladder as of writing, used only when the help cannot be read.
@@ -38,21 +29,6 @@ const KNOWN_REASONING = [
   "max",
   "ultra",
 ];
-
-/** Where Hermes' browser tools will land, for its doctor checks. */
-export interface HermesBrowser {
-  /** `browser.cdp_url` as configured, or null when nothing is set. */
-  cdpUrl: string | null;
-  /** The port the installed Chrome unit actually opened, when there is one. */
-  cdpPort: number | null;
-  /** Whether `cdpUrl` names that port. */
-  connected: boolean;
-  /**
-   * Whether the `browser-use` CLI could run, directly or through `uvx`.
-   * Without it Hermes quietly keeps its twelve built-in browser tools.
-   */
-  browserUse: boolean;
-}
 
 /**
  * One `hermes config get <key> --json`, parsed, or null.
@@ -104,43 +80,7 @@ function str(
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-/**
- * The CDP port the installed Chrome unit actually opened.
- *
- * Read from the unit rather than from a default: `install-browser` may have
- * been given `--cdp-port` months ago.
- */
-async function installedCdpPort(): Promise<number | null> {
-  const unit = await readFile(CHROME_UNIT_PATH, "utf8").catch(() => null);
-  if (!unit) return null;
-  return portsFromUnits({ chrome: unit }).cdpPort;
-}
-
-/** The note the editor shows about where the browser tools land. */
-function browserNote(browser: HermesBrowser): {
-  label: string;
-  text: string;
-  warn?: boolean;
-} {
-  const label = "Browser tools";
-  if (!browser.connected)
-    return {
-      label,
-      text: "Not pointed at this box's browser. Run `vibe-os connect-hermes` on the box.",
-      warn: true,
-    };
-  return {
-    label,
-    text:
-      `Driving the box's Chrome on \`127.0.0.1:${browser.cdpPort}\`. Watch it over VNC.` +
-      (browser.browserUse
-        ? ""
-        : " No browser-use CLI, so this falls back to the twelve built-in tools."),
-    warn: !browser.browserUse,
-  };
-}
-
-export const hermes: HarnessAdapter<HermesBrowser> = {
+export const hermes: HarnessAdapter = {
   spec: {
     id: "hermes",
     label: "Hermes",
@@ -276,33 +216,18 @@ export const hermes: HarnessAdapter<HermesBrowser> = {
   async discover(binary) {
     // Concurrently: `hermes` is Python, so each invocation costs seconds of
     // interpreter and import time before it does anything.
-    const [help, model, browser, providers, browserUse, cdpPort] =
-      await Promise.all([
-        // `chat`, not the bare command: `--reasoning` is a flag of that
-        // subcommand, which is also the one a profile launches.
-        run(binary, ["chat", "--help"], {
-          timeout: 30_000,
-          maxBuffer: 4 * 1024 * 1024,
-        })
-          .then(({ stdout }) => stdout)
-          .catch(() => ""),
-        hermesConfig(binary, "model"),
-        hermesConfig(binary, "browser"),
-        hermesConfig(binary, "providers"),
-        // Presence, never a run. A cold `uvx browser-use` downloads the
-        // package before it prints anything.
-        Promise.all([
-          resolveBinary("browser-use", [
-            `${home}/.local/bin/browser-use`,
-            "/usr/local/bin/browser-use",
-          ]),
-          resolveBinary("uvx", [
-            `${home}/.local/bin/uvx`,
-            "/usr/local/bin/uvx",
-          ]),
-        ]).then(([direct, viaUvx]) => Boolean(direct || viaUvx)),
-        installedCdpPort(),
-      ]);
+    const [help, model, providers] = await Promise.all([
+      // `chat`, not the bare command: `--reasoning` is a flag of that
+      // subcommand, which is also the one a profile launches.
+      run(binary, ["chat", "--help"], {
+        timeout: 30_000,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+        .then(({ stdout }) => stdout)
+        .catch(() => ""),
+      hermesConfig(binary, "model"),
+      hermesConfig(binary, "providers"),
+    ]);
 
     const defaultProvider = str(model, "provider");
     const defaultModel = str(model, "default");
@@ -310,19 +235,11 @@ export const hermes: HarnessAdapter<HermesBrowser> = {
       ...Object.keys(providers ?? {}).filter((n) => n.trim()),
       ...(defaultProvider ? [defaultProvider] : []),
     ];
-    const cdpUrl = str(browser, "cdp_url");
     const reasoning = reasoningLevels(help);
-    const state: HermesBrowser = {
-      cdpUrl,
-      cdpPort,
-      connected: cdpPort !== null && cdpUrlMatches(cdpUrl, cdpPort),
-      browserUse,
-    };
 
     log.debug(
       `hermes: ${names.length} providers, ` +
-        `${reasoning.length > 0 ? reasoning.join("/") : "no"} reasoning levels, ` +
-        `browser ${cdpUrl ?? "unset"}, browser-use ${browserUse ? "runnable" : "missing"}`,
+        `${reasoning.length > 0 ? reasoning.join("/") : "no"} reasoning levels`,
     );
 
     return {
@@ -337,50 +254,6 @@ export const hermes: HarnessAdapter<HermesBrowser> = {
         ...(defaultModel ? { model: defaultModel } : {}),
         ...(defaultProvider ? { provider: defaultProvider } : {}),
       },
-      notes: [browserNote(state)],
-      detail: state,
     };
-  },
-
-  checks(report, browser) {
-    if (!report.available || !browser) return [];
-    // Without the CLI, Browser Use mode silently does not engage. Hermes keeps
-    // working with its twelve built-in browser tools, so nothing looks wrong;
-    // you just pay for a dozen tool schemas in every request.
-    const checks = [
-      browser.browserUse
-        ? {
-            label: "browser-use",
-            ok: true,
-            detail: "runnable — Hermes gets the single browser_exec tool",
-          }
-        : {
-            label: "browser-use",
-            ok: false,
-            detail:
-              "no browser-use or uvx on PATH — Hermes keeps its twelve built-in browser tools",
-            fix: UV_INSTALL,
-          },
-    ];
-    // Only worth asking when there is a browser here to be pointed at.
-    if (browser.cdpPort !== null) {
-      checks.push(
-        browser.connected
-          ? {
-              label: "hermes browser",
-              ok: true,
-              detail: `driving this box's Chrome on 127.0.0.1:${browser.cdpPort}`,
-            }
-          : {
-              label: "hermes browser",
-              ok: false,
-              detail: browser.cdpUrl
-                ? `browser.cdp_url is ${browser.cdpUrl}, not this box's Chrome on ${browser.cdpPort}`
-                : "browser.cdp_url is unset — Hermes will not use the browser running here",
-              fix: "vibe-os connect-hermes",
-            },
-      );
-    }
-    return checks;
   },
 };
