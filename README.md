@@ -12,6 +12,10 @@ and open terminals into it, from anything with a browser.
 [![CI](https://github.com/tsconfigdotjson/vibe-os/actions/workflows/ci.yml/badge.svg)](https://github.com/tsconfigdotjson/vibe-os/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 
+<br>
+
+<img src="docs/demo.gif" alt="The vibe-os desktop: a Backend Engineer, a QA Engineer and a dev server running in one workspace, then a Reviewer opened from the profiles rail and snapped into the grid">
+
 </div>
 
 ---
@@ -35,7 +39,6 @@ edit, no `sshd_config` change, and no root.
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Documentation](#documentation)
-- [Project status](#project-status)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -127,37 +130,6 @@ own ssh client, your own key, straight to sshd. See
 **vibe-os hands out shell access to the machine it runs on.** Treat access to it
 as equivalent to SSH access to the box, and read [Security](docs/security.md)
 before exposing it anywhere.
-
----
-
-## Project status
-
-Usable and in daily use, but young.
-
-Everything in [Deploying on a VPS](docs/deploying.md) has been walked end to
-end on a fresh OVHcloud VPS on Ubuntu 26.04, behind Tailscale, serving HTTPS.
-The firewall rules were checked from outside the tailnet.
-
-Known gaps:
-
-- **One token, one user.** Everyone with the token is the same unix user, and
-  there is no per-browser session to revoke.
-- **ACME has never issued a real certificate.** `--domain` works in tests, but
-  the Tailscale path makes it unnecessary, so it stays unproven.
-- **IPv6 reachability is unverified.** The v4 firewall rules were tested from
-  outside; the v6 rules mirror them and default to `DROP`, but that was read
-  from the box rather than probed.
-- **MCP servers can be picked but not added.** Adding them is `claude mcp` on
-  the box.
-- **Hermes models are typed, not listed.** `hermes model` is interactive and
-  has no listing mode, so there is nothing to read off the box.
-- **Cursor's login is a box-wide setting.** The CLI holds one credential per
-  user, so every Cursor profile runs as the same account, and its model list is
-  readable only while logged in. Its MCP credentials are shared across every
-  workspace for the same reason.
-- **No branch operations.** Pushing, PRs and merging happen in the terminal.
-- **Deleting a workspace keeps its branch**, so work is recoverable. Nothing
-  prunes them for you.
 
 ---
 
