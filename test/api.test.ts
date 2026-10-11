@@ -483,6 +483,28 @@ describe("automation", () => {
       }
     });
 
+    test("keys have to be known, and alone", async () => {
+      for (const [body, error] of [
+        [{ keys: [] }, "keys must be a list"],
+        [{ keys: "Enter" }, "keys must be a list"],
+        [{ keys: [1] }, "keys must be a list"],
+        [{ keys: ["Return"] }, 'unknown key "Return"'],
+        [{ keys: ["Enter"], text: "hi" }, "text or keys, not both"],
+        [{ keys: ["Enter"], blanks: {} }, "text or keys, not both"],
+        [{ keys: ["y"], submit: true }, 'put "Enter" in keys'],
+      ] as const) {
+        const res = send(ids.window, body);
+        expect((await res).status).toBe(400);
+        expect(await errorOf(res)).toContain(error);
+      }
+    });
+
+    test("empty text points at keys", async () => {
+      const res = send(ids.window, { text: "", submit: true });
+      expect((await res).status).toBe(400);
+      expect(await errorOf(res)).toContain('keys: ["Enter"]');
+    });
+
     test("a prompt that cannot be sent adds no window", async () => {
       const res = await answered(
         call("POST", `/api/workspaces/${ids.workspace}/windows`, {

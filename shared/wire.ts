@@ -222,13 +222,15 @@ export interface SendInput {
   submit?: boolean;
   /** Paste even when the window is stopped on a question. */
   force?: boolean;
+  /** Instead of text: keys to press, like `["Enter"]` or `["Escape"]`. */
+  keys?: string[];
 }
 
 /** What a send did. */
 export interface SendResult {
   /** The session was started for this send. */
   started: boolean;
-  /** The text went in and the window drew it. */
+  /** The text went in and the window drew it, or the keys were pressed. */
   delivered: boolean;
   /** What the window was doing when the text went in, or why it did not. */
   state: Activity;

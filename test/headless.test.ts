@@ -5,14 +5,41 @@ import path from "node:path";
 import { killSession } from "../server/attach.ts";
 import type { Config } from "../server/config.ts";
 import {
+  keyBytes,
   knownHostsName,
   parseRaw,
   pasteBytes,
+  press,
   sendText,
   sshArgs,
 } from "../server/headless.ts";
 import type { Profile } from "../server/profiles.ts";
 import { windowCommand } from "../server/session.ts";
+
+describe("keyBytes", () => {
+  test("names the keys a terminal sends as escapes", () => {
+    expect(keyBytes("Enter")).toBe("\r");
+    expect(keyBytes("Escape")).toBe("\x1b");
+    expect(keyBytes("Up")).toBe("\x1b[A");
+    expect(keyBytes("BackTab")).toBe("\x1b[Z");
+  });
+
+  test("Ctrl and a letter is its control character", () => {
+    expect(keyBytes("Ctrl+C")).toBe("\x03");
+    expect(keyBytes("Ctrl+c")).toBe("\x03");
+  });
+
+  test("a single character is typed as it is", () => {
+    expect(keyBytes("1")).toBe("1");
+    expect(keyBytes("y")).toBe("y");
+    expect(keyBytes("é")).toBe("é");
+  });
+
+  test("anything else is not a key", () => {
+    for (const k of ["", "yes", "enter", "Ctrl+1", "\n", "\x1b", "toString"])
+      expect(keyBytes(k)).toBe(null);
+  });
+});
 
 describe("pasteBytes", () => {
   test("wraps text in bracketed-paste markers", () => {
@@ -142,5 +169,9 @@ describe.skipIf(!hasDtach)("sendText, end to end", () => {
     expect(await readFile(out, "utf8")).toBe(
       "\x1b[200~fix it\rplease\x1b[201~\r",
     );
+
+    await press(config, session, ["Escape", "2", "Enter"]);
+    await Bun.sleep(300);
+    expect(await readFile(out, "utf8")).toEndWith("\r\x1b2\r");
   }, 20_000);
 });

@@ -161,9 +161,10 @@ if it is not running.
 | `blanks` | instead of `text`: values for the profile prompt's `{{blanks}}`, by label. The filled prompt is pasted |
 | `submit` | optional. Press Enter after pasting. Default false |
 | `force` | optional. Paste even when the window is waiting on a question. Default false |
+| `keys` | instead of `text`: keys to press, in order, like `["Enter"]` or `["Escape"]` |
 
-With neither `text` nor `blanks`, the profile prompt is pasted as it is. Every
-blank in it has to be filled.
+With neither `text`, `blanks` nor `keys`, the profile prompt is pasted as it is.
+Every blank in it has to be filled.
 
 The text is pasted the way the desktop's Send button does it, as one bracketed
 paste. Before pasting, the call waits until the window is ready:
@@ -189,6 +190,19 @@ at the time (see [`GET /api/windows`](#windows)). When `delivered` is false,
 After a delivered send, the desktop no longer offers the profile prompt above
 the window.
 
+`keys` presses keys instead of pasting: Enter to submit what is already typed,
+a number or `y` to answer a question, Escape to stop a busy agent. A key is one
+character, typed as it is, or one of `Enter`, `Escape`, `Tab`, `BackTab`,
+`Backspace`, `Delete`, `Space`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`,
+`PageUp`, `PageDown` and `Ctrl+<letter>`. Up to 32 per send. Keys go in as soon
+as the program is reading input, without waiting for it to go quiet, and also
+when it is waiting on a question. They cannot be combined with `text`,
+`blanks` or `submit`.
+
+```json
+{ "keys": ["2", "Enter"] }
+```
+
 `GET /api/windows/:window/output` returns what the window shows, as plain text
 with colours and cursor movement removed.
 
@@ -201,7 +215,9 @@ with colours and cursor movement removed.
 ```
 
 The text is the screen and the history above it, up to 1000 lines. A long line
-the terminal wrapped is joined back into one. A window that was already running
+the terminal wrapped is joined back into one. Faint text on the cursor's line
+is left out, so a greyed-out placeholder or suggested prompt in a harness's
+input box does not read as text someone typed. A window that was already running
 when the server started is asked to redraw itself the first time it is read,
 which narrows it by one column for a moment. Returns `409` when the window is
 not running.

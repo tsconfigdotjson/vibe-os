@@ -88,6 +88,31 @@ describe("bufferText", () => {
     expect(bufferText(term, 10)).toBe("abcdefghijklmno\nfive five next");
     term.dispose();
   });
+
+  // Claude's input line, as it draws it: the prompt, then a faint suggestion.
+  const suggestion = '❯ \x1b[2mTry "fix lint errors"\x1b[22m';
+
+  test("leaves out a faint suggestion on the cursor's line", async () => {
+    const term = new Terminal({ rows: 4, cols: 40, allowProposedApi: true });
+    // The cursor is parked back at the start of the input, after the status.
+    await write(term, `answer\r\n${suggestion}\r\n\x1b[2mstatus\x1b[2;3H`);
+    expect(bufferText(term, 10)).toBe("answer\n❯\nstatus");
+    term.dispose();
+  });
+
+  test("keeps what was typed", async () => {
+    const term = new Terminal({ rows: 4, cols: 40, allowProposedApi: true });
+    await write(term, `${suggestion}\x1b[1;3Hfix it\x1b[K`);
+    expect(bufferText(term, 10)).toBe("❯ fix it");
+    term.dispose();
+  });
+
+  test("keeps faint text on every other line", async () => {
+    const term = new Terminal({ rows: 4, cols: 40, allowProposedApi: true });
+    await write(term, `${suggestion}\r\n$ `);
+    expect(bufferText(term, 10)).toBe('❯ Try "fix lint errors"\n$');
+    term.dispose();
+  });
 });
 
 const hasDtach =

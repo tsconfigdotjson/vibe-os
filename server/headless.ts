@@ -48,6 +48,8 @@ const SETTLE_MS = 1_000;
 const POLL_MS = 250;
 /** Between the paste and the Enter that submits it, so they are two events. */
 const SUBMIT_DELAY_MS = 300;
+/** Between keys pressed in one send, so each arrives as its own read. */
+const KEY_GAP_MS = 100;
 
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
@@ -355,4 +357,61 @@ export async function paste(
 export async function submit(config: Config, session: string): Promise<void> {
   await sleep(SUBMIT_DELAY_MS);
   await push(socketPath(config, session), "\r");
+}
+
+/** Keys a send can press by name, as the bytes a terminal sends for them. */
+const NAMED_KEYS: Record<string, string> = {
+  Enter: "\r",
+  Escape: "\x1b",
+  Tab: "\t",
+  BackTab: "\x1b[Z",
+  Backspace: "\x7f",
+  Delete: "\x1b[3~",
+  Space: " ",
+  Up: "\x1b[A",
+  Down: "\x1b[B",
+  Right: "\x1b[C",
+  Left: "\x1b[D",
+  Home: "\x1b[H",
+  End: "\x1b[F",
+  PageUp: "\x1b[5~",
+  PageDown: "\x1b[6~",
+};
+
+/** Every name `keyBytes` takes, for the caller's error message. */
+export const KEY_NAMES = [...Object.keys(NAMED_KEYS), "Ctrl+<letter>"];
+
+/**
+ * The bytes for one key: a name from `NAMED_KEYS`, `Ctrl+` and a letter, or a
+ * single character, which is typed as it is. Null for anything else.
+ */
+export function keyBytes(key: string): string | null {
+  if (Object.hasOwn(NAMED_KEYS, key)) return NAMED_KEYS[key];
+  const ctrl = /^Ctrl\+([A-Za-z])$/.exec(key);
+  if (ctrl)
+    return String.fromCharCode(ctrl[1].toUpperCase().charCodeAt(0) - 64);
+  // One character, counted by code point so an emoji is one too.
+  if ([...key].length === 1 && key >= " " && key !== "\x7f") return key;
+  return null;
+}
+
+/**
+ * Presses keys in a session, one at a time.
+ *
+ * Each is its own write, a moment after the last, so an Escape followed by a
+ * letter is read as two keys rather than as Alt and the letter.
+ */
+export async function press(
+  config: Config,
+  session: string,
+  keys: string[],
+): Promise<void> {
+  const sock = socketPath(config, session);
+  for (const [i, key] of keys.entries()) {
+    const bytes = keyBytes(key);
+    if (bytes === null) throw new Error(`unknown key ${key}`);
+    if (i > 0) await sleep(KEY_GAP_MS);
+    await push(sock, bytes);
+  }
+  log.info(`pressed ${keys.join(" ")} in ${session}`);
 }
