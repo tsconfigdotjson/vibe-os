@@ -196,7 +196,21 @@ export interface WindowSummary {
   role: string | null;
   /** Its session is running. Always false with `--no-sessions`. */
   live: boolean;
+  /** What the program in it is doing. Null when it is not running. */
+  state: Activity | null;
+  /** When it last drew anything, in ms since the epoch, if seen since the server started. */
+  lastOutputAt: number | null;
+  /** The caller's own tag for the window, set when it was opened. */
+  label: string | null;
 }
+
+/**
+ * What the program in a window is doing.
+ *
+ * `busy` is drawing right now, `question` is stopped on a dialog or a yes/no
+ * question, and `idle` is quiet at its prompt or finished.
+ */
+export type Activity = "busy" | "idle" | "question";
 
 /** `POST /api/windows/:id/send` */
 export interface SendInput {
@@ -206,4 +220,18 @@ export interface SendInput {
   blanks?: Record<string, string>;
   /** Press Enter after the paste. */
   submit?: boolean;
+  /** Paste even when the window is stopped on a question. */
+  force?: boolean;
+}
+
+/** What a send did. */
+export interface SendResult {
+  /** The session was started for this send. */
+  started: boolean;
+  /** The text went in and the window drew it. */
+  delivered: boolean;
+  /** What the window was doing when the text went in, or why it did not. */
+  state: Activity;
+  /** Why it was not delivered. */
+  reason?: string;
 }

@@ -9,9 +9,10 @@
 // with it. Spawning the command from this process instead would put it in the
 // server's cgroup, where restarting the service ends it.
 //
-// `sendText` is the prompt band's Send, done from here: the text goes into the
+// `paste` is the prompt band's Send, done from here: the text goes into the
 // pty wrapped in bracketed-paste markers, through `dtach -p`, which writes to a
-// session without attaching to it.
+// session without attaching to it. Knowing when a window is ready for it, past
+// raw mode, needs its screen, which is screens.ts and the API's `deliver`.
 
 import { execFile, spawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -255,7 +256,7 @@ async function push(sock: string, bytes: string): Promise<void> {
  * The dtach master holds the pty and its one child is the program, which is
  * where `ps` reports the device.
  */
-async function sessionTty(sock: string): Promise<string | null> {
+export async function sessionTty(sock: string): Promise<string | null> {
   for (const master of await pgrep(["-f", `^([^ ]*/)?dtach -n ${sock}`])) {
     for (const child of await pgrep(["-P", String(master)])) {
       const { stdout } = await run("ps", ["-o", "tty=", "-p", String(child)], {
@@ -335,14 +336,23 @@ export async function sendText(
   text: string,
   opts: { submit?: boolean; timeoutMs?: number } = {},
 ): Promise<void> {
-  const sock = socketPath(config, session);
   await waitForInput(config, session, opts.timeoutMs);
-  await push(sock, pasteBytes(text));
-  if (opts.submit) {
-    await sleep(SUBMIT_DELAY_MS);
-    await push(sock, "\r");
-  }
-  log.info(
-    `sent ${text.length} characters to ${session}${opts.submit ? " and submitted" : ""}`,
-  );
+  await paste(config, session, text);
+  if (opts.submit) await submit(config, session);
+}
+
+/** Pastes text into a session now, without waiting for it to be ready. */
+export async function paste(
+  config: Config,
+  session: string,
+  text: string,
+): Promise<void> {
+  await push(socketPath(config, session), pasteBytes(text));
+  log.info(`pasted ${text.length} characters into ${session}`);
+}
+
+/** Presses Enter, a moment after a paste so the two arrive as two events. */
+export async function submit(config: Config, session: string): Promise<void> {
+  await sleep(SUBMIT_DELAY_MS);
+  await push(socketPath(config, session), "\r");
 }

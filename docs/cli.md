@@ -10,12 +10,13 @@
 | `sudo vibe-os install-service` | write and enable a systemd unit |
 | `sudo vibe-os install-browser` | run one Chrome on a virtual display |
 | `vibe-os fetch-wasm` | re-download the SSH WASM runtime |
-| `vibe-os ls` | list windows, and which are running |
+| `vibe-os ls` | list windows, and what each is doing |
 | `vibe-os workspace new <project>` | create a workspace, optionally `--from <branch>` |
 | `vibe-os open <workspace>` | open a window, optionally `--profile`, `--prompt` and `--submit` |
+| `vibe-os output <window>` | print what a window shows, the last `--lines` lines |
 | `vibe-os close <window>` | close a window and end its session |
 
-`ls`, `workspace`, `open` and `close` drive a running server over its
+`ls`, `workspace`, `open`, `output` and `close` drive a running server over its
 [API](api.md), on the box or from elsewhere with `--url` and `--token`.
 
 ```

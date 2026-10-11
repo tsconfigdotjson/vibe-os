@@ -84,6 +84,8 @@ export interface AttachTarget {
   project: string;
   /** The role the window was opened as, when it has one. */
   role: string | null;
+  /** The caller's own tag for the window. */
+  label: string | null;
 }
 
 // ── resolution ───────────────────────────────────────────────────────────────
@@ -114,6 +116,7 @@ const targetRows = (db: Db) =>
       lastOpenedAt: workspaces.lastOpenedAt,
       project: projects.name,
       role: profiles.name,
+      label: windows.label,
     })
     .from(windows)
     .innerJoin(workspaces, eq(windows.workspaceId, workspaces.id))
@@ -133,6 +136,7 @@ const toTarget = (r: TargetRow): AttachTarget => ({
   workspace: r.workspace,
   project: r.project,
   role: r.role,
+  label: r.label,
 });
 
 export function resolveTarget(

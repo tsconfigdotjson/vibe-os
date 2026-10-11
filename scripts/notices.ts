@@ -81,7 +81,9 @@ function readPackage(name: string): Record<string, unknown> | null {
 function repoOf(pkg: Record<string, unknown>): string | null {
   const repo = pkg.repository;
   const url = typeof repo === "string" ? repo : (repo as { url?: string })?.url;
-  const match = url && /github\.com[/:]([^/]+\/[^/.#]+)/.exec(url);
+  // A repository name can have dots in it, like `xtermjs/xterm.js`.
+  const match =
+    url && /github\.com[/:]([^/]+\/[^/#]+?)(?:\.git)?(?:[/#]|$)/.exec(url);
   return match ? match[1] : null;
 }
 
