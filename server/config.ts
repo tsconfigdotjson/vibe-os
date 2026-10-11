@@ -119,7 +119,7 @@ export const OPTION_SPEC = {
   "no-restart": { type: "boolean" as const },
   "vnc-password": { type: "string" as const },
   "no-vnc-password": { type: "boolean" as const },
-  // ls, workspace, open and close: the client verbs. `--token` is shared with
+  // ls, workspace, open, output and close: the client verbs. `--token` is shared with
   // start, where it is the token to require rather than the one to send.
   url: { type: "string" as const },
   json: { type: "boolean" as const },
@@ -130,6 +130,8 @@ export const OPTION_SPEC = {
   blank: { type: "string" as const, multiple: true },
   submit: { type: "boolean" as const },
   force: { type: "boolean" as const },
+  label: { type: "string" as const },
+  lines: { type: "string" as const },
   help: { type: "boolean" as const, short: "h" },
   version: { type: "boolean" as const, short: "v" },
 };

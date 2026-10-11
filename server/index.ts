@@ -19,6 +19,7 @@ import { json } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { ensureWasm, ensureWebRoot } from "./preflight.ts";
 import { scanProjects } from "./projects.ts";
+import { Screens } from "./screens.ts";
 import { windowCommand } from "./session.ts";
 import {
   discoverHostKey,
@@ -255,7 +256,17 @@ export async function startServer(config: Config): Promise<RunningServer> {
   // Only consulted without a token, so only worth the Tailscale probe then.
   const hosts = config.token ? new Set<string>() : await knownHosts(config);
   const serveStatic = createStaticServer(config.webRoot);
-  const handleApi = createApi({ config, ca, hostKey, wallpapers, db });
+  // What every running window shows, so the API can say what is on it.
+  const screens = new Screens(config);
+  if (config.sessions) screens.start();
+  const handleApi = createApi({
+    config,
+    ca,
+    hostKey,
+    wallpapers,
+    db,
+    screens,
+  });
   const bridge = createBridgeHandlers({
     host: config.sshHost,
     port: config.sshPort,
@@ -482,6 +493,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
     port,
     close() {
       stopRenewal?.();
+      screens.stop();
       httpServer.stop(true);
       httpsServer?.stop(true);
       log.info(`stopped (${bridgeConnections()} bridge connections were open)`);

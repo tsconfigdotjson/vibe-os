@@ -1,4 +1,5 @@
-// The CLI verbs that drive a running server: `ls`, `workspace`, `open`, `close`.
+// The CLI verbs that drive a running server: `ls`, `workspace`, `open`,
+// `output`, `close`.
 //
 // Every one of them goes through the HTTP API rather than the database, so the
 // same command works on the box and from anywhere else with `--url` and
@@ -6,7 +7,9 @@
 
 import { readFile } from "node:fs/promises";
 import type {
+  Activity,
   Profile,
+  SendResult,
   WindowSummary,
   WorkspaceSummary,
 } from "../shared/wire.ts";
@@ -198,6 +201,15 @@ const print = (values: RawOptions, data: unknown, human: () => void) => {
   else human();
 };
 
+/** A window's state, padded to one width so the columns line up. */
+function stateLabel(state: Activity | null): string {
+  const text = (state ?? "stopped").padEnd(8);
+  if (state === "busy") return color.green(text);
+  if (state === "question") return color.yellow(text);
+  if (state === "idle") return text;
+  return color.dim(text);
+}
+
 async function ls(remote: Remote, values: RawOptions): Promise<number> {
   const windows = await request<WindowSummary[]>(remote, "GET", "/api/windows");
   print(values, windows, () => {
@@ -206,10 +218,9 @@ async function ls(remote: Remote, values: RawOptions): Promise<number> {
       return;
     }
     for (const w of windows) {
-      const state = w.live ? color.green("live") : color.dim("idle");
       const role = w.role ?? color.dim("terminal");
       console.log(
-        `${state}  ${w.ref.padEnd(30)} ${role.padEnd(20)} ${color.dim(`${w.project}/${w.workspace}`)}`,
+        `${stateLabel(w.state)}  ${w.ref.padEnd(30)} ${role.padEnd(20)} ${color.dim(`${w.project}/${w.workspace}`)}${w.label ? `  ${w.label}` : ""}`,
       );
     }
   });
@@ -313,13 +324,25 @@ async function open(
     throw new Error("--blank needs --profile, whose prompt it fills");
   }
 
-  let created: { id: string };
+  // One call: the server creates the window, starts it, waits for it to be
+  // ready and pastes, and takes the window back out if it cannot start.
+  const send = text !== undefined || hasBlanks;
+  type Opened = Partial<SendResult> & { window: WindowSummary };
+  let result: Opened;
   try {
-    created = await request<{ id: string }>(
+    result = await request<Opened>(
       remote,
       "POST",
       `/api/workspaces/${encodeURIComponent(ws.id)}/windows`,
-      { profileId, force: values.force === true },
+      {
+        profileId,
+        force: values.force === true,
+        label: values.label,
+        start: true,
+        prompt: text,
+        blanks: hasBlanks ? blanks : undefined,
+        submit: send ? values.submit === true : undefined,
+      },
     );
   } catch (err) {
     if (err instanceof ApiError && err.body.capacity === true)
@@ -327,34 +350,48 @@ async function open(
     throw err;
   }
 
-  const route = `/api/windows/${encodeURIComponent(created.id)}`;
-  const send = text !== undefined || hasBlanks;
-  const result = await request<{ started: boolean; window: WindowSummary }>(
-    remote,
-    "POST",
-    `${route}/${send ? "send" : "start"}`,
-    send
-      ? {
-          text,
-          blanks: hasBlanks ? blanks : undefined,
-          submit: values.submit === true,
-        }
-      : undefined,
-  ).catch(async (err: unknown) => {
-    // A window that could not start is a tile with nothing in it. Take it back
-    // out rather than leave that on someone's desktop.
-    await request(remote, "DELETE", route).catch(() => {});
-    throw err;
-  });
-
-  print(values, result.window, () => {
-    console.log(result.window.ref);
+  const { window } = result;
+  print(values, values.json ? result : window, () => {
+    console.log(window.ref);
     console.log(
       color.dim(
-        `  ${result.window.role ?? "terminal"} in ${result.window.project}/${result.window.workspace}${send ? (values.submit ? ", prompt submitted" : ", prompt pasted") : ""}`,
+        `  ${window.role ?? "terminal"} in ${window.project}/${window.workspace}${send && result.delivered ? (values.submit ? ", prompt submitted" : ", prompt pasted") : ""}`,
       ),
     );
   });
+  if (send && !result.delivered) {
+    log.error(
+      `${window.ref} is open, but the prompt was not sent: ${result.reason ?? result.state}.` +
+        ` See it with: vibe-os output ${window.ref}`,
+    );
+    return 1;
+  }
+  return 0;
+}
+
+async function output(
+  remote: Remote,
+  values: RawOptions,
+  name: string | undefined,
+): Promise<number> {
+  if (!name) {
+    log.error("usage: vibe-os output <window> [--lines <n>]");
+    return 1;
+  }
+  const win = findWindow(
+    await request<WindowSummary[]>(remote, "GET", "/api/windows"),
+    name,
+  );
+  const lines =
+    values.lines === undefined
+      ? ""
+      : `?lines=${encodeURIComponent(String(values.lines))}`;
+  const out = await request<{ text: string; state: Activity }>(
+    remote,
+    "GET",
+    `/api/windows/${encodeURIComponent(win.id)}/output${lines}`,
+  );
+  print(values, out, () => console.log(out.text));
   return 0;
 }
 
@@ -377,7 +414,7 @@ async function close(
 
 /** Runs one client verb. Errors are printed here, as one line. */
 export async function runClient(
-  command: "ls" | "workspace" | "open" | "close",
+  command: "ls" | "workspace" | "open" | "output" | "close",
   args: string[],
   values: RawOptions,
   local: { port: number; stateDir: string },
@@ -391,6 +428,8 @@ export async function runClient(
         return await workspace(remote, values, args);
       case "open":
         return await open(remote, values, args[0]);
+      case "output":
+        return await output(remote, values, args[0]);
       case "close":
         return await close(remote, args[0]);
     }

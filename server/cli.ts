@@ -60,14 +60,16 @@ const HELP = `
     vibe-os install-browser      run one Chrome on a virtual display (needs root)
     vibe-os fetch-wasm           (re)download the SSH WASM runtime
 
-    vibe-os ls                   list windows, and which are running
+    vibe-os ls                   list windows, and what each is doing
     vibe-os workspace new <project> [--from <branch>] [--name <name>]
                                  cut a workspace
     vibe-os workspace ls [project]
                                  list workspaces
     vibe-os open <workspace> [--profile <name>] [--prompt <text>]
-                 [--blank label=value] [--submit] [--force]
+                 [--blank label=value] [--submit] [--force] [--label <text>]
                                  open a window and start it
+    vibe-os output <window> [--lines <n>]
+                                 print what a window shows
     vibe-os close <window>       close a window and end its session
 
   ${color.bold("Options")}
@@ -109,7 +111,7 @@ const HELP = `
     -h, --help          show this
     -v, --version       print the version
 
-  ${color.bold("ls, workspace, open, close")}
+  ${color.bold("ls, workspace, open, output, close")}
     --url <url>         the server to talk to (default VIBE_OS_URL, or on this
                         box the address start is listening on)
     --token <value>     its token (default VIBE_OS_TOKEN, or on this box the
@@ -121,6 +123,8 @@ const HELP = `
                         Repeatable
     --submit            press Enter after pasting
     --force             open even when the box is short of memory
+    --label <text>      tag the window, to find it again in ls --json
+    --lines <n>         how many lines output prints (default 50)
 
   ${color.bold("install-browser")}
     --geometry <WxH>    virtual screen size (default 1600x900)
@@ -737,6 +741,7 @@ export async function main(argv: string[]): Promise<number> {
     case "ls":
     case "workspace":
     case "open":
+    case "output":
     case "close":
       return runClient(command, positionals.slice(1), values, config);
     case "help":

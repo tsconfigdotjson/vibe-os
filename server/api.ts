@@ -5,6 +5,7 @@ import type {
   ClientConfig,
   MemoryReport,
   SendInput,
+  SendResult,
   WindowSummary,
   WorkspaceSummary,
 } from "../shared/wire.ts";
@@ -23,7 +24,12 @@ import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
 import { discover, specs } from "./harness.ts";
-import { sendText, startSession } from "./headless.ts";
+import {
+  paste,
+  submit as pressEnter,
+  startSession,
+  waitForInput,
+} from "./headless.ts";
 import {
   badId,
   IMMUTABLE_CACHE_CONTROL,
@@ -50,6 +56,7 @@ import {
   getProfile,
   listProfiles,
   PALETTE,
+  type Profile,
   updateProfile,
 } from "./profiles.ts";
 import {
@@ -62,6 +69,7 @@ import {
   scanProjects,
   touchWorkspace,
 } from "./projects.ts";
+import { Screens } from "./screens.ts";
 import { socketPath, windowCommand } from "./session.ts";
 import type { SshCa } from "./ssh-ca.ts";
 import { fingerprint, MAX_PUBKEY_BYTES } from "./ssh-ca.ts";
@@ -126,15 +134,23 @@ async function refreshMcpMirrors(db: Db, stateDir: string): Promise<void> {
 /** Ceiling on text sent to a window, matching a profile prompt's. */
 const MAX_SEND_CHARS = 16_000;
 
-const summarise = (t: AttachTarget, live: Set<string>): WindowSummary => ({
-  id: t.windowId,
-  ref: t.ref,
-  session: t.session,
-  workspace: t.workspace,
-  project: t.project,
-  role: t.role,
-  live: live.has(t.session),
-});
+/** Longest label a window can be tagged with. */
+const MAX_LABEL_CHARS = 200;
+/**
+ * How long a send waits for a window to stop drawing before it pastes anyway.
+ *
+ * A harness that has just started draws its startup and goes quiet in a few
+ * seconds. One that is working never goes quiet, and a paste into a working
+ * agent is queued rather than lost, so after this it goes in regardless.
+ */
+const SETTLE_WAIT_MS = 20_000;
+/** How long after a paste the window has to draw something. */
+const ECHO_WAIT_MS = 3_000;
+/** Lines of output when the caller does not say, and the most it can ask for. */
+const DEFAULT_OUTPUT_LINES = 50;
+const MAX_OUTPUT_LINES = 2_000;
+/** How long a first read waits for a window to redraw itself. */
+const FIRST_PAINT_WAIT_MS = 1_000;
 
 /**
  * What to paste for a send: the text given, or the profile prompt with its
@@ -182,10 +198,100 @@ export interface ApiDeps {
   hostKey: string | null;
   wallpapers: WallpaperStore;
   db: Db;
+  /** Every running window's screen. One that is never started if absent. */
+  screens?: Screens;
 }
 
 export function createApi(deps: ApiDeps) {
   const { ca, config, db, hostKey, wallpapers } = deps;
+  const screens = deps.screens ?? new Screens(config);
+
+  const summarise = (t: AttachTarget, live: Set<string>): WindowSummary => {
+    const running = live.has(t.session);
+    const screen = running ? screens.get(t.session) : undefined;
+    return {
+      id: t.windowId,
+      ref: t.ref,
+      session: t.session,
+      workspace: t.workspace,
+      project: t.project,
+      role: t.role,
+      label: t.label,
+      live: running,
+      state: running ? (screen?.activity() ?? "idle") : null,
+      lastOutputAt: screen?.lastOutputAt ?? null,
+    };
+  };
+
+  /** Starts a window's session if it is not running, and watches its screen. */
+  async function start(
+    target: AttachTarget,
+    profile: Profile | undefined,
+  ): Promise<boolean> {
+    if (profile?.harness === "claude")
+      await refreshMcpMirrors(db, config.stateDir).catch((err: unknown) => {
+        log.warn(`could not refresh mcp configs: ${describeError(err)}`);
+      });
+    const started = await startSession(
+      { config, ca, hostKey },
+      target,
+      profile,
+      () => takeResume(db, target.windowId),
+    );
+    await screens.watch(target.session, { fresh: started });
+    return started;
+  }
+
+  /**
+   * Starts a window if need be, waits until it is ready for text, and pastes.
+   *
+   * Ready is three things in turn: the program has the terminal in raw mode,
+   * it has stopped drawing (a harness draws its startup, then goes quiet at its
+   * prompt), and what it stopped on is not a question. A paste into a question,
+   * such as Claude asking whether to trust a new folder, is lost, and the Enter
+   * after it answers the question. So that is reported rather than done, unless
+   * the caller says `force`. After the paste, the window has to draw something,
+   * which is the paste arriving; Enter is pressed only once it has.
+   */
+  async function deliver(
+    target: AttachTarget,
+    profile: Profile | undefined,
+    text: string,
+    opts: { submit: boolean; force: boolean },
+  ): Promise<SendResult> {
+    const { session } = target;
+    const started = await start(target, profile);
+    await waitForInput(config, session);
+    const watched = (await screens.watch(session)) !== undefined;
+    const state = watched
+      ? await screens.settle(session, SETTLE_WAIT_MS)
+      : "idle";
+    if (state === "question" && !opts.force)
+      return {
+        started,
+        delivered: false,
+        state,
+        reason:
+          "the window is waiting on a question, so nothing was pasted. Read it with GET /api/windows/:window/output, or send with force to paste anyway",
+      };
+
+    const before = Date.now();
+    await paste(config, session, text);
+    if (watched && !(await screens.drewSince(session, before, ECHO_WAIT_MS)))
+      return {
+        started,
+        delivered: false,
+        state: screens.get(session)?.activity() ?? state,
+        reason: "the window did not show the paste, so Enter was not pressed",
+      };
+    if (opts.submit) await pressEnter(config, session);
+    // The window has its instructions, so the band has nothing to offer.
+    updateWindow(db, target.windowId, { promptDone: true });
+    log.info(
+      `delivered ${text.length} characters to ${session}${opts.submit ? " and submitted" : ""}`,
+    );
+    return { started, delivered: true, state };
+  }
 
   return async function handleApi(
     req: Request,
@@ -397,12 +503,34 @@ export function createApi(deps: ApiDeps) {
         return json(listWindows(db, workspaceId));
       }
       if (req.method === "POST") {
-        const body = await readJson<{ profileId?: unknown; force?: unknown }>(
-          req,
-        );
+        const body = await readJson<{
+          profileId?: unknown;
+          force?: unknown;
+          label?: unknown;
+          start?: unknown;
+          prompt?: unknown;
+          blanks?: unknown;
+          submit?: unknown;
+        }>(req);
+        let label: string | null = null;
+        if (body.label !== undefined && body.label !== null) {
+          if (typeof body.label !== "string")
+            return json({ error: "label must be a string" }, 400);
+          if (body.label.length > MAX_LABEL_CHARS)
+            return json(
+              { error: `label must be under ${MAX_LABEL_CHARS} characters` },
+              400,
+            );
+          label = body.label.trim() || null;
+        }
+        for (const flag of ["start", "submit"] as const) {
+          if (body[flag] !== undefined && typeof body[flag] !== "boolean")
+            return json({ error: `${flag} must be true or false` }, 400);
+        }
+        let profile: Profile | undefined;
         let profileId: string | null = null;
         if (typeof body.profileId === "string" && body.profileId !== "") {
-          const profile = getProfile(db, body.profileId);
+          profile = getProfile(db, body.profileId);
           // A profile belongs to a project, so it may only open windows in that
           // project's workspaces — otherwise one project's flags and prompt
           // could be launched inside another project's worktree.
@@ -421,7 +549,59 @@ export function createApi(deps: ApiDeps) {
           }
           profileId = profile.id;
         }
-        return json(createWindow(db, workspaceId, profileId), 201);
+
+        // A prompt or blanks mean start it and send; `start` alone means start.
+        const sends = body.prompt !== undefined || body.blanks !== undefined;
+        let text: string | undefined;
+        if (sends) {
+          try {
+            text = textToSend(
+              {
+                text: body.prompt as string | undefined,
+                blanks: body.blanks as Record<string, string> | undefined,
+              },
+              profile,
+            );
+          } catch (err) {
+            return json({ error: describeError(err) }, 400);
+          }
+        }
+        if ((sends || body.start === true) && !config.sessions)
+          return json(
+            { error: "this server runs plain login shells (--no-sessions)" },
+            409,
+          );
+
+        const row = createWindow(db, workspaceId, profileId, label);
+        if (!sends && body.start !== true) return json(row, 201);
+
+        const target = resolveTarget(db, row.id);
+        if (!target) return json({ error: "unknown window" }, 404);
+        try {
+          const result =
+            text !== undefined
+              ? await deliver(target, profile, text, {
+                  submit: body.submit === true,
+                  force: false,
+                })
+              : { started: await start(target, profile) };
+          return json(
+            {
+              ...(getWindow(db, row.id) ?? row),
+              ...result,
+              window: summarise(target, new Set([target.session])),
+            },
+            201,
+          );
+        } catch (err) {
+          // A window that could not start is a tile with nothing in it. Take it
+          // back out rather than leave that on someone's desktop.
+          const message = describeError(err);
+          log.warn(`open ${target.session} failed: ${message}`);
+          await killSession(config, target.session).catch(() => {});
+          deleteWindow(db, row.id);
+          return json({ error: message }, 502);
+        }
       }
       return methodNotAllowed();
     }
@@ -457,7 +637,49 @@ export function createApi(deps: ApiDeps) {
       const live = config.sessions
         ? await liveSessions(config)
         : new Set<string>();
-      return json(listTargets(db).map((t) => summarise(t, live)));
+      // A session started by a login rather than by this server is picked up
+      // within a few seconds anyway; this saves a caller the wait.
+      await Promise.all([...live].map((s) => screens.watch(s)));
+      const label = url.searchParams.get("label");
+      return json(
+        listTargets(db)
+          .filter((t) => label === null || t.label === label)
+          .map((t) => summarise(t, live)),
+      );
+    }
+
+    // What a window shows, as plain text: the screen and the history above it.
+    const outputMatch = /^\/api\/windows\/([^/]+)\/output$/.exec(p);
+    if (outputMatch && req.method === "GET") {
+      const id = decodeURIComponent(outputMatch[1]);
+      if (!ID_PATTERN.test(id)) return badId("window");
+      if (!config.sessions)
+        return json(
+          { error: "this server runs plain login shells (--no-sessions)" },
+          409,
+        );
+      const target = resolveTarget(db, id);
+      if (!target || target.windowId !== id)
+        return json({ error: "unknown window" }, 404);
+      const given = url.searchParams.get("lines");
+      const lines = given === null ? DEFAULT_OUTPUT_LINES : Number(given);
+      if (!Number.isInteger(lines) || lines < 1 || lines > MAX_OUTPUT_LINES)
+        return json(
+          {
+            error: `lines must be a whole number from 1 to ${MAX_OUTPUT_LINES}`,
+          },
+          400,
+        );
+      const screen = await screens.watch(target.session);
+      if (!screen) return json({ error: "the window is not running" }, 409);
+      // Just attached to: its repaint is on the way, and blank until it lands.
+      if (screen.lastOutputAt === null)
+        await screens.drewSince(target.session, 0, FIRST_PAINT_WAIT_MS);
+      return json({
+        text: screen.text(lines),
+        state: screen.activity(),
+        lastOutputAt: screen.lastOutputAt,
+      });
     }
 
     // Starts a window's session with nothing attached, so it is running before
@@ -480,11 +702,15 @@ export function createApi(deps: ApiDeps) {
 
       let text: string | undefined;
       let submit = false;
+      let force = false;
       if (startMatch[2] === "send") {
         const body = await readJson<SendInput>(req);
-        if (body.submit !== undefined && typeof body.submit !== "boolean")
-          return json({ error: "submit must be true or false" }, 400);
+        for (const flag of ["submit", "force"] as const) {
+          if (body[flag] !== undefined && typeof body[flag] !== "boolean")
+            return json({ error: `${flag} must be true or false` }, 400);
+        }
         submit = body.submit === true;
+        force = body.force === true;
         try {
           text = textToSend(body, profile);
         } catch (err) {
@@ -492,32 +718,20 @@ export function createApi(deps: ApiDeps) {
         }
       }
 
-      let started: boolean;
       try {
-        if (profile?.harness === "claude")
-          await refreshMcpMirrors(db, config.stateDir).catch((err: unknown) => {
-            log.warn(`could not refresh mcp configs: ${describeError(err)}`);
-          });
-        started = await startSession(
-          { config, ca, hostKey },
-          target,
-          profile,
-          () => takeResume(db, id),
-        );
-        if (text !== undefined) {
-          await sendText(config, target.session, text, { submit });
-          // The window has its instructions, so the band has nothing to offer.
-          updateWindow(db, id, { promptDone: true });
-        }
+        const result =
+          text !== undefined
+            ? await deliver(target, profile, text, { submit, force })
+            : { started: await start(target, profile) };
+        return json({
+          ...result,
+          window: summarise(target, new Set([target.session])),
+        });
       } catch (err) {
         const message = describeError(err);
         log.warn(`${startMatch[2]} ${target.session} failed: ${message}`);
         return json({ error: message }, 502);
       }
-      return json({
-        started,
-        window: summarise(target, new Set([target.session])),
-      });
     }
 
     // How to reach this window from a real terminal. Read-only: it composes

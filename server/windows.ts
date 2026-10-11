@@ -132,6 +132,7 @@ export function createWindow(
   db: Db,
   workspaceId: string,
   profileId?: string | null,
+  label?: string | null,
 ) {
   const existing = listWindows(db, workspaceId);
 
@@ -158,6 +159,7 @@ export function createWindow(
       minimized: 0,
       profileId: profileId ?? null,
       promptDone: 0,
+      label: label ?? null,
       createdAt: Date.now(),
     })
     .run();

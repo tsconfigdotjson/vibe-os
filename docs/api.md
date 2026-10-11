@@ -35,7 +35,7 @@ status:
 | 401 | missing or wrong token |
 | 404 | no such project, workspace, profile or window |
 | 405 | the route exists but not with this method |
-| 409 | the server cannot do this here, for example `--no-sessions`, or the box is short of memory |
+| 409 | the server cannot do this here, for example `--no-sessions`, a window that is not running, or the box is short of memory |
 | 502 | starting or typing into a session failed |
 
 ## Stable routes
@@ -97,29 +97,54 @@ prompt. Profiles belong to a project.
 A window is a terminal in a workspace. With sessions on (the default), each one
 is a dtach session that runs until it is closed.
 
-`GET /api/windows` lists every window on the box.
+`GET /api/windows` lists every window on the box. `?label=<text>` lists only
+the windows opened with that label.
 
 ```json
-[{ "id": "…", "ref": "quiet-amber-otter-1", "session": "vibe-quiet-amber-otter-1", "workspace": "quiet-amber-otter", "project": "api", "role": "QA", "live": true }]
+[{ "id": "…", "ref": "quiet-amber-otter-1", "session": "vibe-quiet-amber-otter-1", "workspace": "quiet-amber-otter", "project": "api", "role": "QA", "label": "nightly-triage", "live": true, "state": "idle", "lastOutputAt": 1791291661842 }]
 ```
 
 `ref` is what `vibe-os attach` and `vibe-os close` take. `role` is the profile
-name, or null for a plain terminal. `live` is whether its session is running.
+name, or null for a plain terminal. `label` is the one given when the window was
+opened, or null. `live` is whether its session is running.
+
+`state` is what the program in the window is doing, or null when it is not running:
+
+| state | |
+| --- | --- |
+| `busy` | it drew something in the last second and a half. An agent at work is always busy |
+| `question` | it is quiet, and the screen shows a question: a dialog that ends in "Enter to confirm" or "Esc to cancel", a numbered menu, or `(y/n)` |
+| `idle` | it is quiet at its prompt, or finished |
+
+`lastOutputAt` is when it last drew anything, in milliseconds since the epoch.
+It is null until the server has seen output from it, so it starts over when the
+server restarts.
 
 `GET /api/workspaces/:workspace/windows` lists one workspace's windows, with
 their layout on the desktop.
 
-`POST /api/workspaces/:workspace/windows` adds a window. It does not start it:
-that happens when a browser shows it, or with `start` or `send` below.
+`POST /api/workspaces/:workspace/windows` adds a window. On its own it does not
+start it: that happens when a browser shows it, with `start` or `send` below, or
+with `start` or `prompt` here.
 
 | field | |
 | --- | --- |
 | `profileId` | optional. A profile of the workspace's project. A plain terminal if absent |
+| `label` | optional. Your own tag for the window, up to 200 characters, to find it again with `GET /api/windows?label=` |
+| `start` | optional. Start the window's session too |
+| `prompt` | optional. Start the window and send this text, as `send` does |
+| `blanks` | optional. Start the window and send the profile prompt with its blanks filled, as `send` does |
+| `submit` | optional. With `prompt` or `blanks`, press Enter after pasting |
 | `force` | optional. Open an agent even when the box is short of memory |
 
-Returns `201` with the window. When the box is short of memory and the profile
-runs an agent, it returns `409` with `{ "error": "…", "capacity": true }`
-instead. Send it again with `"force": true` to open it anyway.
+Returns `201` with the window. With `start`, `prompt` or `blanks`, the window
+also carries the fields `start` and `send` return, including `window`, its
+summary. If the window cannot be started it is removed again, and the call
+returns `502`.
+
+When the box is short of memory and the profile runs an agent, it returns `409`
+with `{ "error": "…", "capacity": true }` instead. Send it again with
+`"force": true` to open it anyway.
 
 `POST /api/windows/:window/start` starts the window's session with nothing
 attached. It logs in over SSH with a short-lived certificate, the same way the
@@ -135,17 +160,51 @@ if it is not running.
 | `text` | the text to paste |
 | `blanks` | instead of `text`: values for the profile prompt's `{{blanks}}`, by label. The filled prompt is pasted |
 | `submit` | optional. Press Enter after pasting. Default false |
+| `force` | optional. Paste even when the window is waiting on a question. Default false |
 
 With neither `text` nor `blanks`, the profile prompt is pasted as it is. Every
 blank in it has to be filled.
 
 The text is pasted the way the desktop's Send button does it, as one bracketed
-paste. The call waits, up to a minute, until the program in the window is
-reading keys, so it works on a window that was opened a moment ago. A harness
-that stops on a question first, like Claude asking whether to trust a new
-folder, gets the paste in that question.
+paste. Before pasting, the call waits until the window is ready:
 
-After a send, the desktop no longer offers the profile prompt above the window.
+1. The program is reading keys, for up to a minute.
+2. It has stopped drawing, for up to 20 seconds. A harness that is starting
+   draws its splash screen and then goes quiet. One that is still busy after 20
+   seconds gets the paste anyway, and most harnesses queue it.
+3. What it stopped on is not a question. If it is, like Claude asking whether
+   to trust a new folder, nothing is pasted, unless `force` is set.
+
+After the paste, the window has to draw something within 3 seconds, or Enter
+is not pressed.
+
+```json
+{ "started": true, "delivered": true, "state": "idle", "window": { … } }
+```
+
+`delivered` is whether the text went in. `state` is what the window was doing
+at the time (see [`GET /api/windows`](#windows)). When `delivered` is false,
+`reason` says why. Read the window's output to see what it is asking.
+
+After a delivered send, the desktop no longer offers the profile prompt above
+the window.
+
+`GET /api/windows/:window/output` returns what the window shows, as plain text
+with colours and cursor movement removed.
+
+| query | |
+| --- | --- |
+| `lines` | optional. How many lines, counted from the bottom. 1 to 2000, default 50 |
+
+```json
+{ "text": "❯ Reply with just the word pong.\n⏺ pong\n…", "state": "idle", "lastOutputAt": 1791291661842 }
+```
+
+The text is the screen and the history above it, up to 1000 lines. A long line
+the terminal wrapped is joined back into one. A window that was already running
+when the server started is asked to redraw itself the first time it is read,
+which narrows it by one column for a moment. Returns `409` when the window is
+not running.
 
 `DELETE /api/windows/:window` ends the window's session and removes it.
 
@@ -176,7 +235,7 @@ These serve the desktop and are not stable.
 
 ## From the command line
 
-`vibe-os ls`, `workspace`, `open` and `close` call the stable routes. On the box
+`vibe-os ls`, `workspace`, `open`, `output` and `close` call the stable routes. On the box
 they find the server and its token on their own. From anywhere else, pass
 `--url` and `--token`, or set `VIBE_OS_URL` and `VIBE_OS_TOKEN`.
 
@@ -191,19 +250,23 @@ vibe-os open quiet-amber-otter --profile QA --prompt "Reproduce #123 and write a
 vibe-os open quiet-amber-otter --profile QA --blank ticket=#123 --submit
 
 vibe-os ls
+vibe-os output quiet-amber-otter-1 --lines 20
 vibe-os close quiet-amber-otter-1
 ```
 
 | command | |
 | --- | --- |
-| `vibe-os ls` | list windows, and which are running |
+| `vibe-os ls` | list windows, and what each is doing |
 | `vibe-os workspace new <project> [--from <branch>] [--name <name>]` | create a workspace and print its name |
 | `vibe-os workspace ls [project]` | list workspaces |
-| `vibe-os open <workspace> [--profile <name>] [--prompt <text>] [--blank label=value] [--submit] [--force]` | add a window, start it, and paste a prompt if given. Prints the window's ref |
+| `vibe-os open <workspace> [--profile <name>] [--prompt <text>] [--blank label=value] [--submit] [--force] [--label <text>]` | add a window, start it, and paste a prompt if given. Prints the window's ref |
+| `vibe-os output <window> [--lines <n>]` | print what a window shows |
 | `vibe-os close <window>` | close a window and end its session |
 
 A workspace can be named as `project/name` when two projects have one with the
 same name. `--prompt -` reads the prompt from stdin. `--json` prints what the
 API returned instead of text.
 
-If a window cannot be started, `open` removes it again and exits non-zero.
+If a window cannot be started, `open` removes it again and exits non-zero. If it
+starts but the prompt is not delivered, the window stays open, and `open` says
+why and exits non-zero.

@@ -107,6 +107,8 @@ export const windows = sqliteTable(
      * 'resume' once the answer was yes, until the next session is created.
      */
     restore: text("restore"),
+    /** Free text the caller tagged the window with, so it can find it again. */
+    label: text("label"),
     createdAt: integer("created_at").notNull(),
   },
   (t) => [index("windows_workspace_idx").on(t.workspaceId)],
@@ -162,6 +164,7 @@ const DDL = [
      handoff_at INTEGER,
      handoff_seen INTEGER NOT NULL DEFAULT 0,
      restore TEXT,
+     label TEXT,
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS windows_workspace_idx ON windows (workspace_id)`,
@@ -186,6 +189,7 @@ const ADDED_COLUMNS: [table: string, column: string, decl: string][] = [
   ["windows", "handoff_at", "INTEGER"],
   ["windows", "handoff_seen", "INTEGER NOT NULL DEFAULT 0"],
   ["windows", "restore", "TEXT"],
+  ["windows", "label", "TEXT"],
   ["profiles", "memory_high", "TEXT"],
   ["profiles", "memory_max", "TEXT"],
 ];

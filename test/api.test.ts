@@ -376,9 +376,54 @@ describe("automation", () => {
         project: "demo",
         workspace: "brisk-copper-vole",
         role: null,
+        label: null,
         live: false,
+        state: null,
+        lastOutputAt: null,
       }),
     ]);
+  });
+
+  test("a label is kept, and lists can be filtered by it", async () => {
+    const tagged = await bodyOf<{ id: string; label: string }>(
+      call("POST", `/api/workspaces/${ids.workspace}/windows`, {
+        label: " nightly-triage ",
+      }),
+    );
+    expect(tagged.label).toBe("nightly-triage");
+    const list = await bodyOf<{ id: string }[]>(
+      call("GET", "/api/windows?label=nightly-triage"),
+    );
+    expect(list.map((w) => w.id)).toEqual([tagged.id]);
+  });
+
+  test("a label has to be a short string", async () => {
+    for (const label of [7, "x".repeat(201)]) {
+      const res = await answered(
+        call("POST", `/api/workspaces/${ids.workspace}/windows`, { label }),
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test("opening with a prompt needs sessions, and adds no window without", async () => {
+    const res = await answered(
+      call("POST", `/api/workspaces/${ids.workspace}/windows`, {
+        prompt: "hi",
+      }),
+    );
+    expect(res.status).toBe(409);
+    const list = await bodyOf<unknown[]>(
+      call("GET", `/api/workspaces/${ids.workspace}/windows`),
+    );
+    expect(list).toHaveLength(1);
+  });
+
+  test("output needs sessions", async () => {
+    const res = await answered(
+      call("GET", `/api/windows/${ids.window}/output`),
+    );
+    expect(res.status).toBe(409);
   });
 
   test("lists every workspace with its project", async () => {
@@ -429,9 +474,37 @@ describe("automation", () => {
       expect((await res).status).toBe(400);
     });
 
-    test("submit must be a boolean", async () => {
-      const res = send(ids.window, { text: "hi", submit: "yes" });
-      expect((await res).status).toBe(400);
+    test("submit and force must be booleans", async () => {
+      for (const body of [
+        { text: "hi", submit: "yes" },
+        { text: "hi", force: 1 },
+      ]) {
+        expect((await send(ids.window, body)).status).toBe(400);
+      }
+    });
+
+    test("a prompt that cannot be sent adds no window", async () => {
+      const res = await answered(
+        call("POST", `/api/workspaces/${ids.workspace}/windows`, {
+          blanks: {},
+        }),
+      );
+      expect(res.status).toBe(400);
+      const list = await bodyOf<unknown[]>(
+        call("GET", `/api/workspaces/${ids.workspace}/windows`),
+      );
+      expect(list).toHaveLength(1);
+    });
+
+    test("output: unknown windows, bad line counts, stopped windows", async () => {
+      const output = (id: string, q = "") =>
+        answered(call("GET", `/api/windows/${id}/output${q}`));
+      expect((await output(newId())).status).toBe(404);
+      for (const q of ["?lines=0", "?lines=2.5", "?lines=abc", "?lines=5000"])
+        expect((await output(ids.window, q)).status).toBe(400);
+      const stopped = output(ids.window, "?lines=10");
+      expect((await stopped).status).toBe(409);
+      expect(await errorOf(stopped)).toBe("the window is not running");
     });
 
     test("every blank has to be filled, and only real ones", async () => {
