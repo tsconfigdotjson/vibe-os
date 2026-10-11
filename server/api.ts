@@ -25,7 +25,10 @@ import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
 import { discover, specs } from "./harness.ts";
 import {
+  KEY_NAMES,
+  keyBytes,
   paste,
+  press,
   submit as pressEnter,
   startSession,
   waitForInput,
@@ -134,6 +137,9 @@ async function refreshMcpMirrors(db: Db, stateDir: string): Promise<void> {
 /** Ceiling on text sent to a window, matching a profile prompt's. */
 const MAX_SEND_CHARS = 16_000;
 
+/** Most keys one send can press. */
+const MAX_KEYS = 32;
+
 /** Longest label a window can be tagged with. */
 const MAX_LABEL_CHARS = 200;
 /**
@@ -162,7 +168,9 @@ function textToSend(
 ): string {
   if (body.text !== undefined) {
     if (typeof body.text !== "string" || body.text === "")
-      throw new Error("text must be a non-empty string");
+      throw new Error(
+        'text must be a non-empty string. To press Enter alone, send keys: ["Enter"]',
+      );
     if (body.blanks !== undefined)
       throw new Error(
         "blanks fill the profile prompt; leave out text to use it",
@@ -190,6 +198,31 @@ function textToSend(
   if (filled.missing.length > 0)
     throw new Error(`fill every blank: ${filled.missing.join(", ")}`);
   return filled.text;
+}
+
+/**
+ * The keys a send presses instead of pasting. Throws with a message for the
+ * caller when they are not keys, or come with something a key send ignores.
+ */
+function keysToPress(body: SendInput): string[] {
+  const { keys } = body;
+  if (
+    !Array.isArray(keys) ||
+    keys.length === 0 ||
+    keys.length > MAX_KEYS ||
+    keys.some((k) => typeof k !== "string")
+  )
+    throw new Error(`keys must be a list of 1 to ${MAX_KEYS} key names`);
+  const unknown = keys.find((k) => keyBytes(k) === null);
+  if (unknown !== undefined)
+    throw new Error(
+      `unknown key ${JSON.stringify(unknown)}. A key is one character or one of ${KEY_NAMES.join(", ")}`,
+    );
+  if (body.text !== undefined || body.blanks !== undefined)
+    throw new Error("send text or keys, not both");
+  if (body.submit !== undefined)
+    throw new Error('submit is for text; put "Enter" in keys instead');
+  return keys;
 }
 
 export interface ApiDeps {
@@ -290,6 +323,25 @@ export function createApi(deps: ApiDeps) {
     log.info(
       `delivered ${text.length} characters to ${session}${opts.submit ? " and submitted" : ""}`,
     );
+    return { started, delivered: true, state };
+  }
+
+  /**
+   * Starts a window if need be, and presses keys in it once it reads them.
+   *
+   * No wait for quiet and no refusal on a question, unlike `deliver`: keys are
+   * how a question is answered, and an Escape is how a busy agent is stopped.
+   */
+  async function pressKeys(
+    target: AttachTarget,
+    profile: Profile | undefined,
+    keys: string[],
+  ): Promise<SendResult> {
+    const { session } = target;
+    const started = await start(target, profile);
+    await waitForInput(config, session);
+    const state = screens.get(session)?.activity() ?? "idle";
+    await press(config, session, keys);
     return { started, delivered: true, state };
   }
 
@@ -701,6 +753,7 @@ export function createApi(deps: ApiDeps) {
         : undefined;
 
       let text: string | undefined;
+      let keys: string[] | undefined;
       let submit = false;
       let force = false;
       if (startMatch[2] === "send") {
@@ -712,7 +765,8 @@ export function createApi(deps: ApiDeps) {
         submit = body.submit === true;
         force = body.force === true;
         try {
-          text = textToSend(body, profile);
+          if (body.keys !== undefined) keys = keysToPress(body);
+          else text = textToSend(body, profile);
         } catch (err) {
           return json({ error: describeError(err) }, 400);
         }
@@ -720,9 +774,11 @@ export function createApi(deps: ApiDeps) {
 
       try {
         const result =
-          text !== undefined
-            ? await deliver(target, profile, text, { submit, force })
-            : { started: await start(target, profile) };
+          keys !== undefined
+            ? await pressKeys(target, profile, keys)
+            : text !== undefined
+              ? await deliver(target, profile, text, { submit, force })
+              : { started: await start(target, profile) };
         return json({
           ...result,
           window: summarise(target, new Set([target.session])),

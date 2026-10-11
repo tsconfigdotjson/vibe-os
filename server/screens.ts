@@ -18,7 +18,7 @@ import { readdir } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import { promisify } from "node:util";
-import { Terminal } from "@xterm/headless";
+import { type IBufferLine, Terminal } from "@xterm/headless";
 import type { Activity } from "../shared/wire.ts";
 import type { Config } from "./config.ts";
 import { sessionTty } from "./headless.ts";
@@ -129,15 +129,23 @@ async function ttySize(
  * long line reads as it was written rather than as the width it was drawn at.
  * Blank lines at the bottom, which are only the unused part of the screen, are
  * dropped.
+ *
+ * Faint text on the cursor's line is left out. That is where a harness draws a
+ * placeholder or a suggested prompt, greyed out with SGR 2 (Claude's `Try
+ * "…"`, Codex's hint), and as plain text it reads the same as something typed
+ * and not yet sent. The cursor is the input caret in both, so its line is the
+ * input line.
  */
 export function bufferText(term: Terminal, count: number): string {
   const buf = term.buffer.active;
+  const cursorRow = buf.baseY + buf.cursorY;
   const lines: string[] = [];
   for (let i = 0; i < buf.length; i++) {
     const line = buf.getLine(i);
     if (!line) continue;
     // Untrimmed until joined, or a space at the wrap point would be lost.
-    const text = line.translateToString(true);
+    const text =
+      i === cursorRow ? withoutFaint(line) : line.translateToString(true);
     if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
     else lines.push(text);
   }
@@ -145,6 +153,18 @@ export function bufferText(term: Terminal, count: number): string {
   while (trimmed.length > 0 && trimmed[trimmed.length - 1] === "")
     trimmed.pop();
   return trimmed.slice(-count).join("\n");
+}
+
+/** A line's text with every faint cell read as a blank. */
+function withoutFaint(line: IBufferLine): string {
+  let text = "";
+  for (let x = 0; x < line.length; x++) {
+    const cell = line.getCell(x);
+    // The second half of a wide character has width 0 and no text of its own.
+    if (!cell || cell.getWidth() === 0) continue;
+    text += cell.isDim() ? " ".repeat(cell.getWidth()) : cell.getChars() || " ";
+  }
+  return text.trimEnd();
 }
 
 /** One session's screen, kept up to date by its connection. */
