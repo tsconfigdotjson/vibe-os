@@ -330,6 +330,20 @@ export function SshTerminal({
       term.onTitleChange((title) => handlers.current.onTitleChange?.(title)),
       term.onBell(() => handlers.current.onBell?.()),
     ];
+    /*
+     * Whether the program has drawn its whole screen since this terminal
+     * opened. A full repaint starts by erasing the display (`ESC[2J`), and
+     * nothing short of one does, so this is what the repaint below waits for.
+     * Registered before the session starts, so no output can arrive unseen.
+     */
+    let repainted = false;
+    disposables.push(
+      term.parser.registerCsiHandler({ final: "J" }, (params) => {
+        if (params[0] === 2 || params[0] === 3) repainted = true;
+        return false;
+      }),
+    );
+
     const onFocus = () => {
       if (!disposed) handlers.current.onFocus?.();
     };
@@ -366,34 +380,25 @@ export function SshTerminal({
          * resize to the program and invisible here because the second one
          * restores the fitted size before anything is drawn at the odd width.
          *
-         * Conditioned on the screen actually being empty, and retried, because
-         * the useful moment cannot be timed from here. `ready` means the WASM
-         * has a session, not that dtach has attached and the program has its
-         * SIGWINCH handler back — nudge before that and the resize lands on
-         * nobody, which is exactly what a first attempt at a fixed 120ms did.
-         * A delay long enough to be safe is also long enough to be seen.
+         * Retried, because the useful moment cannot be timed from here.
+         * `ready` means the WASM has a session, not that dtach has attached and
+         * the program has its SIGWINCH handler back. Nudge before that and the
+         * resize lands on nobody, which is exactly what a first attempt at a
+         * fixed 120ms did. A delay long enough to be safe is also long enough
+         * to be seen.
          *
-         * Emptiness rather than "has anything been written", because plenty is
-         * written that is not a repaint — connection notices, a stray newline —
-         * and any of it would call the problem solved while the window is still
-         * blank. Asking what is on screen tests the symptom itself, so a session
-         * that paints on its own is never nudged and one that stays dark is
-         * asked again.
+         * Retried until the program has erased the display (`repainted`, up
+         * where the terminal is built), not until the screen has something on
+         * it. A program that is busy keeps drawing while nobody is attached,
+         * but only the cells that changed: Claude's spinner and its timer,
+         * measured at 2.7KB of cursor moves in two seconds and no erase. Those
+         * fragments land on a blank terminal, the screen is no longer empty,
+         * and a check for emptiness called the window painted when it showed
+         * a spinner and a few stray digits. A session that repaints on its own,
+         * because the size really did change, is still never nudged.
          */
-        const blank = (): boolean => {
-          const buf = term.buffer.active;
-          for (let y = 0; y < term.rows; y++) {
-            if (
-              (
-                buf.getLine(buf.viewportY + y)?.translateToString(true) ?? ""
-              ).trim() !== ""
-            )
-              return false;
-          }
-          return true;
-        };
         const repaint = (): void => {
-          if (disposed || term.cols < 2 || !blank()) return;
+          if (disposed || term.cols < 2 || repainted) return;
           term.resize(term.cols - 1, term.rows);
           nudges.push(window.setTimeout(() => !disposed && fit(), 60));
         };
