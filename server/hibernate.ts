@@ -67,8 +67,14 @@ import { resumeMarker, savedScreen, socketPath } from "./session.ts";
 
 /** How often to look for windows to hibernate. */
 export const SWEEP_MS = 60_000;
-/** A process starting this long after Claude is a job Claude may be waiting on. */
-export const LATE_CHILD_MS = 3 * 60_000;
+/**
+ * A process starting this long after Claude is a job Claude may be waiting on.
+ *
+ * Short, because a dev server started in a session's first minute is as much
+ * a job as one started an hour in. MCP servers start within seconds of Claude,
+ * and the ones started later carry "mcp" in their command line.
+ */
+export const LATE_CHILD_MS = 30_000;
 /** How much of the end of a transcript to read for its newest timestamp. */
 const TAIL_BYTES = 2 * 1024 * 1024;
 /** Lines of screen kept for reading a hibernated window. */
@@ -293,6 +299,16 @@ export async function asleepText(
   return text.split("\n").slice(-lines).join("\n");
 }
 
+/** What is left of a session after a kill, once the dying have had a moment. */
+async function settled(sock: string, waitMs = 3_000): Promise<number[]> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const left = await sessionProcesses(sock);
+    if (left.length === 0 || Date.now() > deadline) return left;
+    await Bun.sleep(200);
+  }
+}
+
 async function writeAtomic(file: string, text: string): Promise<void> {
   const tmp = `${file}.tmp`;
   await writeFile(tmp, text, { mode: 0o600 });
@@ -454,11 +470,34 @@ export class Hibernator {
       const again = await readRegistry(claude.p.pid);
       if (again?.sessionId !== sessionId || again.status !== "idle")
         return null;
+      // A send that typed without submitting lands on the screen only.
+      const now = this.screens.get(session);
+      if (now?.activity() !== "idle" || now.draft() !== "") return null;
 
       const bytes = (await sessionMemory([sock])).get(sock)?.bytes ?? null;
       await writeAtomic(savedScreen(sock), text);
       await writeAtomic(resumeMarker(sock), sessionId);
       await terminate(await sessionProcesses(sock));
+      /*
+       * A Claude that outlived the kill is still holding the conversation.
+       * Removing the socket would orphan it, and the next login would start a
+       * second Claude writing the same transcript, so the window is left as it
+       * was. Anything else still there is a straggler: it gets another kill,
+       * and the window hibernates.
+       */
+      const left = await settled(sock);
+      if (left.includes(claude.p.pid)) {
+        await rm(resumeMarker(sock), { force: true });
+        await rm(savedScreen(sock), { force: true });
+        log.warn(`could not hibernate ${session}: Claude outlived the kill`);
+        return null;
+      }
+      if (left.length > 0) {
+        log.warn(
+          `hibernating ${session}: ${left.length} processes outlived the kill (${left.join(", ")}); killing them again`,
+        );
+        await terminate(left);
+      }
       // Not the lock file: it is held right now, and a login waiting on it
       // must find this one when it gets its turn.
       await rm(sock, { force: true });

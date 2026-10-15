@@ -5,6 +5,7 @@ import type net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Terminal } from "@xterm/headless";
+import type { Config } from "../server/config.ts";
 import {
   type Evidence,
   lateChildren,
@@ -13,7 +14,7 @@ import {
   verdict,
 } from "../server/hibernate.ts";
 import type { ProcInfo } from "../server/reaper.ts";
-import { Screen } from "../server/screens.ts";
+import { Screen, Screens } from "../server/screens.ts";
 import { harnessCommand, resumeMarker } from "../server/session.ts";
 
 const MIN = 60_000;
@@ -130,6 +131,12 @@ describe("lateChildren", () => {
     ]);
   });
 
+  test("counts a dev server started in Claude's first minute", () => {
+    expect(
+      lateChildren([claude, proc(3, 3550, "node vite --port 5173")], claude),
+    ).toEqual(["node vite --port 5173"]);
+  });
+
   test("leaves out what starts with Claude, MCP servers, dtach and Claude itself", () => {
     expect(
       lateChildren(
@@ -175,6 +182,20 @@ describe("Screen.draft", () => {
     await write(s.term, "$ ls\r\nREADME.md\r\n");
     expect(s.draft()).toBeNull();
   });
+});
+
+test("a hibernated window has no screen to watch, and does not crash the server", async () => {
+  const stateDir = await mkdtemp(path.join(tmpdir(), "vibe-hib-state-"));
+  try {
+    const sock = path.join(stateDir, "sessions", "vibe-w-1.sock");
+    await mkdir(path.dirname(sock), { recursive: true });
+    await writeFile(resumeMarker(sock), "1b33d7a0-24f3-4ae9-961c-de8e6f9aff84");
+    await writeFile(`${sock}.lock`, "");
+    const screens = new Screens({ stateDir } as Config);
+    expect(await screens.watch("vibe-w-1")).toBeUndefined();
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 describe("the launch line of a hibernated window", () => {

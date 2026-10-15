@@ -224,7 +224,9 @@ never kills anything to recover. Three things keep that from happening:
   The sidebar counts a workspace's hibernated windows, and the dock marks a
   minimised one `asleep`. A window is left running while Claude is working,
   waiting on a question, running a background job, or has text typed at its
-  prompt, and so is a profile with `--remote-control`. Linux only.
+  prompt, and so is a profile with `--remote-control`. Pick more than 60 if
+  you use `/loop` or scheduled wake-ups: a hibernated Claude does not wake for
+  them. Linux only.
 - **An OOM daemon** ends one process instead of letting the box thrash. Install
   `earlyoom`, or let `vibe-os setup` do it. `vibe-os doctor` warns when there is
   none.
