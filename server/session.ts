@@ -57,8 +57,12 @@ export function canResume(profile: Profile | null | undefined): boolean {
  */
 export function harnessCommand(
   profile: Profile,
-  /** The worktree it runs in and the state dir, for the harness's own setup. */
-  where: { cwd: string; stateDir: string },
+  /**
+   * The worktree it runs in and the state dir, for the harness's own setup.
+   * `marker` is the window's resume marker (see `resumeMarker`), checked at
+   * launch by a harness that can resume one conversation by id.
+   */
+  where: { cwd: string; stateDir: string; marker?: string },
   /** Pick up the last conversation instead of starting a new one. */
   resume = false,
 ): string | undefined {
@@ -82,17 +86,70 @@ export function harnessCommand(
     else after.push(...spec.resume.args);
   }
 
-  const setup = adapter.setup ? `${adapter.setup(where)}; ` : "";
-  return launch(spec.command, [...before, ...profile.args, ...after], setup);
+  const setup = adapter.setup
+    ? `${adapter.setup({ cwd: where.cwd, stateDir: where.stateDir })}; `
+    : "";
+  const argv = [...before, ...profile.args, ...after];
+  const byId = spec.resumeById;
+  if (!byId || !where.marker) return launch(spec.command, argv, setup);
+
+  /*
+   * A hibernated window comes back as the conversation it was, by id.
+   *
+   * Read here, at launch, rather than decided when the certificate is signed:
+   * a certificate is issued before its login creates the session, and a window
+   * hibernated in between would otherwise start a new conversation. The marker
+   * is written before the session is killed, and the kill holds the same lock
+   * this create runs under, so any create that finds the session dead also
+   * finds the marker.
+   *
+   * It is removed as soon as it is read. A marker left behind would bring the
+   * old conversation back into whatever window reuses this index next.
+   */
+  const drop = new Set(byId.drop ?? []);
+  const exact = [
+    ...profile.args.filter((a) => !drop.has(a.split("=")[0])),
+    byId.flag,
+  ].map(shellQuote);
+  const m = shellQuote(where.marker);
+  const pick =
+    `R=$(cat ${m} 2>/dev/null); rm -f ${m}; ` +
+    `case "$R" in ""|*[!0-9a-f-]*) R= ;; esac; ` +
+    `[ -n "$R" ] && ls ${byId.transcript} > /dev/null 2>&1 || R=; `;
+  const exe = shellQuote(spec.command);
+  return launch(
+    spec.command,
+    argv,
+    `${pick}${setup}`,
+    `if [ -n "$R" ]; then exec ${[exe, ...before.map(shellQuote), ...exact].join(" ")} "$R"; else `,
+    "; fi",
+  );
+}
+
+/** Where a window's resume marker lives: the conversation id it went to sleep on. */
+export function resumeMarker(sock: string): string {
+  return `${sock}.resume`;
+}
+
+/** What a hibernated window last showed, so it can still be read while asleep. */
+export function savedScreen(sock: string): string {
+  return `${sock}.screen`;
 }
 
 /**
  * The shell line that runs a harness: PATH restored, setup, then exec.
  *
  * Every token is quoted individually so a flag can contain spaces and cannot
- * contain a second command.
+ * contain a second command. `open` and `close` wrap the exec, for a launch that
+ * chooses between two command lines.
  */
-function launch(executable: string, args: string[], setup: string): string {
+function launch(
+  executable: string,
+  args: string[],
+  setup: string,
+  open = "",
+  close = "",
+): string {
   const argv = [executable, ...args].map(shellQuote).join(" ");
   /*
    * The PATH a forced command gets is not the PATH you get when you log in.
@@ -109,7 +166,7 @@ function launch(executable: string, args: string[], setup: string): string {
    * a `.profile` is entitled to do surprising things like change directory,
    * which would undo the `-c` this window was started with.
    */
-  return `export PATH="$HOME/.local/bin:$PATH"; ${setup}exec ${argv}`;
+  return `export PATH="$HOME/.local/bin:$PATH"; ${setup}${open}exec ${argv}${close}`;
 }
 
 /**
@@ -190,7 +247,11 @@ export function windowCommand(
 
   const sock = socketPath(config, session);
   const harness = profile
-    ? harnessCommand(profile, { cwd, stateDir: config.stateDir }, opts?.resume)
+    ? harnessCommand(
+        profile,
+        { cwd, stateDir: config.stateDir, marker: resumeMarker(sock) },
+        opts?.resume,
+      )
     : undefined;
   // Falls back to the login shell, so a window with no profile is still a
   // session that survives a reload rather than a bare ssh command.

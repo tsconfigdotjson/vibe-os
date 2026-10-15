@@ -132,6 +132,12 @@ export const claude: HarnessAdapter = {
       args: ["--continue"],
       unless: ["--continue", "-c", "--resume", "-r"],
     },
+    resumeById: {
+      flag: "--resume",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell expansion, run by the launch line
+      transcript: '"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$R".jsonl',
+      drop: ["--continue", "-c"],
+    },
     install: CLAUDE_INSTALL,
     defaults: ["--dangerously-skip-permissions"],
     fields: [

@@ -320,7 +320,9 @@ export const TermWindow = memo(function TermWindow({
               ? "popped out"
               : waiting
                 ? "interrupted"
-                : STATUS_LABEL[win.status]}
+                : win.asleep && win.status === "loading"
+                  ? "waking"
+                  : STATUS_LABEL[win.status]}
         </span>
         <span className="win-buttons">
           <span className="win-menu-anchor" ref={menuAnchor}>

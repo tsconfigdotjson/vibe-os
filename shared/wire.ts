@@ -196,8 +196,11 @@ export interface WindowSummary {
   role: string | null;
   /** Its session is running. Always false with `--no-sessions`. */
   live: boolean;
-  /** What the program in it is doing. Null when it is not running. */
-  state: Activity | null;
+  /**
+   * What the program in it is doing. `asleep` when it was hibernated: the next
+   * start, send or view brings it back. Null when it is not running.
+   */
+  state: Activity | "asleep" | null;
   /** When it last drew anything, in ms since the epoch, if seen since the server started. */
   lastOutputAt: number | null;
   /** The caller's own tag for the window, set when it was opened. */

@@ -15,6 +15,7 @@ import {
 import { type Config, savePersisted } from "./config.ts";
 import { openDb } from "./db.ts";
 import { discover, harnesses } from "./harness.ts";
+import { Hibernator } from "./hibernate.ts";
 import { json } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { ensureWasm, ensureWebRoot } from "./preflight.ts";
@@ -259,6 +260,8 @@ export async function startServer(config: Config): Promise<RunningServer> {
   // What every running window shows, so the API can say what is on it.
   const screens = new Screens(config);
   if (config.sessions) screens.start();
+  const hibernator = new Hibernator(db, config, screens);
+  hibernator.start();
   const handleApi = createApi({
     config,
     ca,
@@ -494,6 +497,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
     close() {
       stopRenewal?.();
       screens.stop();
+      hibernator.stop();
       httpServer.stop(true);
       httpsServer?.stop(true);
       log.info(`stopped (${bridgeConnections()} bridge connections were open)`);

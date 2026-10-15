@@ -7,7 +7,6 @@
 
 import { readFile } from "node:fs/promises";
 import type {
-  Activity,
   Profile,
   SendResult,
   WindowSummary,
@@ -202,7 +201,7 @@ const print = (values: RawOptions, data: unknown, human: () => void) => {
 };
 
 /** A window's state, padded to one width so the columns line up. */
-function stateLabel(state: Activity | null): string {
+function stateLabel(state: WindowSummary["state"]): string {
   const text = (state ?? "stopped").padEnd(8);
   if (state === "busy") return color.green(text);
   if (state === "question") return color.yellow(text);
@@ -386,7 +385,7 @@ async function output(
     values.lines === undefined
       ? ""
       : `?lines=${encodeURIComponent(String(values.lines))}`;
-  const out = await request<{ text: string; state: Activity }>(
+  const out = await request<{ text: string; state: WindowSummary["state"] }>(
     remote,
     "GET",
     `/api/windows/${encodeURIComponent(win.id)}/output${lines}`,

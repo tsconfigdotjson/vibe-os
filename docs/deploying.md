@@ -217,6 +217,16 @@ never kills anything to recover. Three things keep that from happening:
   `vibe-os setup` offers); without that, or without user systemd as in most
   containers, windows start unscoped.
 - **Opening an agent asks first** when the box is short on memory.
+- **Hibernation**, off unless you start with `--hibernate-after <minutes>`
+  (90 is a good value). A Claude window that has been idle that long, with
+  nothing attached, is stopped and its memory freed. Opening it again, or
+  sending to it over the API, resumes the same conversation in a few seconds.
+  The sidebar counts a workspace's hibernated windows, and the dock marks a
+  minimised one `asleep`. A window is left running while Claude is working,
+  waiting on a question, running a background job, or has text typed at its
+  prompt, and so is a profile with `--remote-control`. Pick more than 60 if
+  you use `/loop` or scheduled wake-ups: a hibernated Claude does not wake for
+  them. Linux only.
 - **An OOM daemon** ends one process instead of letting the box thrash. Install
   `earlyoom`, or let `vibe-os setup` do it. `vibe-os doctor` warns when there is
   none.

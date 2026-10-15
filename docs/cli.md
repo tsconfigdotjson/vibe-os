@@ -48,6 +48,9 @@
                     swap a window may use (default 10%, of RAM). Sizes
                     are systemd's: 1500M, 2G, 40%, infinity
 --no-memory-limit   start windows without a memory scope
+--hibernate-after <minutes>
+                    hibernate a Claude window idle this long with nothing
+                    attached; it resumes when next opened (default: never)
 --cert-ttl <secs>   certificate lifetime (default 43200)
 
 --theme-color <hex> window chrome colour for the installed app (default #1c2128)
