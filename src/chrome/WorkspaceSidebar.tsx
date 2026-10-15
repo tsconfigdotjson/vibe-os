@@ -142,7 +142,13 @@ export function WorkspaceSidebar({
                     title={ws.path}
                   >
                     <span className="ws-name">{ws.name}</span>
-                    <span className="ws-meta">{ago(ws.lastOpenedAt)}</span>
+                    <span className="ws-meta">
+                      {ago(ws.lastOpenedAt)}
+                      {/* Not for the open one: being open is what wakes them. */}
+                      {ws.asleep && ws.id !== current
+                        ? ` · ${ws.asleep} asleep`
+                        : ""}
+                    </span>
                   </button>
                   <button
                     type="button"

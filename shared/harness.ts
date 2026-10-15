@@ -135,6 +135,17 @@ export interface HarnessSpec {
    * `args` redundant.
    */
   resume?: { args: string[]; subcommand?: boolean; unless?: string[] };
+  /**
+   * How to pick one exact conversation back up, for a window that was
+   * hibernated (see server/hibernate.ts).
+   *
+   * `flag` takes the conversation id. `transcript` is a shell path with `$R`
+   * standing for the id: the conversation is resumed only if it exists, so a
+   * transcript deleted in the meantime starts a fresh one instead of an error.
+   * `drop` lists flags that pick a conversation some other way, which are left
+   * out when this one is used.
+   */
+  resumeById?: { flag: string; transcript: string; drop?: string[] };
   /** The line doctor prints when the command is missing. */
   install?: string;
   /** Arguments that print a version. `--version` when absent. */

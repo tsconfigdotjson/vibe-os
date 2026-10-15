@@ -115,6 +115,7 @@ opened, or null. `live` is whether its session is running.
 | `busy` | it drew something in the last second and a half. An agent at work is always busy |
 | `question` | it is quiet, and the screen shows a question: a dialog that ends in "Enter to confirm" or "Esc to cancel", a numbered menu, or `(y/n)` |
 | `idle` | it is quiet at its prompt, or finished |
+| `asleep` | it was hibernated (`--hibernate-after`). `live` is false; `start`, `send` or a browser opening it resumes the conversation |
 
 `lastOutputAt` is when it last drew anything, in milliseconds since the epoch.
 It is null until the server has seen output from it, so it starts over when the
@@ -213,6 +214,9 @@ with colours and cursor movement removed.
 ```json
 { "text": "❯ Reply with just the word pong.\n⏺ pong\n…", "state": "idle", "lastOutputAt": 1791291661842 }
 ```
+
+A hibernated window answers with what it showed when it went to sleep,
+`state: "asleep"` and `lastOutputAt: null`, and is not woken by the read.
 
 The text is the screen and the history above it, up to 1000 lines. A long line
 the terminal wrapped is joined back into one. Faint text on the cursor's line

@@ -79,7 +79,16 @@ export function Dock({
                   {win.idx}
                 </span>
                 <span className="dock-label">{labels[win.id]}</span>
-                <WindowMemory usage={memory?.windows[win.id]} />
+                {win.asleep && win.minimized ? (
+                  <span
+                    className="dock-mem"
+                    title="Hibernated while idle. Restoring the window resumes the conversation."
+                  >
+                    asleep
+                  </span>
+                ) : (
+                  <WindowMemory usage={memory?.windows[win.id]} />
+                )}
               </button>
             </li>
           ))}

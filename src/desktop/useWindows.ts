@@ -60,6 +60,8 @@ export interface WindowState {
   handoff: "ssh" | null;
   /** Its session died under it, and it waits to be asked back. */
   interrupted: boolean;
+  /** Hibernated, as of the last poll. Connecting to it is what wakes it. */
+  asleep: boolean;
   status: SshStatus;
   detail?: string;
   title?: string;
@@ -185,6 +187,7 @@ export function useWindows(workspaceId: string | null) {
       promptDone: r.promptDone,
       handoff: r.handoff ?? null,
       interrupted: r.restore === "ask",
+      asleep: r.asleep ?? false,
       status: "loading" as SshStatus,
       ...runtime[r.id],
     }));

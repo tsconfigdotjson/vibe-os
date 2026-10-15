@@ -51,6 +51,8 @@ export interface Workspace {
   path: string;
   createdAt: number;
   lastOpenedAt: number;
+  /** How many of its windows are hibernated. */
+  asleep?: number;
 }
 
 /**
@@ -95,6 +97,8 @@ export interface WindowRow {
    * the desktop should offer to bring it back before starting a new one.
    */
   restore: "ask" | "resume" | null;
+  /** Hibernated: its session was ended while idle, and opening it resumes. */
+  asleep?: boolean;
   createdAt: number;
 }
 

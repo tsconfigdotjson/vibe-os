@@ -70,6 +70,11 @@ export interface Config {
    * (`--no-memory-limit`) starts windows without a scope at all.
    */
   memory: MemoryLimits;
+  /**
+   * How long a Claude window must sit idle, with nothing attached, before it
+   * is hibernated (see hibernate.ts). Null, the default, never hibernates.
+   */
+  hibernateAfterMs: number | null;
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -101,6 +106,7 @@ export const OPTION_SPEC = {
   "memory-max": { type: "string" as const },
   "memory-swap-max": { type: "string" as const },
   "no-memory-limit": { type: "boolean" as const },
+  "hibernate-after": { type: "string" as const },
   // doctor only, same reasoning as the install-browser block below: parseArgs
   // is strict, so a flag it has never heard of is an error.
   reap: { type: "boolean" as const },
@@ -443,5 +449,11 @@ export async function resolveConfig(values: RawOptions): Promise<Config> {
     ),
     sessions,
     memory: memoryLimits(values),
+    hibernateAfterMs:
+      num(
+        values["hibernate-after"] ?? process.env.VIBE_OS_HIBERNATE_AFTER,
+        0,
+        "hibernate-after",
+      ) * 60_000 || null,
   };
 }

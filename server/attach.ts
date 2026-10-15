@@ -38,7 +38,12 @@ import { log } from "./log.ts";
 import { getProfile } from "./profiles.ts";
 import { sessionProcesses, terminate } from "./reaper.ts";
 import { invocation } from "./runtime.ts";
-import { socketPath, windowCommand } from "./session.ts";
+import {
+  resumeMarker,
+  savedScreen,
+  socketPath,
+  windowCommand,
+} from "./session.ts";
 
 const run = promisify(execFile);
 
@@ -343,6 +348,10 @@ export async function killSession(
   // The lock file the forced command serialises on. Harmless to leave behind —
   // `liveSessions` only looks at `.sock` — but it is ours to clean up.
   await rm(`${sock}.lock`, { force: true }).catch(() => {});
+  // A hibernated window's conversation and last screen. Ending the session is
+  // "done with this window", and the index will be reused by the next one.
+  await rm(resumeMarker(sock), { force: true }).catch(() => {});
+  await rm(savedScreen(sock), { force: true }).catch(() => {});
 }
 
 /**

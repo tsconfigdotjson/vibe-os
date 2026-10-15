@@ -18,6 +18,7 @@ import {
   publicHost,
   reapStaleHandoffs,
   resolveTarget,
+  sessionName,
   setHandoff,
 } from "./attach.ts";
 import type { Config } from "./config.ts";
@@ -33,6 +34,7 @@ import {
   startSession,
   waitForInput,
 } from "./headless.ts";
+import { asleepText, isAsleep, noteLogin } from "./hibernate.ts";
 import {
   badId,
   IMMUTABLE_CACHE_CONTROL,
@@ -251,7 +253,11 @@ export function createApi(deps: ApiDeps) {
       role: t.role,
       label: t.label,
       live: running,
-      state: running ? (screen?.activity() ?? "idle") : null,
+      state: running
+        ? (screen?.activity() ?? "idle")
+        : isAsleep(config, t.session)
+          ? "asleep"
+          : null,
       lastOutputAt: screen?.lastOutputAt ?? null,
     };
   };
@@ -420,7 +426,17 @@ export function createApi(deps: ApiDeps) {
       const projectId = decodeURIComponent(workspacesMatch[1]);
       if (!ID_PATTERN.test(projectId)) return badId("project");
 
-      if (req.method === "GET") return json(listWorkspaces(db, projectId));
+      if (req.method === "GET")
+        return json(
+          listWorkspaces(db, projectId).map((w) => ({
+            ...w,
+            // Hibernated windows, for the sidebar. A file check per window,
+            // so cheap enough for a poll.
+            asleep: listWindows(db, w.id).filter((win) =>
+              isAsleep(config, sessionName(w.name, win.idx)),
+            ).length,
+          })),
+        );
 
       if (req.method === "POST") {
         try {
@@ -552,7 +568,12 @@ export function createApi(deps: ApiDeps) {
         await reapStaleHandoffs(db, config).catch((err: unknown) => {
           log.warn(`could not check handoffs: ${describeError(err)}`);
         });
-        return json(listWindows(db, workspaceId));
+        return json(
+          listWindows(db, workspaceId).map((w) => ({
+            ...w,
+            asleep: isAsleep(config, sessionName(workspace.name, w.idx)),
+          })),
+        );
       }
       if (req.method === "POST") {
         const body = await readJson<{
@@ -723,6 +744,13 @@ export function createApi(deps: ApiDeps) {
           400,
         );
       const screen = await screens.watch(target.session);
+      // Hibernated: what it showed when it went to sleep, without waking it.
+      if (!screen && isAsleep(config, target.session))
+        return json({
+          text: await asleepText(config, target.session, lines),
+          state: "asleep",
+          lastOutputAt: null,
+        });
       if (!screen) return json({ error: "the window is not running" }, 409);
       // Just attached to: its repaint is on the way, and blank until it lands.
       if (screen.lastOutputAt === null)
@@ -909,6 +937,7 @@ export function createApi(deps: ApiDeps) {
           profile,
           { resume: takeResume(db, windowId) },
         );
+        noteLogin(target.session);
         const cert = await ca.signUserCert({
           publicKey,
           principal: config.user,

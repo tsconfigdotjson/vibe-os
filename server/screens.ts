@@ -14,6 +14,7 @@
 // nothing about the one-client rule changes.
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -60,6 +61,9 @@ export const QUESTION_PATTERNS: RegExp[] = [
   /^\s*[❯›]\s*\d+\.\s+\S/m,
   /\((y\/n)\)|\[(y\/n)\]/i,
 ];
+
+/** A harness's input line: its prompt glyph, then whatever has been typed. */
+const PROMPT_LINE = /^\s*[❯›]\s?(.*)$/;
 
 // dtach's packet: a type byte, a length byte, then a `struct winsize` of four
 // unsigned shorts, in the machine's own byte order. See dtach.h.
@@ -210,6 +214,25 @@ export class Screen {
   }
 
   /**
+   * What is typed at the prompt and not sent yet, or "" when nothing is.
+   *
+   * The input line is the lowest visible line that starts with a prompt glyph,
+   * the way Claude and Codex draw it. Faint text is left out, as in
+   * `bufferText`, because that is a suggestion rather than something typed.
+   * Null when no such line is on screen, which is not the same as empty.
+   */
+  draft(): string | null {
+    const buf = this.term.buffer.active;
+    for (let i = buf.baseY + this.term.rows - 1; i >= buf.baseY; i--) {
+      const line = buf.getLine(i);
+      if (!line) continue;
+      const m = PROMPT_LINE.exec(withoutFaint(line));
+      if (m) return m[1].trim();
+    }
+    return null;
+  }
+
+  /**
    * Follows the pty's size, which whoever attaches last decides.
    *
    * Checked when output arrives rather than on a timer, because a resize is
@@ -311,8 +334,19 @@ export class Screens {
     fresh: boolean,
   ): Promise<Screen | undefined> {
     const sock = socketPath(this.config, session);
+    // No session, or a hibernated one. Dialling a missing socket is not only
+    // pointless: Bun can raise its ENOENT synchronously, inside
+    // createConnection and before any listener exists, and that took the
+    // whole server down on a read of a window's output.
+    if (!existsSync(sock)) return Promise.resolve(undefined);
     return new Promise((resolve) => {
-      const socket = net.createConnection(sock);
+      let socket: net.Socket;
+      try {
+        socket = net.createConnection(sock);
+      } catch {
+        resolve(undefined);
+        return;
+      }
       socket.once("error", () => resolve(undefined));
       socket.once("connect", () => {
         socket.write(packet(MSG_ATTACH));
