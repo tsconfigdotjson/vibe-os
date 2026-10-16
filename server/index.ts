@@ -6,7 +6,14 @@ import type { Server } from "bun";
 import { Acme } from "./acme.ts";
 import { createApi } from "./api.ts";
 import { interruptedWindows } from "./attach.ts";
-import { createGate, hostAllowed, hostName, originAllowed } from "./auth.ts";
+import {
+  createGate,
+  hostAllowed,
+  hostName,
+  isLoopback,
+  isSecureRequest,
+  originAllowed,
+} from "./auth.ts";
 import {
   type BridgeData,
   bridgeConnections,
@@ -16,7 +23,7 @@ import { type Config, savePersisted } from "./config.ts";
 import { openDb } from "./db.ts";
 import { discover, harnesses } from "./harness.ts";
 import { Hibernator } from "./hibernate.ts";
-import { json } from "./http.ts";
+import { json, withSecurityHeaders } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { createMcpEndpoint, mcpRoute } from "./mcp-server.ts";
 import { createOps } from "./ops.ts";
@@ -55,6 +62,8 @@ const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
  * timeouts in projects.ts plus checking out a worktree at the end of them.
  */
 const REQUEST_IDLE_TIMEOUT_S = 255;
+/** How long to wait before asking for a certificate again after a failure. */
+const TLS_RETRY_MS = 30 * 60 * 1000;
 /** Below this, binding needs root or CAP_NET_BIND_SERVICE. */
 const FIRST_UNPRIVILEGED_PORT = 1024;
 /** Where we land when port 80 is refused, so a first run still gets a URL. */
@@ -305,10 +314,29 @@ export async function startServer(config: Config): Promise<RunningServer> {
       if (challenge) return challenge;
     }
 
-    if (!secure && tlsReady && config.domain) {
-      return Response.redirect(
-        `https://${config.domain}${url.pathname}${url.search}`,
-        308,
+    // With --domain, plain HTTP serves only this machine, which is how the
+    // client verbs on the box and a proxy on loopback reach it. Everyone else
+    // is sent to HTTPS, or turned away until there is a certificate, so the
+    // token never crosses the network in the clear.
+    if (
+      !secure &&
+      config.domain &&
+      !isLoopback(server.requestIP(req)?.address)
+    ) {
+      if (tlsReady)
+        return Response.redirect(
+          `https://${config.domain}${config.tlsPort === 443 ? "" : `:${config.tlsPort}`}${url.pathname}${url.search}`,
+          308,
+        );
+      return new Response(
+        `vibe-os is waiting for a TLS certificate for ${config.domain}, and answers only over HTTPS. The server log says why.\n`,
+        {
+          status: 503,
+          headers: {
+            "content-type": "text/plain; charset=utf-8",
+            "retry-after": "60",
+          },
+        },
       );
     }
 
@@ -403,12 +431,17 @@ export async function startServer(config: Config): Promise<RunningServer> {
       idleTimeout: REQUEST_IDLE_TIMEOUT_S,
       development: false,
       async fetch(req, server) {
+        let res: Response | undefined;
         try {
-          return (await handle(req, server, secure)) as Response;
+          res = await handle(req, server, secure);
         } catch (err) {
           log.error(`request failed: ${describeError(err)}`);
-          return new Response("internal error\n", { status: 500 });
+          res = new Response("internal error\n", { status: 500 });
         }
+        // Undefined is a WebSocket upgrade, which has no response to add to.
+        return res === undefined
+          ? (res as unknown as Response)
+          : withSecurityHeaders(res, isSecureRequest(req, secure));
       },
       websocket: bridge.handlers,
     });
@@ -460,22 +493,44 @@ export async function startServer(config: Config): Promise<RunningServer> {
   let stopRenewal: (() => void) | undefined;
   const extras: string[] = [];
 
-  if (acme && config.domain) {
+  const startTls = async (domain: string, a: Acme): Promise<boolean> => {
     try {
-      const material = await acme.obtain();
+      const material = await a.obtain();
       httpsServer = makeServer(config.tlsPort, true, material);
       tlsReady = true;
-      extras.push(`http://${config.domain} redirects to https`);
       // Certificates last 90 days and this process is meant to run for longer,
       // so expiry has to be re-checked while it runs, not only at boot.
-      stopRenewal = acme.watch((renewed) => {
+      stopRenewal = a.watch((renewed) => {
         httpsServer?.stop(true);
         httpsServer = makeServer(config.tlsPort, true, renewed);
-        log.ok(`TLS certificate renewed for ${config.domain}`);
+        log.ok(`TLS certificate renewed for ${domain}`);
       });
+      return true;
     } catch (err) {
       log.error(`TLS setup failed: ${describeError(err)}`);
-      log.warn(`continuing on plain HTTP at port ${port}`);
+      log.warn(
+        `plain HTTP answers only this machine until there is a certificate; trying again in ${TLS_RETRY_MS / 60_000} minutes`,
+      );
+      return false;
+    }
+  };
+
+  let tlsRetry: ReturnType<typeof setTimeout> | undefined;
+  if (acme && config.domain) {
+    const domain = config.domain;
+    if (await startTls(domain, acme)) {
+      extras.push(`http://${domain} redirects to https`);
+    } else {
+      // Spaced well inside Let's Encrypt's limit of five failed validations an
+      // hour, so a box whose DNS is not ready yet recovers by itself.
+      const retry = () => {
+        tlsRetry = setTimeout(async () => {
+          if (await startTls(domain, acme)) log.ok(`serving https://${domain}`);
+          else retry();
+        }, TLS_RETRY_MS);
+        tlsRetry.unref?.();
+      };
+      retry();
     }
   }
 
@@ -504,6 +559,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
   return {
     port,
     close() {
+      clearTimeout(tlsRetry);
       stopRenewal?.();
       void mcp.close();
       screens.stop();

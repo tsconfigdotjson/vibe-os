@@ -149,7 +149,7 @@ own ssh client, your own key, straight to sshd. See
 | --- | --- |
 | [Using it](docs/using.md) | projects, workspaces, profiles, prompts, popping a terminal out, the desktop and its shortcuts |
 | [Harnesses](docs/harnesses.md) | Hermes, Cursor and Codex, and adding your own |
-| [Deploying on a VPS](docs/deploying.md) | what the box needs, setup, Tailscale, the firewall, memory, an always-on browser, updating |
+| [Deploying on a VPS](docs/deploying.md) | what the box needs, setup, Tailscale or a public address, the firewall, memory, an always-on browser, updating |
 | [Security](docs/security.md) | the token, what it gates, and what to put in front of it |
 | [CLI reference](docs/cli.md) | every command and flag |
 | [API](docs/api.md) | driving workspaces and windows over HTTP |

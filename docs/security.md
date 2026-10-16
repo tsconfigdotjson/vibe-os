@@ -35,16 +35,30 @@ Two checks run in front of it:
   neither the cookie nor the token.
 
 Open the URL with `?token=…` once and the server sets an `HttpOnly` cookie, then
-redirects without the token so it does not linger in history. Scripts can send
+redirects without the token so it does not linger in history. Over HTTPS the
+cookie is `__Host-vibe_os_session`, which a browser only accepts from this exact
+host, so a neighbouring host under the same domain cannot set or replace it. The
+gate checks every cookie the browser sends under that name, so a planted one
+cannot lock you out either. Scripts can send
 `Authorization: Bearer <token>` (see the [API reference](api.md)). The MCP
 server at `/mcp` takes only the header or the cookie, never `?token=`.
 Comparison is constant-time.
 
 The cookie value is the token rather than a derived session id, so there is no
-per-browser session to revoke. Rotating means changing it on the server.
+per-browser session to revoke. Rotating means changing it on the server: remove
+`token` from `~/.vibe-os/config.json` and restart for a new one, or pass
+`--token <value>`. Every browser and script then needs the new one.
+
+Every response carries `Content-Security-Policy: frame-ancestors 'self'` and
+`X-Frame-Options: SAMEORIGIN`, so no other site can load the desktop in a frame,
+plus `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. Over
+HTTPS it adds `Strict-Transport-Security`.
 
 `--domain` provisions a Let's Encrypt certificate over HTTP-01 and serves HTTPS,
-renewing 30 days before expiry. On plain HTTP the browser clipboard API is
+renewing 30 days before expiry. Plain HTTP then answers only the machine itself,
+for the CLI and any local proxy. Everyone else is redirected to HTTPS, or gets a
+503 until the certificate arrives, so the token never crosses the network
+unencrypted. A failed request for a certificate is retried every 30 minutes. On plain HTTP the browser clipboard API is
 unavailable, so copy-on-select and paste stop working and the app cannot be
 installed. OSC 52 clipboard *reads* are always refused, since anything running
 in a session could otherwise ask what you last copied.

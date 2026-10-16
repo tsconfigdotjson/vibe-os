@@ -51,3 +51,43 @@ export const readJson = async <T>(req: Request): Promise<T> => {
   if (type !== "application/json") return {} as T;
   return (await req.json().catch(() => ({}))) as T;
 };
+
+/** How long a browser keeps to HTTPS after one answer over it: a year. */
+const HSTS = "max-age=31536000";
+
+/**
+ * The headers every response carries.
+ *
+ * `frame-ancestors` and `X-Frame-Options` stop another site from loading the
+ * desktop in a frame and steering clicks into it. Over HTTPS, `HSTS` makes the
+ * browser use HTTPS for this host from then on. A route's own
+ * `Content-Security-Policy` keeps its rules and gains `frame-ancestors`.
+ *
+ * Returns a copy when the response's headers cannot be changed, as with
+ * `Response.redirect`.
+ */
+export function withSecurityHeaders(res: Response, https: boolean): Response {
+  let out = res;
+  try {
+    out.headers.set("x-frame-options", "SAMEORIGIN");
+  } catch {
+    out = new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: new Headers(res.headers),
+    });
+    out.headers.set("x-frame-options", "SAMEORIGIN");
+  }
+  const csp = out.headers.get("content-security-policy");
+  const frames = "frame-ancestors 'self'";
+  out.headers.set(
+    "content-security-policy",
+    csp && !csp.includes("frame-ancestors")
+      ? `${csp}; ${frames}`
+      : (csp ?? frames),
+  );
+  out.headers.set("x-content-type-options", "nosniff");
+  out.headers.set("referrer-policy", "same-origin");
+  if (https) out.headers.set("strict-transport-security", HSTS);
+  return out;
+}

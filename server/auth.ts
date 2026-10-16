@@ -20,6 +20,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 
 const COOKIE = "vibe_os_session";
+/**
+ * The cookie's name over HTTPS. A browser only keeps a `__Host-` cookie that is
+ * `Secure`, has `Path=/` and names no `Domain`, so a neighbouring host under the
+ * same registrable domain cannot set or replace it.
+ */
+const SECURE_COOKIE = `__Host-${COOKIE}`;
 
 function safeEqual(a: string, b: string): boolean {
   // Hash first so the comparison is over fixed-length buffers and cannot leak
@@ -29,21 +35,28 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ha, hb);
 }
 
-function readCookie(req: Request, name: string): string | null {
+/**
+ * Every value sent for the named cookies, in the order the browser sent them.
+ *
+ * All of them, not the first: a host that shares this one's registrable domain
+ * can set a cookie of the same name for the whole domain, and a browser sends
+ * both. Taking only the first would let that planted one lock the owner out.
+ */
+function readCookies(req: Request, names: readonly string[]): string[] {
   const header = req.headers.get("cookie");
-  if (!header) return null;
+  if (!header) return [];
+  const out: string[] = [];
   for (const part of header.split(";")) {
     const idx = part.indexOf("=");
     if (idx === -1) continue;
-    if (part.slice(0, idx).trim() === name) {
-      try {
-        return decodeURIComponent(part.slice(idx + 1).trim());
-      } catch {
-        return null;
-      }
+    if (!names.includes(part.slice(0, idx).trim())) continue;
+    try {
+      out.push(decodeURIComponent(part.slice(idx + 1).trim()));
+    } catch {
+      // A value that does not decode is not the token.
     }
   }
-  return null;
+  return out;
 }
 
 /**
@@ -61,7 +74,7 @@ function readCookie(req: Request, name: string): string | null {
  * ignored. Nor can a forgery be aimed at someone else — browsers do not send
  * this header, so the only request it can appear on is the sender's own.
  */
-function isSecureRequest(req: Request, secure: boolean): boolean {
+export function isSecureRequest(req: Request, secure: boolean): boolean {
   if (secure) return true;
   const proto = req.headers.get("x-forwarded-proto");
   // A chain of proxies appends, and the client's protocol is the first entry.
@@ -92,8 +105,8 @@ export function createGate(token: string | null): Gate {
 
   const gate = {
     check(req: Request): string | null {
-      const cookie = readCookie(req, COOKIE);
-      if (cookie && safeEqual(cookie, token)) return null;
+      for (const cookie of readCookies(req, [SECURE_COOKIE, COOKIE]))
+        if (safeEqual(cookie, token)) return null;
 
       const auth = req.headers.get("authorization");
       if (auth?.startsWith("Bearer ") && safeEqual(auth.slice(7), token))
@@ -116,13 +129,14 @@ export function createGate(token: string | null): Gate {
         });
       }
       url.searchParams.delete("token");
+      const https = isSecureRequest(req, secure);
       const attrs = [
-        `${COOKIE}=${encodeURIComponent(token)}`,
+        `${https ? SECURE_COOKIE : COOKIE}=${encodeURIComponent(token)}`,
         "Path=/",
         "HttpOnly",
         "SameSite=Lax",
         "Max-Age=31536000",
-        isSecureRequest(req, secure) ? "Secure" : "",
+        https ? "Secure" : "",
       ].filter(Boolean);
       return new Response(null, {
         status: 302,
@@ -191,4 +205,11 @@ export function hostAllowed(req: Request, names: ReadonlySet<string>): boolean {
     name.endsWith(".localhost") ||
     names.has(name)
   );
+}
+
+/** Whether a peer address is this machine. */
+export function isLoopback(address: string | undefined): boolean {
+  if (!address) return false;
+  const v4 = address.replace(/^::ffff:/i, "");
+  return v4.startsWith("127.") || address === "::1";
 }
