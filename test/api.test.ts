@@ -7,6 +7,7 @@ import type { Config } from "../server/config.ts";
 import { newId, openDb, projects, windows, workspaces } from "../server/db.ts";
 import type { SshCa } from "../server/ssh-ca.ts";
 import { WallpaperStore } from "../server/wallpapers.ts";
+import { GRID_COLS, GRID_ROWS } from "../shared/grid.ts";
 
 /**
  * The routing table's behaviour, pinned.
@@ -395,6 +396,18 @@ describe("automation", () => {
       call("GET", "/api/windows?label=nightly-triage"),
     );
     expect(list.map((w) => w.id)).toEqual([tagged.id]);
+  });
+
+  test("a new window opens filling the desktop", async () => {
+    for (let i = 0; i < 2; i++) {
+      const opened = await openAs();
+      expect(opened).toMatchObject({
+        col: 0,
+        row: 0,
+        colSpan: GRID_COLS,
+        rowSpan: GRID_ROWS,
+      });
+    }
   });
 
   test("a label has to be a short string", async () => {

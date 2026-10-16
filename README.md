@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="public/icon.svg" width="88" height="88" alt="">
-
-# vibe-os
+<img src="docs/header/header.png" width="100%" alt="vibe-os: coding agents in the browser, controlled via MCP, on your own VPS">
 
 **A coding desktop in the browser, on a box you own.**
 
@@ -11,10 +9,6 @@ and open terminals into it, from anything with a browser.
 
 [![CI](https://github.com/tsconfigdotjson/vibe-os/actions/workflows/ci.yml/badge.svg)](https://github.com/tsconfigdotjson/vibe-os/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
-
-<br>
-
-<img src="docs/demo.gif" alt="The vibe-os desktop: a Backend Engineer, a QA Engineer and a dev server running in one workspace, then a Reviewer opened from the profiles rail and snapped into the grid">
 
 </div>
 
@@ -33,6 +27,10 @@ tinted in its colour with Claude already running in the worktree.
 
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
 edit, no `sshd_config` change, and no root.
+
+<p align="center">
+<img src="docs/demo.gif" alt="The vibe-os desktop: a Backend Engineer, a QA Engineer and a dev server running in one workspace, then a Reviewer opened from the profiles rail and snapped into the grid">
+</p>
 
 ## Contents
 
