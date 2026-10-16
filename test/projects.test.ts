@@ -210,3 +210,18 @@ test("a renamed default branch is followed rather than guessed", async () => {
 
   expect(ws.base).toBe("origin/trunk");
 });
+
+test("a name whose branch outlived its workspace is refused plainly", async () => {
+  const solo = path.join(root, "kept");
+  await run("git", ["init", "-q", "-b", "main", solo]);
+  await git(solo, ["commit", "-q", "--allow-empty", "-m", "only"]);
+  await git(solo, ["branch", "worker-a"]);
+  const id = addProject("kept", solo);
+
+  await expect(createWorkspace(db, root, id, "worker-a")).rejects.toThrow(
+    "kept already has a branch called worker-a, kept from an earlier workspace. Pick another name",
+  );
+  // A name of its own choosing never lands on one.
+  const ws = await createWorkspace(db, root, id);
+  expect(ws.name).not.toBe("worker-a");
+});
