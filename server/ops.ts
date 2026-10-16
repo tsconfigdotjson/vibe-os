@@ -103,7 +103,8 @@ const FIRST_PAINT_WAIT_MS = 1_000;
  */
 export const MAX_WAIT_S = 240;
 
-const NO_SESSIONS = "this server runs plain login shells (--no-sessions)";
+export const NO_SESSIONS =
+  "this server runs plain login shells (--no-sessions)";
 
 /** What a wait waits for. See `WaitOptions`. */
 export const UNTIL = ["settled", "idle", "question", "change"] as const;
@@ -313,12 +314,14 @@ export function createOps(deps: OpsDeps) {
   // ── events ──────────────────────────────────────────────────────────────
 
   /** Who a session belongs to, remembered so a closed window can be named. */
-  const known = new Map<string, AttachTarget>();
+  const known = new Map<string, AttachTarget | null>();
   const whose = (session: string): AttachTarget | undefined => {
     const hit = known.get(session);
-    if (hit) return hit;
+    if (hit !== undefined) return hit ?? undefined;
     for (const t of listTargets(db)) known.set(t.session, t);
-    return known.get(session);
+    // A session with no window behind it: not looked up on every event.
+    if (!known.has(session)) known.set(session, null);
+    return known.get(session) ?? undefined;
   };
 
   const toWire = (
@@ -384,6 +387,9 @@ export function createOps(deps: OpsDeps) {
     known.set(t.session, t);
     emit(toWire("window.closed", t.session, Date.now()));
     known.delete(t.session);
+    // The next window in this workspace may get the same index, and so the
+    // same session name: it starts with no turn of its own.
+    screens.forget(t.session);
   };
 
   // ── starting and typing ─────────────────────────────────────────────────
@@ -633,11 +639,16 @@ export function createOps(deps: OpsDeps) {
       }
     };
 
+    /**
+     * The first window to meet the condition. One that is not running cannot
+     * meet it, and only ends the wait when none of them can.
+     */
     const first = (): { t: AttachTarget; reached: boolean } | null => {
-      for (const t of targets) {
-        const v = verdict(t);
-        if (v !== null) return { t, reached: v };
-      }
+      const verdicts = targets.map(verdict);
+      const met = verdicts.indexOf(true);
+      if (met !== -1) return { t: targets[met], reached: true };
+      if (verdicts.every((v) => v === false))
+        return { t: targets[0], reached: false };
       return null;
     };
 
@@ -805,22 +816,46 @@ export function createOps(deps: OpsDeps) {
 
     // A prompt or blanks mean start it and send; `start` alone means start.
     const sends = body.prompt !== undefined || body.blanks !== undefined;
-    let text: string | undefined;
-    if (sends)
-      text = textToSend(
-        {
-          text: body.prompt as string | undefined,
-          blanks: body.blanks as Record<string, string> | undefined,
-        },
-        profile,
-      );
+    const textFor = (p: Profile | undefined) =>
+      sends
+        ? textToSend(
+            {
+              text: body.prompt as string | undefined,
+              blanks: body.blanks as Record<string, string> | undefined,
+            },
+            p,
+          )
+        : undefined;
     if ((sends || body.start === true) && !config.sessions)
       throw new OpError(NO_SESSIONS, 409);
+
+    /**
+     * An agent is what fills a small box, so an agent is what asks first. 409
+     * with `capacity` is the question; the browser asks the person and sends
+     * `force` to go ahead anyway.
+     */
+    const checkCapacity = async (p: Profile | undefined) => {
+      if (!p || p.harness === "shell" || body.force === true) return;
+      const warning = capacityWarning(
+        await readBoxMemory(),
+        effectiveLimits(config.memory, p).high,
+      );
+      if (warning) throw new OpError(warning, 409, { capacity: true });
+    };
 
     if (body.reuse === true) {
       const row = listWindows(db, workspaceId).find((w) => w.label === label);
       const t = row ? resolveTarget(db, row.id) : undefined;
       if (row && t) {
+        if (profileId !== null && t.profileId !== profileId)
+          throw new OpError(
+            `the window labelled ${label} (${t.ref}) is open as ${t.role ?? "a plain terminal"}, not ${profile?.name}`,
+            409,
+          );
+        const windowProfile = t.profileId
+          ? getProfile(db, t.profileId)
+          : undefined;
+        const text = textFor(windowProfile);
         await screens.watch(t.session);
         const running =
           screens.get(t.session) !== undefined || isAsleep(config, t.session);
@@ -831,38 +866,34 @@ export function createOps(deps: OpsDeps) {
             status: 200,
             body: { ...row, reused: true, window: summary(t) },
           };
-        const windowProfile = t.profileId
-          ? getProfile(db, t.profileId)
-          : undefined;
-        const result =
-          text !== undefined
-            ? await deliver(t, windowProfile, text, {
-                submit: body.submit === true,
-                force: false,
-              })
-            : { started: await start(t, windowProfile) };
-        return {
-          status: 200,
-          body: {
-            ...(getWindow(db, row.id) ?? row),
-            ...result,
-            reused: true,
-            window: summary(t),
-          },
-        };
+        await checkCapacity(windowProfile);
+        try {
+          const result =
+            text !== undefined
+              ? await deliver(t, windowProfile, text, {
+                  submit: body.submit === true,
+                  force: false,
+                })
+              : { started: await start(t, windowProfile) };
+          return {
+            status: 200,
+            body: {
+              ...(getWindow(db, row.id) ?? row),
+              ...result,
+              reused: true,
+              window: summary(t),
+            },
+          };
+        } catch (err) {
+          const message = describeError(err);
+          log.warn(`open ${t.session} failed: ${message}`);
+          throw new OpError(message, 502);
+        }
       }
     }
 
-    // An agent is what fills a small box, so an agent is what asks first. 409
-    // with `capacity` is the question; the browser asks the person and sends
-    // `force` to go ahead anyway.
-    if (profile && profile.harness !== "shell" && body.force !== true) {
-      const warning = capacityWarning(
-        await readBoxMemory(),
-        effectiveLimits(config.memory, profile).high,
-      );
-      if (warning) throw new OpError(warning, 409, { capacity: true });
-    }
+    const text = textFor(profile);
+    await checkCapacity(profile);
 
     const row = createWindow(db, workspaceId, profileId, label);
     const t = resolveTarget(db, row.id);

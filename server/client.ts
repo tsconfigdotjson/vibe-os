@@ -15,6 +15,7 @@ import type {
 } from "../shared/wire.ts";
 import { loadPersisted, type RawOptions } from "./config.ts";
 import { color, describeError, log } from "./log.ts";
+import { MAX_WAIT_S, UNTIL } from "./ops.ts";
 
 export interface Remote {
   url: string;
@@ -421,9 +422,10 @@ interface Output {
  * Prints a window's output and then each line as it scrolls into the history,
  * until the window stops or this is interrupted.
  *
- * The screen itself is redrawn in place, so it is printed only when the window
- * goes quiet, and only if it changed: that is the answer an agent left at its
- * prompt.
+ * The screen itself is redrawn in place, so it is printed when the window goes
+ * quiet, and only if it changed: that is the answer an agent left at its
+ * prompt. Rows already printed that way are not printed again when they
+ * scroll into the history.
  */
 async function follow(
   remote: Remote,
@@ -431,15 +433,37 @@ async function follow(
   win: WindowSummary,
 ): Promise<number> {
   const route = `/api/windows/${encodeURIComponent(win.id)}/output`;
-  const lines =
-    values.lines === undefined
-      ? ""
-      : `lines=${encodeURIComponent(String(values.lines))}&`;
-  const first = await request<Output>(remote, "GET", `${route}?${lines}`);
+  const lines = String(values.lines ?? 50);
+  let shown: string[] = [];
+  let echo: string[] = [];
+  const printScreen = (screen: string) => {
+    shown = screen === "" ? [] : screen.split("\n");
+    echo = [...shown];
+    if (screen) console.log(screen);
+  };
+  const printHistory = (text: string) => {
+    if (text === "") return;
+    for (const line of text.split("\n")) {
+      if (echo.length > 0 && echo[0] === line) {
+        echo.shift();
+        continue;
+      }
+      echo = [];
+      console.log(line);
+    }
+  };
+
+  const first = await request<Output>(
+    remote,
+    "GET",
+    `${route}?after=0&lines=${encodeURIComponent(lines)}`,
+  );
   if (values.json) console.log(JSON.stringify(first));
-  else if (first.text) console.log(first.text);
+  else {
+    printHistory(first.text);
+    printScreen(first.screen ?? "");
+  }
   let cursor = first.cursor;
-  let shown = first.state === "busy" ? "" : (first.screen ?? "");
   let state = first.state;
   for (;;) {
     await Bun.sleep(FOLLOW_MS);
@@ -456,12 +480,15 @@ async function follow(
     if (values.json) {
       if (out.text || out.state !== state) console.log(JSON.stringify(out));
     } else {
-      if (out.text) console.log(out.text);
+      printHistory(out.text);
       const screen = out.screen ?? "";
-      if (out.state !== "busy" && state === "busy" && screen !== shown) {
+      if (
+        out.state !== "busy" &&
+        state === "busy" &&
+        screen !== shown.join("\n")
+      ) {
         console.log(color.dim(`── ${win.ref} is ${out.state} ──`));
-        console.log(screen);
-        shown = screen;
+        printScreen(screen);
       }
     }
     cursor = out.cursor;
@@ -469,11 +496,6 @@ async function follow(
     if (state === "asleep") return 0;
   }
 }
-
-/** The values `wait` accepts for `--until`. */
-const UNTIL = ["settled", "idle", "question", "change"];
-/** The longest one wait request may block; longer waits are several. */
-const MAX_WAIT_S = 240;
 
 /**
  * Waits for windows to settle. Exits 0 when one did, 2 when time ran out, and
@@ -491,7 +513,7 @@ async function wait(
     return 1;
   }
   const until = values.until === undefined ? "settled" : String(values.until);
-  if (!UNTIL.includes(until))
+  if (!(UNTIL as readonly string[]).includes(until))
     throw new Error(`--until must be one of ${UNTIL.join(", ")}`);
   const timeout = values.timeout === undefined ? 60 : Number(values.timeout);
   if (!Number.isInteger(timeout) || timeout < 1)

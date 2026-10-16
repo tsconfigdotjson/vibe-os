@@ -186,6 +186,16 @@ describe("state events", () => {
   });
 });
 
+describe("turns", () => {
+  test("a closed window's turn is forgotten, for the next one at its index", () => {
+    const screens = new Screens({ stateDir: "/nonexistent" } as Config);
+    screens.noteSend("vibe-w-1", Date.now());
+    expect(screens.turnOf("vibe-w-1")?.turn).toBe("pending");
+    screens.forget("vibe-w-1");
+    expect(screens.turnOf("vibe-w-1")).toBeUndefined();
+  });
+});
+
 describe("output cursor", () => {
   const numbered = (from: number, n: number) =>
     Array.from({ length: n }, (_, i) => `line ${from + i}`).join("\r\n");

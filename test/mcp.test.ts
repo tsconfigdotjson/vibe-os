@@ -417,6 +417,16 @@ describe("tools", () => {
     });
     expect(textOf(msgs)).toContain("assistant: Fixed.");
     expect(textOf(msgs)).toContain("→ Bash(bun test)");
+
+    // Reading on from a cursor takes every new line unless told otherwise.
+    await c.callTool({
+      name: "vibe_read_output",
+      arguments: { window: "quiet-amber-otter-1", after: 7 },
+    });
+    const reads = calls
+      .filter((x) => x.name === "output")
+      .map((x) => x.args[1]);
+    expect(reads).toEqual([{ lines: 50 }, { lines: undefined, after: 7 }]);
   });
 
   test("close_window and delete_workspace", async () => {

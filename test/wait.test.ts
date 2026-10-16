@@ -22,7 +22,7 @@ import {
   windows,
   workspaces,
 } from "../server/db.ts";
-import type { Profile } from "../server/profiles.ts";
+import { createProfile, type Profile } from "../server/profiles.ts";
 import { Screens } from "../server/screens.ts";
 import { windowCommand } from "../server/session.ts";
 import type { SshCa } from "../server/ssh-ca.ts";
@@ -272,6 +272,26 @@ describe.skipIf(!hasDtach)("waiting on windows", () => {
     }
   }, 20_000);
 
+  test("a stopped window among others does not end the wait", async () => {
+    const { body } = await bodyOf<WaitResult>(
+      call(
+        "GET",
+        `/api/windows/wait?refs=${WORKSPACE}-2,${WORKSPACE}-1&timeout=5`,
+      ),
+    );
+    expect(body.reached).toBe(true);
+    expect(body.ref).toBe(`${WORKSPACE}-1`);
+
+    const neither = await bodyOf<WaitResult>(
+      call(
+        "GET",
+        `/api/windows/wait?refs=${WORKSPACE}-2,${WORKSPACE}-1&until=question&timeout=1`,
+      ),
+    );
+    expect(neither.body.reached).toBe(false);
+    expect(neither.body.waitedMs).toBeGreaterThanOrEqual(1_000);
+  });
+
   test("a window that is not running answers at once", async () => {
     await Bun.sleep(300);
     const { body } = await bodyOf<WaitResult>(
@@ -384,6 +404,20 @@ describe.skipIf(!hasDtach)("waiting on windows", () => {
     expect(body.delivered).toBeUndefined();
     const after = await bodyOf<WindowSummary[]>(call("GET", "/api/windows"));
     expect(after.body).toHaveLength(before.body.length);
+
+    const profile = createProfile(db, ids.project, {
+      name: "Reviewer",
+      harness: "shell",
+    });
+    const mismatch = await bodyOf<{ error: string }>(
+      call("POST", `/api/workspaces/${ids.workspace}/windows`, {
+        label: "triage",
+        reuse: true,
+        profileId: profile.id,
+      }),
+    );
+    expect(mismatch.status).toBe(409);
+    expect(mismatch.body.error).toContain("not Reviewer");
 
     const unlabelled = await bodyOf<{ error: string }>(
       call("POST", `/api/workspaces/${ids.workspace}/windows`, { reuse: true }),

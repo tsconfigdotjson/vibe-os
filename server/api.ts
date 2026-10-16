@@ -30,9 +30,11 @@ import { discoverMcp } from "./mcp.ts";
 import { capacityWarning, readBoxMemory, sessionMemory } from "./memory.ts";
 import {
   createOps,
+  DEFAULT_OUTPUT_LINES,
   MAX_OUTPUT_LINES,
   MAX_WAIT_S,
   mcpScan,
+  NO_SESSIONS,
   OpError,
   type OpenInput,
   type Ops,
@@ -79,7 +81,6 @@ const HEARTBEAT_MS = 15_000;
 /** Default and most messages a transcript read returns. */
 const DEFAULT_MESSAGES = 20;
 const MAX_MESSAGES = 500;
-const NO_SESSIONS = "this server runs plain login shells (--no-sessions)";
 /** Default wait, in seconds. */
 const DEFAULT_WAIT_S = 60;
 /** Most windows one wait can watch. */
@@ -497,7 +498,13 @@ export function createApi(deps: ApiDeps) {
         const target = ops.target(id);
         if (target.windowId !== id)
           return json({ error: "unknown window" }, 404);
-        const lines = intParam(url, "lines", 1, MAX_OUTPUT_LINES, 50);
+        const lines = intParam(
+          url,
+          "lines",
+          1,
+          MAX_OUTPUT_LINES,
+          DEFAULT_OUTPUT_LINES,
+        );
         const given = url.searchParams.get("after");
         const after = given === null ? undefined : Number(given);
         if (after !== undefined && (!Number.isInteger(after) || after < 0))

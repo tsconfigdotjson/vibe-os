@@ -504,8 +504,10 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
           .int()
           .min(1)
           .max(2000)
-          .default(DEFAULT_READ_LINES)
-          .describe("How many lines, from the bottom. Default 50"),
+          .optional()
+          .describe(
+            `How many lines, from the bottom. Default ${DEFAULT_READ_LINES}; with after, every new line unless given`,
+          ),
         after: z
           .number()
           .int()
@@ -524,7 +526,8 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
       try {
         const t = windowOf(window);
         const out = await ops.output(t, {
-          lines,
+          lines:
+            lines ?? (after === undefined ? DEFAULT_READ_LINES : undefined),
           after,
         });
         const text =

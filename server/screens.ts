@@ -555,6 +555,12 @@ export class Screens {
     this.emit({ type: "turn", session, turn, at: Date.now() });
   }
 
+  /** Drops what is remembered about a session whose window was closed. */
+  forget(session: string): void {
+    this.turns.delete(session);
+    this.asleep.delete(session);
+  }
+
   /** Records a hibernation, which `Hibernator` does. */
   noteAsleep(session: string): void {
     this.asleep.add(session);
