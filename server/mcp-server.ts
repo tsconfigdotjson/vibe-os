@@ -605,7 +605,21 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
         );
         const token = ctx.mcpReq._meta?.progressToken;
         let progress = 0;
-        let last = "waiting";
+        // Where each window is, as the progress messages say it: a state
+        // alone reads "idle" for a shell whose command is still running.
+        const where = new Map(
+          targets.map((t) => {
+            const w = ops.summary(t);
+            return [t.ref, { state: w.state ?? "stopped", turn: w.turn }];
+          }),
+        );
+        const describe = () =>
+          [...where]
+            .map(
+              ([ref, w]) =>
+                `${ref}: ${w.state}${w.turn ? `, turn ${w.turn}` : ""}`,
+            )
+            .join("; ");
         const report = (message: string) => {
           if (token === undefined) return;
           progress += 1;
@@ -620,7 +634,10 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
         // A beat while nothing changes, so a client's idle timeout never
         // fires on a long turn.
         const beat = setInterval(
-          () => report(`${last} (${Math.round((Date.now() - begun) / 1000)}s)`),
+          () =>
+            report(
+              `${describe()} (${Math.round((Date.now() - begun) / 1000)}s)`,
+            ),
           PROGRESS_MS,
         );
         let result: WaitResult;
@@ -633,11 +650,11 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
             lines,
             signal: ctx.mcpReq.signal,
             onEvent: (e: WindowEvent) => {
-              last =
-                e.type === "window.turn"
-                  ? `${e.ref}: turn ${e.turn}`
-                  : `${e.ref}: ${e.to ?? "stopped"}`;
-              report(last);
+              const w = where.get(e.ref);
+              if (!w) return;
+              if (e.type === "window.turn") w.turn = e.turn ?? null;
+              else w.state = e.to ?? "stopped";
+              report(describe());
             },
           });
         } finally {

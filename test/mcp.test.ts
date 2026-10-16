@@ -90,6 +90,7 @@ function stubOps(over: Partial<Ops> = {}): Ops {
         );
       return target(name);
     },
+    summary: (t: AttachTarget) => summary(t.ref),
     windows: async () => [
       summary("quiet-amber-otter-1"),
       summary("quiet-amber-otter-2", { state: "busy", turn: "working" }),
@@ -118,6 +119,15 @@ function stubOps(over: Partial<Ops> = {}): Ops {
       },
     }),
     wait: async (targets: AttachTarget[], opts: WaitOptions) => {
+      opts.onEvent?.({
+        type: "window.turn",
+        ref: targets[0].ref,
+        label: null,
+        workspace: null,
+        project: null,
+        at: Date.now(),
+        turn: "working",
+      });
       for (const to of ["busy", "idle"] as const)
         opts.onEvent?.({
           type: "window.state",
@@ -313,7 +323,7 @@ describe("tools", () => {
       { name: "vibe_wait", arguments: { windows: "quiet-amber-otter-1" } },
       { onprogress: (p) => progress.push(p) },
     );
-    expect(progress).toHaveLength(2);
+    expect(progress).toHaveLength(3);
   });
 
   test("list_windows filters by state and names the turn", async () => {
@@ -459,14 +469,20 @@ describe("tools", () => {
     expect(r.isError).toBeFalsy();
     expect(textOf(r)).toContain("quiet-amber-otter-1 is idle");
     expect(textOf(r)).toContain("⏺ done");
+    // Each message says the window's state and its turn, so an idle shell
+    // still running a command does not read as finished.
     expect(progress).toEqual([
       expect.objectContaining({
         progress: 1,
-        message: "quiet-amber-otter-1: busy",
+        message: "quiet-amber-otter-1: idle, turn working",
       }),
       expect.objectContaining({
         progress: 2,
-        message: "quiet-amber-otter-1: idle",
+        message: "quiet-amber-otter-1: busy, turn working",
+      }),
+      expect.objectContaining({
+        progress: 3,
+        message: "quiet-amber-otter-1: idle, turn working",
       }),
     ]);
     const [, opts] = (calls.find((x) => x.name === "wait")?.args ?? []) as [
@@ -622,7 +638,7 @@ describe("the stdio bridge", () => {
       { onprogress: (p) => progress.push(p) },
     );
     expect(textOf(r)).toContain("quiet-amber-otter-1 is idle");
-    expect(progress.length).toBe(2);
+    expect(progress.length).toBe(3);
     await server.close();
     await upstream.close();
   });
