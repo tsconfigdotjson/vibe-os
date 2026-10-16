@@ -125,6 +125,7 @@ own ssh client, your own key, straight to sshd. See
 | [Security](docs/security.md) | the token, what it gates, and what to put in front of it |
 | [CLI reference](docs/cli.md) | every command and flag |
 | [API](docs/api.md) | driving workspaces and windows over HTTP |
+| [MCP](docs/mcp.md) | the same, as MCP tools for Claude Code, Codex and Cursor |
 | [Development](docs/development.md) | building, testing and releasing |
 
 **vibe-os hands out shell access to the machine it runs on.** Treat access to it

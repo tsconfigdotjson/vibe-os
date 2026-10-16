@@ -1,23 +1,15 @@
 import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
-import { fillBlanks } from "../shared/blanks.ts";
 import type {
   ClientConfig,
   MemoryReport,
   SendInput,
-  SendResult,
-  WindowSummary,
-  WorkspaceSummary,
+  WindowEvent,
 } from "../shared/wire.ts";
 import {
-  type AttachTarget,
   attachInfo,
-  killSession,
-  listTargets,
-  liveSessions,
   publicHost,
   reapStaleHandoffs,
-  resolveTarget,
   sessionName,
   setHandoff,
 } from "./attach.ts";
@@ -25,16 +17,7 @@ import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { ID_PATTERN } from "./db.ts";
 import { discover, specs } from "./harness.ts";
-import {
-  KEY_NAMES,
-  keyBytes,
-  paste,
-  press,
-  submit as pressEnter,
-  startSession,
-  waitForInput,
-} from "./headless.ts";
-import { asleepText, isAsleep, noteLogin } from "./hibernate.ts";
+import { isAsleep, noteLogin } from "./hibernate.ts";
 import {
   badId,
   IMMUTABLE_CACHE_CONTROL,
@@ -43,34 +26,33 @@ import {
   readJson,
 } from "./http.ts";
 import { describeError, log } from "./log.ts";
+import { discoverMcp } from "./mcp.ts";
+import { capacityWarning, readBoxMemory, sessionMemory } from "./memory.ts";
 import {
-  discoverMcp,
-  discoverMcpWithDefs,
-  type McpScan,
-  syncMcpMirrors,
-} from "./mcp.ts";
-import {
-  capacityWarning,
-  effectiveLimits,
-  readBoxMemory,
-  sessionMemory,
-} from "./memory.ts";
+  createOps,
+  MAX_OUTPUT_LINES,
+  MAX_WAIT_S,
+  mcpScan,
+  OpError,
+  type OpenInput,
+  type Ops,
+  refreshMcpMirrors,
+  UNTIL,
+  type Until,
+} from "./ops.ts";
 import {
   createProfile,
   deleteProfile,
   getProfile,
   listProfiles,
   PALETTE,
-  type Profile,
   updateProfile,
 } from "./profiles.ts";
 import {
-  createWorkspace,
   getWorkspace,
   listProjects,
   listWorkspaces,
   reconcileWorkspaces,
-  removeWorkspace,
   scanProjects,
   touchWorkspace,
 } from "./projects.ts";
@@ -84,8 +66,6 @@ import {
   type WallpaperStore,
 } from "./wallpapers.ts";
 import {
-  createWindow,
-  deleteWindow,
   getWindow,
   listWindows,
   restoreWindow,
@@ -94,137 +74,116 @@ import {
   updateWindow,
 } from "./windows.ts";
 
-/**
- * Where to look for MCP servers, for one project or for all of them.
- *
- * A worktree is a copy of the repo, so its `.mcp.json` is the project's and is
- * read once from the root. Local-scope servers are the opposite — they are
- * keyed by the exact directory `claude mcp add` ran in, so every worktree is
- * its own place to look.
- */
-function mcpScan(db: Db, projectId?: string): McpScan {
-  const roots: string[] = [];
-  const dirs: string[] = [];
-  for (const project of listProjects(db)) {
-    if (projectId !== undefined && project.id !== projectId) continue;
-    roots.push(project.path);
-    dirs.push(
-      project.path,
-      ...listWorkspaces(db, project.id).map((w) => w.path),
+/** How often an event stream says it is still there. */
+const HEARTBEAT_MS = 15_000;
+/** Default and most messages a transcript read returns. */
+const DEFAULT_MESSAGES = 20;
+const MAX_MESSAGES = 500;
+const NO_SESSIONS = "this server runs plain login shells (--no-sessions)";
+/** Default wait, in seconds. */
+const DEFAULT_WAIT_S = 60;
+/** Most windows one wait can watch. */
+const MAX_WAIT_WINDOWS = 32;
+
+/** An `OpError` as the JSON error response it stands for. */
+function failed(err: unknown): Response {
+  if (err instanceof OpError)
+    return json({ error: err.message, ...err.extra }, err.status);
+  throw err;
+}
+
+/** A whole number query parameter in a range, or a 400 saying so. */
+function intParam(
+  url: URL,
+  name: string,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  const given = url.searchParams.get(name);
+  const n = given === null ? fallback : Number(given);
+  if (!Number.isInteger(n) || n < min || n > max)
+    throw new OpError(
+      `${name} must be a whole number from ${min} to ${max}`,
+      400,
     );
-  }
-  return { roots, dirs };
+  return n;
+}
+
+/** A yes/no query parameter: `1`, `true`, `0`, `false`, or absent. */
+function boolParam(url: URL, name: string): boolean {
+  const given = url.searchParams.get(name);
+  if (given === null || given === "0" || given === "false") return false;
+  if (given === "" || given === "1" || given === "true") return true;
+  throw new OpError(`${name} must be 1 or 0`, 400);
+}
+
+/** The query of a wait route, read and checked. */
+function waitQuery(url: URL, signal: AbortSignal) {
+  const until = (url.searchParams.get("until") ?? "settled") as Until;
+  if (!UNTIL.includes(until))
+    throw new OpError(`until must be one of ${UNTIL.join(", ")}`, 400);
+  return {
+    until,
+    timeoutMs: intParam(url, "timeout", 1, MAX_WAIT_S, DEFAULT_WAIT_S) * 1000,
+    turn: boolParam(url, "turn"),
+    lines: intParam(url, "lines", 0, MAX_OUTPUT_LINES, 0),
+    signal,
+  };
 }
 
 /**
- * Brings the generated per-server files back in step with the box.
+ * `GET /api/events`: window events as a server-sent event stream.
  *
- * Always over every project, never just the one being asked about: the sync
- * deletes files that no longer have a server behind them, and a partial view
- * would read another project's servers as gone.
+ * Each event is one `data:` line of JSON, with its type inside it rather than
+ * in an `event:` field, so that `onmessage` and a line reader both see all of
+ * them. A comment goes out every 15 seconds so that proxies, and Bun's own idle
+ * timeout, see the stream is alive.
  */
-/**
- * Re-scans every project and rewrites the mirror files.
- *
- * Returns nothing: both call sites discarded the list, which made the discovery
- * work look reusable when it was not.
- */
-async function refreshMcpMirrors(db: Db, stateDir: string): Promise<void> {
-  await syncMcpMirrors(
-    stateDir,
-    await discoverMcpWithDefs(stateDir, mcpScan(db)),
-  );
-}
-
-/** Ceiling on text sent to a window, matching a profile prompt's. */
-const MAX_SEND_CHARS = 16_000;
-
-/** Most keys one send can press. */
-const MAX_KEYS = 32;
-
-/** Longest label a window can be tagged with. */
-const MAX_LABEL_CHARS = 200;
-/**
- * How long a send waits for a window to stop drawing before it pastes anyway.
- *
- * A harness that has just started draws its startup and goes quiet in a few
- * seconds. One that is working never goes quiet, and a paste into a working
- * agent is queued rather than lost, so after this it goes in regardless.
- */
-const SETTLE_WAIT_MS = 20_000;
-/** How long after a paste the window has to draw something. */
-const ECHO_WAIT_MS = 3_000;
-/** Lines of output when the caller does not say, and the most it can ask for. */
-const DEFAULT_OUTPUT_LINES = 50;
-const MAX_OUTPUT_LINES = 2_000;
-/** How long a first read waits for a window to redraw itself. */
-const FIRST_PAINT_WAIT_MS = 1_000;
-
-/**
- * What to paste for a send: the text given, or the profile prompt with its
- * blanks filled. Throws with a message for the caller when neither works.
- */
-function textToSend(
-  body: SendInput,
-  profile: { prompt: string } | undefined,
-): string {
-  if (body.text !== undefined) {
-    if (typeof body.text !== "string" || body.text === "")
-      throw new Error(
-        'text must be a non-empty string. To press Enter alone, send keys: ["Enter"]',
-      );
-    if (body.blanks !== undefined)
-      throw new Error(
-        "blanks fill the profile prompt; leave out text to use it",
-      );
-    if (body.text.length > MAX_SEND_CHARS)
-      throw new Error(`text must be under ${MAX_SEND_CHARS} characters`);
-    return body.text;
-  }
-  if (!profile || profile.prompt.trim() === "")
-    throw new Error("this window has no profile prompt; send text instead");
-
-  const blanks = body.blanks ?? {};
-  if (
-    typeof blanks !== "object" ||
-    blanks === null ||
-    Array.isArray(blanks) ||
-    Object.values(blanks).some((v) => typeof v !== "string")
-  )
-    throw new Error("blanks must be an object of strings");
-  const filled = fillBlanks(profile.prompt, blanks);
-  if (filled.unknown.length > 0)
-    throw new Error(
-      `the prompt has no blank called ${filled.unknown.join(", ")}`,
-    );
-  if (filled.missing.length > 0)
-    throw new Error(`fill every blank: ${filled.missing.join(", ")}`);
-  return filled.text;
-}
-
-/**
- * The keys a send presses instead of pasting. Throws with a message for the
- * caller when they are not keys, or come with something a key send ignores.
- */
-function keysToPress(body: SendInput): string[] {
-  const { keys } = body;
-  if (
-    !Array.isArray(keys) ||
-    keys.length === 0 ||
-    keys.length > MAX_KEYS ||
-    keys.some((k) => typeof k !== "string")
-  )
-    throw new Error(`keys must be a list of 1 to ${MAX_KEYS} key names`);
-  const unknown = keys.find((k) => keyBytes(k) === null);
-  if (unknown !== undefined)
-    throw new Error(
-      `unknown key ${JSON.stringify(unknown)}. A key is one character or one of ${KEY_NAMES.join(", ")}`,
-    );
-  if (body.text !== undefined || body.blanks !== undefined)
-    throw new Error("send text or keys, not both");
-  if (body.submit !== undefined)
-    throw new Error('submit is for text; put "Enter" in keys instead');
-  return keys;
+function eventStream(
+  ops: Ops,
+  req: Request,
+  keep: (e: WindowEvent) => boolean,
+): Response {
+  const encoder = new TextEncoder();
+  let stop = () => {};
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const write = (text: string) => {
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          stop();
+        }
+      };
+      const off = ops.subscribe((e) => {
+        if (keep(e)) write(`data: ${JSON.stringify(e)}\n\n`);
+      });
+      const beat = setInterval(() => write(": ping\n\n"), HEARTBEAT_MS);
+      stop = () => {
+        off();
+        clearInterval(beat);
+        req.signal.removeEventListener("abort", stop);
+        try {
+          controller.close();
+        } catch {
+          // Already closed by the other side.
+        }
+      };
+      req.signal.addEventListener("abort", stop);
+      write(": vibe-os events\n\n");
+    },
+    cancel() {
+      stop();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-store",
+      "x-accel-buffering": "no",
+    },
+  });
 }
 
 export interface ApiDeps {
@@ -235,121 +194,14 @@ export interface ApiDeps {
   db: Db;
   /** Every running window's screen. One that is never started if absent. */
   screens?: Screens;
+  /** The operations the API wraps. Built from the rest if absent. */
+  ops?: Ops;
 }
 
 export function createApi(deps: ApiDeps) {
   const { ca, config, db, hostKey, wallpapers } = deps;
   const screens = deps.screens ?? new Screens(config);
-
-  const summarise = (t: AttachTarget, live: Set<string>): WindowSummary => {
-    const running = live.has(t.session);
-    const screen = running ? screens.get(t.session) : undefined;
-    return {
-      id: t.windowId,
-      ref: t.ref,
-      session: t.session,
-      workspace: t.workspace,
-      project: t.project,
-      role: t.role,
-      label: t.label,
-      live: running,
-      state: running
-        ? (screen?.activity() ?? "idle")
-        : isAsleep(config, t.session)
-          ? "asleep"
-          : null,
-      lastOutputAt: screen?.lastOutputAt ?? null,
-    };
-  };
-
-  /** Starts a window's session if it is not running, and watches its screen. */
-  async function start(
-    target: AttachTarget,
-    profile: Profile | undefined,
-  ): Promise<boolean> {
-    if (profile?.harness === "claude")
-      await refreshMcpMirrors(db, config.stateDir).catch((err: unknown) => {
-        log.warn(`could not refresh mcp configs: ${describeError(err)}`);
-      });
-    const started = await startSession(
-      { config, ca, hostKey },
-      target,
-      profile,
-      () => takeResume(db, target.windowId),
-    );
-    await screens.watch(target.session, { fresh: started });
-    return started;
-  }
-
-  /**
-   * Starts a window if need be, waits until it is ready for text, and pastes.
-   *
-   * Ready is three things in turn: the program has the terminal in raw mode,
-   * it has stopped drawing (a harness draws its startup, then goes quiet at its
-   * prompt), and what it stopped on is not a question. A paste into a question,
-   * such as Claude asking whether to trust a new folder, is lost, and the Enter
-   * after it answers the question. So that is reported rather than done, unless
-   * the caller says `force`. After the paste, the window has to draw something,
-   * which is the paste arriving; Enter is pressed only once it has.
-   */
-  async function deliver(
-    target: AttachTarget,
-    profile: Profile | undefined,
-    text: string,
-    opts: { submit: boolean; force: boolean },
-  ): Promise<SendResult> {
-    const { session } = target;
-    const started = await start(target, profile);
-    await waitForInput(config, session);
-    const watched = (await screens.watch(session)) !== undefined;
-    const state = watched
-      ? await screens.settle(session, SETTLE_WAIT_MS)
-      : "idle";
-    if (state === "question" && !opts.force)
-      return {
-        started,
-        delivered: false,
-        state,
-        reason:
-          "the window is waiting on a question, so nothing was pasted. Read it with GET /api/windows/:window/output, or send with force to paste anyway",
-      };
-
-    const before = Date.now();
-    await paste(config, session, text);
-    if (watched && !(await screens.drewSince(session, before, ECHO_WAIT_MS)))
-      return {
-        started,
-        delivered: false,
-        state: screens.get(session)?.activity() ?? state,
-        reason: "the window did not show the paste, so Enter was not pressed",
-      };
-    if (opts.submit) await pressEnter(config, session);
-    // The window has its instructions, so the band has nothing to offer.
-    updateWindow(db, target.windowId, { promptDone: true });
-    log.info(
-      `delivered ${text.length} characters to ${session}${opts.submit ? " and submitted" : ""}`,
-    );
-    return { started, delivered: true, state };
-  }
-
-  /**
-   * Starts a window if need be, and presses keys in it once it reads them.
-   *
-   * No wait for quiet and no refusal on a question, unlike `deliver`: keys are
-   * how a question is answered, and an Escape is how a busy agent is stopped.
-   */
-  async function pressKeys(
-    target: AttachTarget,
-    profile: Profile | undefined,
-    keys: string[],
-  ): Promise<SendResult> {
-    const { session } = target;
-    const started = await start(target, profile);
-    await waitForInput(config, session);
-    const state = screens.get(session)?.activity() ?? "idle";
-    await press(config, session, keys);
-    return { started, delivered: true, state };
-  }
+  const ops = deps.ops ?? createOps({ config, ca, hostKey, db, screens });
 
   return async function handleApi(
     req: Request,
@@ -441,44 +293,16 @@ export function createApi(deps: ApiDeps) {
       if (req.method === "POST") {
         try {
           const body = await readJson<{ name?: unknown; from?: unknown }>(req);
-          if (body.name !== undefined && typeof body.name !== "string")
-            throw new Error("name must be a string");
-          if (body.from !== undefined && typeof body.from !== "string")
-            throw new Error("from must be a string");
-          const created = await createWorkspace(
-            db,
-            config.workspace,
-            projectId,
-            body.name,
-            body.from,
-          );
-          return json(created, 201);
+          return json(await ops.newWorkspace(projectId, body), 201);
         } catch (err) {
-          const message = describeError(err);
-          log.warn(`workspace creation failed: ${message}`);
-          return json({ error: message }, 400);
+          return failed(err);
         }
       }
       return methodNotAllowed();
     }
 
-    if (p === "/api/workspaces" && req.method === "GET") {
-      const projectNames = new Map(listProjects(db).map((x) => [x.id, x.name]));
-      const all: WorkspaceSummary[] = [];
-      for (const [projectId, project] of projectNames) {
-        for (const w of listWorkspaces(db, projectId))
-          all.push({
-            id: w.id,
-            name: w.name,
-            branch: w.branch,
-            path: w.path,
-            projectId,
-            project,
-            lastOpenedAt: w.lastOpenedAt,
-          });
-      }
-      return json(all.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt));
-    }
+    if (p === "/api/workspaces" && req.method === "GET")
+      return json(ops.workspaces());
 
     // ── profiles ─────────────────────────────────────────────────────────────
     const profilesMatch = /^\/api\/projects\/([^/]+)\/profiles$/.exec(p);
@@ -532,18 +356,11 @@ export function createApi(deps: ApiDeps) {
       if (!ID_PATTERN.test(id)) return badId("workspace");
 
       if (req.method === "DELETE") {
-        // Every window here has a live session; removing the worktree
-        // without ending them leaves shells sitting in a deleted directory.
-        for (const win of listWindows(db, id)) {
-          const target = sessionNameFor(db, win.id);
-          if (target && config.sessions)
-            await killSession(config, target.session).catch(() => {});
-        }
         try {
-          await removeWorkspace(db, config, id);
+          await ops.removeWorkspace(id);
           return json({ ok: true });
         } catch (err) {
-          return json({ error: describeError(err) }, 400);
+          return failed(err);
         }
       }
 
@@ -576,104 +393,14 @@ export function createApi(deps: ApiDeps) {
         );
       }
       if (req.method === "POST") {
-        const body = await readJson<{
-          profileId?: unknown;
-          force?: unknown;
-          label?: unknown;
-          start?: unknown;
-          prompt?: unknown;
-          blanks?: unknown;
-          submit?: unknown;
-        }>(req);
-        let label: string | null = null;
-        if (body.label !== undefined && body.label !== null) {
-          if (typeof body.label !== "string")
-            return json({ error: "label must be a string" }, 400);
-          if (body.label.length > MAX_LABEL_CHARS)
-            return json(
-              { error: `label must be under ${MAX_LABEL_CHARS} characters` },
-              400,
-            );
-          label = body.label.trim() || null;
-        }
-        for (const flag of ["start", "submit"] as const) {
-          if (body[flag] !== undefined && typeof body[flag] !== "boolean")
-            return json({ error: `${flag} must be true or false` }, 400);
-        }
-        let profile: Profile | undefined;
-        let profileId: string | null = null;
-        if (typeof body.profileId === "string" && body.profileId !== "") {
-          profile = getProfile(db, body.profileId);
-          // A profile belongs to a project, so it may only open windows in that
-          // project's workspaces — otherwise one project's flags and prompt
-          // could be launched inside another project's worktree.
-          if (!profile || profile.projectId !== workspace.projectId) {
-            return json({ error: "unknown profile for this workspace" }, 400);
-          }
-          // An agent is what fills a small box, so an agent is what asks
-          // first. 409 with `capacity` is the question; the browser asks the
-          // person and sends `force` to go ahead anyway.
-          if (profile.harness !== "shell" && body.force !== true) {
-            const warning = capacityWarning(
-              await readBoxMemory(),
-              effectiveLimits(config.memory, profile).high,
-            );
-            if (warning) return json({ error: warning, capacity: true }, 409);
-          }
-          profileId = profile.id;
-        }
-
-        // A prompt or blanks mean start it and send; `start` alone means start.
-        const sends = body.prompt !== undefined || body.blanks !== undefined;
-        let text: string | undefined;
-        if (sends) {
-          try {
-            text = textToSend(
-              {
-                text: body.prompt as string | undefined,
-                blanks: body.blanks as Record<string, string> | undefined,
-              },
-              profile,
-            );
-          } catch (err) {
-            return json({ error: describeError(err) }, 400);
-          }
-        }
-        if ((sends || body.start === true) && !config.sessions)
-          return json(
-            { error: "this server runs plain login shells (--no-sessions)" },
-            409,
-          );
-
-        const row = createWindow(db, workspaceId, profileId, label);
-        if (!sends && body.start !== true) return json(row, 201);
-
-        const target = resolveTarget(db, row.id);
-        if (!target) return json({ error: "unknown window" }, 404);
         try {
-          const result =
-            text !== undefined
-              ? await deliver(target, profile, text, {
-                  submit: body.submit === true,
-                  force: false,
-                })
-              : { started: await start(target, profile) };
-          return json(
-            {
-              ...(getWindow(db, row.id) ?? row),
-              ...result,
-              window: summarise(target, new Set([target.session])),
-            },
-            201,
+          const opened = await ops.open(
+            workspaceId,
+            await readJson<OpenInput>(req),
           );
+          return json(opened.body, opened.status);
         } catch (err) {
-          // A window that could not start is a tile with nothing in it. Take it
-          // back out rather than leave that on someone's desktop.
-          const message = describeError(err);
-          log.warn(`open ${target.session} failed: ${message}`);
-          await killSession(config, target.session).catch(() => {});
-          deleteWindow(db, row.id);
-          return json({ error: message }, 502);
+          return failed(err);
         }
       }
       return methodNotAllowed();
@@ -706,19 +433,58 @@ export function createApi(deps: ApiDeps) {
       return json(report);
     }
 
-    if (p === "/api/windows" && req.method === "GET") {
-      const live = config.sessions
-        ? await liveSessions(config)
-        : new Set<string>();
-      // A session started by a login rather than by this server is picked up
-      // within a few seconds anyway; this saves a caller the wait.
-      await Promise.all([...live].map((s) => screens.watch(s)));
+    if (p === "/api/windows" && req.method === "GET")
+      return json(await ops.windows(url.searchParams.get("label")));
+
+    // Window events as they happen: state changes, turns, opens and closes.
+    if (p === "/api/events" && req.method === "GET") {
+      const refs = url.searchParams.get("refs");
+      const wanted = refs
+        ? new Set(refs.split(",").map((r) => r.trim().replace(/^vibe-/, "")))
+        : null;
       const label = url.searchParams.get("label");
-      return json(
-        listTargets(db)
-          .filter((t) => label === null || t.label === label)
-          .map((t) => summarise(t, live)),
+      return eventStream(
+        ops,
+        req,
+        (e) =>
+          (wanted === null || wanted.has(e.ref)) &&
+          (label === null || e.label === label),
       );
+    }
+
+    // Blocks until one of several windows settles, or changes, or time is up.
+    if (p === "/api/windows/wait" && req.method === "GET") {
+      try {
+        const refs = (url.searchParams.get("refs") ?? "")
+          .split(",")
+          .map((r) => r.trim())
+          .filter(Boolean);
+        if (refs.length === 0 || refs.length > MAX_WAIT_WINDOWS)
+          throw new OpError(
+            `refs must name 1 to ${MAX_WAIT_WINDOWS} windows, comma separated`,
+            400,
+          );
+        const query = waitQuery(url, req.signal);
+        return json(await ops.wait(refs.map(ops.target), query));
+      } catch (err) {
+        return failed(err);
+      }
+    }
+
+    const waitMatch = /^\/api\/windows\/([^/]+)\/(wait|messages)$/.exec(p);
+    if (waitMatch && req.method === "GET") {
+      const id = decodeURIComponent(waitMatch[1]);
+      if (!ID_PATTERN.test(id)) return badId("window");
+      try {
+        const target = ops.target(id);
+        if (waitMatch[2] === "messages") {
+          const last = intParam(url, "last", 1, MAX_MESSAGES, DEFAULT_MESSAGES);
+          return json({ messages: await ops.messages(target, last) });
+        }
+        return json(await ops.wait([target], waitQuery(url, req.signal)));
+      } catch (err) {
+        return failed(err);
+      }
     }
 
     // What a window shows, as plain text: the screen and the history above it.
@@ -726,40 +492,25 @@ export function createApi(deps: ApiDeps) {
     if (outputMatch && req.method === "GET") {
       const id = decodeURIComponent(outputMatch[1]);
       if (!ID_PATTERN.test(id)) return badId("window");
-      if (!config.sessions)
+      try {
+        if (!config.sessions) throw new OpError(NO_SESSIONS, 409);
+        const target = ops.target(id);
+        if (target.windowId !== id)
+          return json({ error: "unknown window" }, 404);
+        const lines = intParam(url, "lines", 1, MAX_OUTPUT_LINES, 50);
+        const given = url.searchParams.get("after");
+        const after = given === null ? undefined : Number(given);
+        if (after !== undefined && (!Number.isInteger(after) || after < 0))
+          throw new OpError("after must be a cursor from an earlier read", 400);
         return json(
-          { error: "this server runs plain login shells (--no-sessions)" },
-          409,
+          await ops.output(target, {
+            lines: url.searchParams.has("lines") ? lines : undefined,
+            after,
+          }),
         );
-      const target = resolveTarget(db, id);
-      if (!target || target.windowId !== id)
-        return json({ error: "unknown window" }, 404);
-      const given = url.searchParams.get("lines");
-      const lines = given === null ? DEFAULT_OUTPUT_LINES : Number(given);
-      if (!Number.isInteger(lines) || lines < 1 || lines > MAX_OUTPUT_LINES)
-        return json(
-          {
-            error: `lines must be a whole number from 1 to ${MAX_OUTPUT_LINES}`,
-          },
-          400,
-        );
-      const screen = await screens.watch(target.session);
-      // Hibernated: what it showed when it went to sleep, without waking it.
-      if (!screen && isAsleep(config, target.session))
-        return json({
-          text: await asleepText(config, target.session, lines),
-          state: "asleep",
-          lastOutputAt: null,
-        });
-      if (!screen) return json({ error: "the window is not running" }, 409);
-      // Just attached to: its repaint is on the way, and blank until it lands.
-      if (screen.lastOutputAt === null)
-        await screens.drewSince(target.session, 0, FIRST_PAINT_WAIT_MS);
-      return json({
-        text: screen.text(lines),
-        state: screen.activity(),
-        lastOutputAt: screen.lastOutputAt,
-      });
+      } catch (err) {
+        return failed(err);
+      }
     }
 
     // Starts a window's session with nothing attached, so it is running before
@@ -768,53 +519,16 @@ export function createApi(deps: ApiDeps) {
     if (startMatch && req.method === "POST") {
       const id = decodeURIComponent(startMatch[1]);
       if (!ID_PATTERN.test(id)) return badId("window");
-      if (!config.sessions)
-        return json(
-          { error: "this server runs plain login shells (--no-sessions)" },
-          409,
-        );
-      const target = resolveTarget(db, id);
-      if (!target || target.windowId !== id)
-        return json({ error: "unknown window" }, 404);
-      const profile = target.profileId
-        ? getProfile(db, target.profileId)
-        : undefined;
-
-      let text: string | undefined;
-      let keys: string[] | undefined;
-      let submit = false;
-      let force = false;
-      if (startMatch[2] === "send") {
-        const body = await readJson<SendInput>(req);
-        for (const flag of ["submit", "force"] as const) {
-          if (body[flag] !== undefined && typeof body[flag] !== "boolean")
-            return json({ error: `${flag} must be true or false` }, 400);
-        }
-        submit = body.submit === true;
-        force = body.force === true;
-        try {
-          if (body.keys !== undefined) keys = keysToPress(body);
-          else text = textToSend(body, profile);
-        } catch (err) {
-          return json({ error: describeError(err) }, 400);
-        }
-      }
-
       try {
-        const result =
-          keys !== undefined
-            ? await pressKeys(target, profile, keys)
-            : text !== undefined
-              ? await deliver(target, profile, text, { submit, force })
-              : { started: await start(target, profile) };
-        return json({
-          ...result,
-          window: summarise(target, new Set([target.session])),
-        });
+        if (!config.sessions) throw new OpError(NO_SESSIONS, 409);
+        const target = ops.target(id);
+        if (target.windowId !== id)
+          return json({ error: "unknown window" }, 404);
+        const verb = startMatch[2] as "start" | "send";
+        const body = verb === "send" ? await readJson<SendInput>(req) : {};
+        return json(await ops.send(target, verb, body));
       } catch (err) {
-        const message = describeError(err);
-        log.warn(`${startMatch[2]} ${target.session} failed: ${message}`);
-        return json({ error: message }, 502);
+        return failed(err);
       }
     }
 
@@ -878,20 +592,10 @@ export function createApi(deps: ApiDeps) {
         return updated ? json(updated) : json({ error: "unknown window" }, 404);
       }
 
-      if (req.method === "DELETE") {
-        // Closing a window is an explicit "I am done with this", so the session
-        // goes too. Window indices are reused and `new-session -A` attaches, so
-        // leaving it alive would silently resurrect it in the next window.
-        const target = sessionNameFor(db, id);
-        if (target && config.sessions) {
-          await killSession(config, target.session)
-            .then(() => log.info(`ended session ${target.session}`))
-            .catch(() => {});
-        }
-        return deleteWindow(db, id)
+      if (req.method === "DELETE")
+        return (await ops.close(id))
           ? json({ ok: true })
           : json({ error: "unknown window" }, 404);
-      }
       return methodNotAllowed();
     }
 

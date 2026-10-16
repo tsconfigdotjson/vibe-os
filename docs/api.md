@@ -5,6 +5,7 @@ marked **stable** are the ones meant for scripts, webhooks and cron. The rest
 exist for the desktop and may change between releases.
 
 The `vibe-os` CLI wraps the stable routes. See [From the command line](#from-the-command-line).
+The same operations are MCP tools at `/mcp`: see [MCP](mcp.md).
 
 ## Authentication
 
@@ -101,7 +102,7 @@ is a dtach session that runs until it is closed.
 the windows opened with that label.
 
 ```json
-[{ "id": "…", "ref": "quiet-amber-otter-1", "session": "vibe-quiet-amber-otter-1", "workspace": "quiet-amber-otter", "project": "api", "role": "QA", "label": "nightly-triage", "live": true, "state": "idle", "lastOutputAt": 1791291661842 }]
+[{ "id": "…", "ref": "quiet-amber-otter-1", "session": "vibe-quiet-amber-otter-1", "workspace": "quiet-amber-otter", "project": "api", "role": "QA", "label": "nightly-triage", "live": true, "state": "idle", "lastOutputAt": 1791291661842, "lastSendAt": 1791291650000, "turn": "done" }]
 ```
 
 `ref` is what `vibe-os attach` and `vibe-os close` take. `role` is the profile
@@ -121,6 +122,19 @@ opened, or null. `live` is whether its session is running.
 It is null until the server has seen output from it, so it starts over when the
 server restarts.
 
+`lastSendAt` and `turn` say how the window is doing with the last thing sent to
+it. A send that submits text, or presses keys, starts a turn:
+
+| turn | |
+| --- | --- |
+| `pending` | sent, and nothing drawn since |
+| `working` | it has drawn something since the send |
+| `done` | it went quiet again after working: `idle` or `question` |
+
+Both are null when nothing has been sent since the server started. Like
+`lastOutputAt`, they are kept in memory and start over when the server restarts.
+A window that is `idle` with `turn: "pending"` has not started on the send yet.
+
 `GET /api/workspaces/:workspace/windows` lists one workspace's windows, with
 their layout on the desktop.
 
@@ -137,6 +151,7 @@ with `start` or `prompt` here.
 | `blanks` | optional. Start the window and send the profile prompt with its blanks filled, as `send` does |
 | `submit` | optional. With `prompt` or `blanks`, press Enter after pasting |
 | `force` | optional. Open an agent even when the box is short of memory |
+| `reuse` | optional. With `label`: if a window with that label is already open in the workspace, return it instead of adding one |
 
 Returns `201` with the window. With `start`, `prompt` or `blanks`, the window
 also carries the fields `start` and `send` return, including `window`, its
@@ -146,6 +161,11 @@ returns `502`.
 When the box is short of memory and the profile runs an agent, it returns `409`
 with `{ "error": "…", "capacity": true }` instead. Send it again with
 `"force": true` to open it anyway.
+
+With `reuse`, a window already open under the label is returned with `200` and
+`"reused": true`, so a retried call does not open a second window. Its prompt is
+not sent again while it is running or asleep. If its session has ended, `prompt`,
+`blanks` or `start` start it again as they would a new window.
 
 `POST /api/windows/:window/start` starts the window's session with nothing
 attached. It logs in over SSH with a short-lived certificate, the same way the
@@ -210,10 +230,25 @@ with colours and cursor movement removed.
 | query | |
 | --- | --- |
 | `lines` | optional. How many lines, counted from the bottom. 1 to 2000, default 50 |
+| `after` | optional. A `cursor` from an earlier read: return only what was added since |
 
 ```json
-{ "text": "❯ Reply with just the word pong.\n⏺ pong\n…", "state": "idle", "lastOutputAt": 1791291661842 }
+{ "text": "❯ Reply with just the word pong.\n⏺ pong\n…", "state": "idle", "lastOutputAt": 1791291661842, "cursor": 412 }
 ```
+
+`cursor` counts the lines that have scrolled off the top of the screen into the
+history. With `after`, `text` is the lines that scrolled into the history since
+that cursor, oldest first, and `screen` is the screen as it is now:
+
+```json
+{ "text": "⏺ Running the tests…", "screen": "…\n❯", "state": "busy", "lastOutputAt": 1791291662001, "cursor": 415, "truncated": false }
+```
+
+The history does not change once written, so reading on from each new `cursor`
+sees every line once. The screen can be redrawn in place, so it comes back whole
+each time. `truncated` is true when some of what came after the cursor is no
+longer held (the history keeps 1000 lines), or when the cursor is from before a
+server restart. `lines` limits `text` when given with `after`.
 
 A hibernated window answers with what it showed when it went to sleep,
 `state: "asleep"` and `lastOutputAt: null`, and is not woken by the read.
@@ -226,10 +261,88 @@ when the server started is asked to redraw itself the first time it is read,
 which narrows it by one column for a moment. Returns `409` when the window is
 not running.
 
+`GET /api/windows/:window/wait` blocks until the window settles, or changes, and
+returns. This replaces polling `output` in a loop.
+
+| query | |
+| --- | --- |
+| `until` | optional. `settled` (default): not `busy`, so `idle`, `question` or `asleep`. `idle` or `question`: that state. `change`: any state other than the one when the wait began |
+| `timeout` | optional. Seconds, 1 to 240, default 60 |
+| `turn` | optional. `1` with `settled`: also wait until the turn after the last send is `done` (see [`turn`](#windows)), so the idle before the window starts on a send does not count |
+| `lines` | optional. Include the window's last lines of output, as `output` does. Default 0 |
+
+```json
+{ "ref": "quiet-amber-otter-1", "state": "idle", "reached": true, "waitedMs": 48210, "lastOutputAt": 1791291661842, "window": { … }, "text": "…", "cursor": 415 }
+```
+
+`reached` is false when the time ran out, which is a `200` like any other answer.
+A window that is not running answers at once with its state: `asleep`, or null
+with `live: false` in `window`. Waiting does not wake a hibernated window.
+`window` is the window's summary, as `GET /api/windows` returns it.
+
+`GET /api/windows/wait?refs=a,b,c` waits on up to 32 windows, by ref or id, and
+returns when any one of them meets `until`. `ref` names that window, and
+`windows` lists where each of them is:
+
+```json
+{ "ref": "brave-jade-lynx-1", "state": "question", "reached": true, …, "windows": [{ "ref": "quiet-amber-otter-1", "state": "busy", "turn": "working" }, { "ref": "brave-jade-lynx-1", "state": "question", "turn": "done" }] }
+```
+
+`GET /api/windows/:window/messages` returns the last messages of the
+conversation in a Claude window, read from Claude's own transcript. It works on
+a running window and a hibernated one.
+
+| query | |
+| --- | --- |
+| `last` | optional. How many messages, from the end. 1 to 500, default 20 |
+
+```json
+{ "messages": [{ "role": "user", "text": "Reproduce #123", "at": 1791291600000 }, { "role": "tool", "text": "Bash(bun test)", "at": 1791291610000 }, { "role": "assistant", "text": "The test fails as reported…", "at": 1791291660000 }] }
+```
+
+`role` is `user`, `assistant`, or `tool` for a tool call the assistant made, in
+short form. Thinking, tool results and subagents are left out. Returns `409` for
+a window whose harness has no transcript vibe-os can read, and for a Claude
+window that is not running and not asleep.
+
 `DELETE /api/windows/:window` ends the window's session and removes it.
 
 `GET /api/windows/:window/attach` returns the `ssh` command that attaches a
 terminal to the window.
+
+### Events
+
+`GET /api/events` is a stream of window events, as
+[server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html).
+
+| query | |
+| --- | --- |
+| `refs` | optional. Only these windows, comma separated |
+| `label` | optional. Only windows with this label |
+
+```sh
+curl -N -H "Authorization: Bearer $VIBE_OS_TOKEN" http://127.0.0.1/api/events
+```
+
+Each event is one `data:` line of JSON. Its type is in the JSON, not in an
+`event:` field.
+
+```
+data: {"type":"window.state","ref":"quiet-amber-otter-1","label":"nightly-triage","workspace":"quiet-amber-otter","project":"api","at":1791291661842,"from":"busy","to":"idle"}
+```
+
+| type | |
+| --- | --- |
+| `window.state` | `from` and `to` are states, as in [`GET /api/windows`](#windows). Null is not running |
+| `window.turn` | `turn` is the window's new turn |
+| `window.opened` | a window was added |
+| `window.closed` | a window was closed |
+| `window.asleep` | a window was hibernated |
+| `window.woke` | a hibernated window is running again |
+
+A comment line goes out every 15 seconds while nothing else does. The desktop's
+cookie also works, so `EventSource` in a page on the desktop's own origin needs
+no header.
 
 ### Health
 
@@ -255,7 +368,7 @@ These serve the desktop and are not stable.
 
 ## From the command line
 
-`vibe-os ls`, `workspace`, `open`, `output` and `close` call the stable routes. On the box
+`vibe-os ls`, `workspace`, `open`, `output`, `wait`, `events` and `close` call the stable routes. On the box
 they find the server and its token on their own. From anywhere else, pass
 `--url` and `--token`, or set `VIBE_OS_URL` and `VIBE_OS_TOKEN`.
 
@@ -269,8 +382,11 @@ vibe-os open quiet-amber-otter --profile QA --prompt "Reproduce #123 and write a
 # or fill the QA profile's own prompt
 vibe-os open quiet-amber-otter --profile QA --blank ticket=#123 --submit
 
-vibe-os ls
+# wait until it has answered, then read it
+vibe-os wait quiet-amber-otter-1 --turn --timeout 600
 vibe-os output quiet-amber-otter-1 --lines 20
+
+vibe-os ls
 vibe-os close quiet-amber-otter-1
 ```
 
@@ -279,13 +395,18 @@ vibe-os close quiet-amber-otter-1
 | `vibe-os ls` | list windows, and what each is doing |
 | `vibe-os workspace new <project> [--from <branch>] [--name <name>]` | create a workspace and print its name |
 | `vibe-os workspace ls [project]` | list workspaces |
-| `vibe-os open <workspace> [--profile <name>] [--prompt <text>] [--blank label=value] [--submit] [--force] [--label <text>]` | add a window, start it, and paste a prompt if given. Prints the window's ref |
-| `vibe-os output <window> [--lines <n>]` | print what a window shows |
+| `vibe-os open <workspace> [--profile <name>] [--prompt <text>] [--blank label=value] [--submit] [--force] [--label <text>] [--reuse]` | add a window, start it, and paste a prompt if given. Prints the window's ref. With `--reuse`, the window already open with `--label` is used instead |
+| `vibe-os output <window> [--lines <n>] [--follow]` | print what a window shows. `--follow` keeps printing new lines until the window stops |
+| `vibe-os wait <window...> [--until <state>] [--timeout <s>] [--turn]` | wait for any of the windows to settle. Exits 0 when one did, 2 when time ran out, 1 when a window is not running |
+| `vibe-os events [window...] [--label <text>]` | print window events as JSON lines, until interrupted |
 | `vibe-os close <window>` | close a window and end its session |
 
 A workspace can be named as `project/name` when two projects have one with the
 same name. `--prompt -` reads the prompt from stdin. `--json` prints what the
 API returned instead of text.
+
+`wait --timeout` can be longer than the 240 seconds one request allows: the CLI
+waits again until the time is up.
 
 If a window cannot be started, `open` removes it again and exits non-zero. If it
 starts but the prompt is not delivered, the window stays open, and `open` says

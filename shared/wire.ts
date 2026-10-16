@@ -205,6 +205,73 @@ export interface WindowSummary {
   lastOutputAt: number | null;
   /** The caller's own tag for the window, set when it was opened. */
   label: string | null;
+  /**
+   * When a send that submitted text, or pressed keys, last went in. Null if
+   * none has since the server started.
+   */
+  lastSendAt: number | null;
+  /** How the window's answer to that send is going. Null with no send. */
+  turn: Turn | null;
+}
+
+/**
+ * Where a window is with the last thing sent to it.
+ *
+ * `pending` is sent and nothing drawn since, `working` is drawing since the
+ * send, and `done` is quiet again after working: idle or on a question.
+ */
+export type Turn = "pending" | "working" | "done";
+
+/** One event on `GET /api/events`. */
+export interface WindowEvent {
+  type:
+    | "window.state"
+    | "window.turn"
+    | "window.opened"
+    | "window.closed"
+    | "window.asleep"
+    | "window.woke";
+  ref: string;
+  /** Null for a window this server no longer knows. */
+  label: string | null;
+  workspace: string | null;
+  project: string | null;
+  at: number;
+  /** `window.state` only. Null is not running. */
+  from?: Activity | null;
+  to?: Activity | null;
+  /** `window.turn` only. */
+  turn?: Turn;
+}
+
+/** `GET /api/windows/:window/wait` */
+export interface WaitResult {
+  /** The window that met the condition, or the first one asked about. */
+  ref: string;
+  state: Activity | "asleep" | null;
+  /** False when the wait timed out, or the window is not running. */
+  reached: boolean;
+  waitedMs: number;
+  lastOutputAt: number | null;
+  window: WindowSummary;
+  /** With `lines`: the window's last lines, as `output` returns them. */
+  text?: string;
+  cursor?: number;
+  /** With more than one window: where each of them is. */
+  windows?: {
+    ref: string;
+    state: Activity | "asleep" | null;
+    turn: Turn | null;
+  }[];
+}
+
+/** `GET /api/windows/:window/messages`: one turn of a conversation. */
+export interface TranscriptMessage {
+  /** `tool` is a tool call the assistant made, in short form. */
+  role: "user" | "assistant" | "tool";
+  text: string;
+  /** When it was written, in ms since the epoch, if the transcript says. */
+  at: number | null;
 }
 
 /**

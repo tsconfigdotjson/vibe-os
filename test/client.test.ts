@@ -9,6 +9,7 @@ import {
   parseBlanks,
   request,
   resolveRemote,
+  runClient,
 } from "../server/client.ts";
 import { savePersisted } from "../server/config.ts";
 import type {
@@ -162,5 +163,133 @@ describe("request", () => {
     await expect(
       request({ url, token: "t" }, "GET", "/api/bad"),
     ).rejects.toThrow("no such thing");
+  });
+});
+
+describe("verbs against a stub server", () => {
+  /** What the next wait answers, and what the last open was sent. */
+  let waits: Record<string, unknown>[] = [];
+  let opened: Record<string, unknown> | null = null;
+  let waitQueries: URLSearchParams[] = [];
+  const win = {
+    id: "w1",
+    ref: "quiet-amber-otter-1",
+    project: "api",
+    workspace: "quiet-amber-otter",
+    role: "QA",
+  };
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/windows") return Response.json([win]);
+      if (url.pathname === "/api/windows/wait") {
+        waitQueries.push(url.searchParams);
+        return Response.json(waits.shift());
+      }
+      if (url.pathname === "/api/workspaces")
+        return Response.json([
+          {
+            id: "ws1",
+            name: "quiet-amber-otter",
+            project: "api",
+            projectId: "p",
+          },
+        ]);
+      if (url.pathname === "/api/workspaces/ws1/windows") {
+        opened = (await req.json()) as Record<string, unknown>;
+        return Response.json({ reused: true, window: win }, { status: 200 });
+      }
+      return Response.json({ error: "not found" }, { status: 404 });
+    },
+  });
+  afterAll(() => server.stop(true));
+  const values = { url: `http://127.0.0.1:${server.port}`, json: true };
+  const local = { port: 80, stateDir: "/nonexistent" };
+  const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const log = console.log;
+    console.log = () => {};
+    try {
+      return await fn();
+    } finally {
+      console.log = log;
+    }
+  };
+
+  const result = (over: Record<string, unknown>) => ({
+    ref: win.ref,
+    state: "idle",
+    reached: true,
+    waitedMs: 10,
+    lastOutputAt: 1,
+    window: win,
+    ...over,
+  });
+
+  test("wait exits 0 when reached and 2 on a timeout", async () => {
+    waitQueries = [];
+    waits = [result({})];
+    expect(
+      await quietly(() =>
+        runClient("wait", [win.ref], { ...values, turn: true }, local),
+      ),
+    ).toBe(0);
+    expect(waitQueries[0].get("refs")).toBe(win.ref);
+    expect(waitQueries[0].get("turn")).toBe("1");
+    expect(waitQueries[0].get("until")).toBe("settled");
+
+    waits = [result({ reached: false, state: "busy", waitedMs: 1000 })];
+    expect(
+      await quietly(() =>
+        runClient("wait", [win.ref], { ...values, timeout: "1" }, local),
+      ),
+    ).toBe(2);
+  });
+
+  test("a wait past four minutes is several requests", async () => {
+    waitQueries = [];
+    waits = [
+      result({ reached: false, state: "busy" }),
+      result({ reached: true }),
+    ];
+    expect(
+      await quietly(() =>
+        runClient("wait", [win.ref], { ...values, timeout: "300" }, local),
+      ),
+    ).toBe(0);
+    expect(waitQueries.map((q) => q.get("timeout"))).toEqual(["240", "60"]);
+  });
+
+  test("wait on a window that is not running exits 1", async () => {
+    waits = [result({ reached: false, state: null })];
+    expect(
+      await quietly(() => runClient("wait", [win.ref], values, local)),
+    ).toBe(1);
+  });
+
+  test("wait refuses an unknown --until", async () => {
+    expect(
+      await quietly(() =>
+        runClient("wait", [win.ref], { ...values, until: "soon" }, local),
+      ),
+    ).toBe(1);
+  });
+
+  test("open --reuse asks for the window by label", async () => {
+    expect(
+      await quietly(() =>
+        runClient(
+          "open",
+          ["quiet-amber-otter"],
+          { ...values, label: "triage", reuse: true, prompt: "go" },
+          local,
+        ),
+      ),
+    ).toBe(0);
+    expect(opened).toMatchObject({
+      label: "triage",
+      reuse: true,
+      prompt: "go",
+    });
   });
 });
