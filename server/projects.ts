@@ -625,6 +625,16 @@ async function baseFromRef(
  * The worktree gets its own branch named after the workspace, branched from a
  * freshly fetched origin — see `baseForWorkspace` — or from `from` when given.
  */
+/** Whether a repository has a local branch by this name. */
+async function branchExists(repo: string, name: string): Promise<boolean> {
+  try {
+    await git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function createWorkspace(
   db: Db,
   workspaceRoot: string,
@@ -652,10 +662,16 @@ export async function createWorkspace(
     if (!NAME_PATTERN.test(name))
       throw new Error("name must be lowercase letters, digits and dashes");
     if (taken.has(name)) throw new Error(`workspace ${name} already exists`);
+    // Deleting a workspace keeps its branch, so a name can be free here and
+    // taken in git. Said plainly, rather than as git's own refusal.
+    if (await branchExists(project.path, name))
+      throw new Error(
+        `${project.name} already has a branch called ${name}, kept from an earlier workspace. Pick another name, or leave the name out for three random words`,
+      );
   } else {
     do {
       name = threeWordName();
-    } while (taken.has(name));
+    } while (taken.has(name) || (await branchExists(project.path, name)));
   }
 
   // Resolved before anything is made on disk, so a bad --from leaves nothing.
