@@ -12,6 +12,7 @@
 // right by construction this way and would each need correcting from root.
 
 import { spawn } from "node:child_process";
+import { Resolver } from "node:dns/promises";
 import {
   access,
   mkdir,
@@ -24,9 +25,12 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 
+import { isLoopback } from "./auth.ts";
 import { type Config, type RawOptions, savePersisted } from "./config.ts";
 import {
   authorizedKeysPaths,
+  dockerPublishesLocally,
+  firewallCheck,
   homeFor,
   onPath,
   parseSshdConfig,
@@ -37,6 +41,7 @@ import { CLAUDE_INSTALL, CURSOR_INSTALL, HERMES_INSTALL } from "./harness.ts";
 import { color, describeError } from "./log.ts";
 import { type OomState, oomState, scopeState } from "./memory.ts";
 import { ENTRY, IS_COMPILED, invocation } from "./runtime.ts";
+import { UNIT_PATH, type UnitFlags, unitFlags } from "./unit.ts";
 
 export const TAILSCALE_INSTALL =
   "curl -fsSL https://tailscale.com/install.sh | sh";
@@ -44,7 +49,6 @@ export const TAILSCALE_INSTALL =
 /** The port setup serves on when not told otherwise, behind `tailscale serve`. */
 export const SETUP_PORT = 7681;
 
-const UNIT_PATH = "/etc/systemd/system/vibe-os.service";
 const HARDENING_PATH = "/etc/ssh/sshd_config.d/01-hardening.conf";
 const HARDENING =
   "PasswordAuthentication no\nKbdInteractiveAuthentication no\n";
@@ -52,7 +56,7 @@ const HARDENING =
 /** The transient timer that turns ufw back off unless someone confirms. */
 const REVERT_UNIT = "vibe-os-firewall-revert";
 const REVERT_AFTER_SECONDS = 300;
-/** Written by `vibe-os confirm-firewall`, from a session over the tailnet. */
+/** Written by `vibe-os confirm-firewall`, from a new ssh session. */
 const CONFIRM_FILE = "firewall-confirmed";
 
 // ── the pure parts ─────────────────────────────────────────────────────────
@@ -140,49 +144,6 @@ export function display(argv: string[]): string {
         : a,
     )
     .join(" ");
-}
-
-export interface UnitFlags {
-  port: number | null;
-  host: string | null;
-  /** undefined: no token flag, so the service uses the remembered one. */
-  token: string | null | undefined;
-}
-
-/**
- * The flags an installed vibe-os unit starts with.
- *
- * The service is the source of truth for where vibe-os is listening and which
- * token it wants, and setup reads it rather than assuming its own defaults
- * were the ones used: a unit installed by hand with `--port 8080` is served on
- * 8080, and the URL printed at the end has to say so.
- */
-export function unitFlags(unit: string): UnitFlags {
-  const line = unit.split("\n").find((l) => l.startsWith("ExecStart="));
-  const words = line?.slice("ExecStart=".length).trim().split(/\s+/) ?? [];
-  const flags: UnitFlags = { port: null, host: null, token: undefined };
-
-  const value = (i: number, name: string): string | undefined => {
-    const word = words[i] as string;
-    if (word.startsWith(`${name}=`)) return word.slice(name.length + 1);
-    const next = words[i + 1];
-    return next === undefined || next.startsWith("-") ? "" : next;
-  };
-
-  words.forEach((word, i) => {
-    if (word === "--port" || word.startsWith("--port=")) {
-      const n = Number(value(i, "--port"));
-      if (Number.isInteger(n) && n > 0) flags.port = n;
-    } else if (word === "--host" || word.startsWith("--host=")) {
-      flags.host = value(i, "--host") || null;
-    } else if (word === "--no-token") {
-      flags.token = null;
-    } else if (word === "--token" || word.startsWith("--token=")) {
-      // A bare `--token` means "the remembered one", same as no flag at all.
-      flags.token = value(i, "--token") || undefined;
-    }
-  });
-  return flags;
 }
 
 /** Whether sshd still accepts a password, by any of its names for one. */
@@ -749,6 +710,116 @@ async function tailscaleStep(s: Session): Promise<TailscaleState> {
   return state;
 }
 
+/** Tailscale's state, without installing it or bringing it up. */
+async function tailnetIfUp(s: Session): Promise<TailscaleState> {
+  if (!(await onPath("tailscale")))
+    return { running: false, dnsName: null, ip: null };
+  const state = parseTailscaleStatus(
+    (await s.capture(["tailscale", "status", "--json"])) ?? "",
+  );
+  if (state.running)
+    s.done(
+      `Tailscale is up as ${state.dnsName ?? state.ip}; it stays as a second way in`,
+    );
+  return state;
+}
+
+/** Warns when the domain does not point at this machine. */
+async function dnsStep(s: Session, domain: string): Promise<void> {
+  // Public resolvers, not this machine's: /etc/hosts often maps its own name
+  // to 127.0.1.1, and systemd-resolved answers from that file too.
+  const resolver = new Resolver({ timeout: 3_000, tries: 2 });
+  resolver.setServers(["1.1.1.1", "9.9.9.9", "8.8.8.8"]);
+  const resolved = (
+    await Promise.all([
+      resolver.resolve4(domain).catch(() => [] as string[]),
+      resolver.resolve6(domain).catch(() => [] as string[]),
+    ])
+  )
+    .flat()
+    .filter((address) => !isLoopback(address))
+    .map((address) => ({ address }));
+  const local = new Set(
+    Object.values(os.networkInterfaces())
+      .flat()
+      .map((i) => i?.address),
+  );
+  const here = resolved.filter((r) => local.has(r.address));
+  if (resolved.length === 0) {
+    s.warn(
+      `${domain} does not resolve yet; vibe-os retries the certificate every 30 minutes until it does`,
+    );
+  } else if (here.length === 0) {
+    s.warn(
+      `${domain} points at ${resolved.map((r) => r.address).join(", ")}, which is not this machine (or it is behind NAT); Let's Encrypt will fail until it points here`,
+    );
+  } else {
+    s.done(`${domain} points here (${here.map((r) => r.address).join(", ")})`);
+  }
+}
+
+/** `tailscale serve` holds port 443 on the tailnet address, which vibe-os needs. */
+async function releaseServeStep(
+  s: Session,
+  tailnet: TailscaleState,
+): Promise<void> {
+  if (!tailnet.running) return;
+  const status =
+    (await s.capture(["tailscale", "serve", "status"], true)) ?? "";
+  if (!/https?:\/\//.test(status)) return;
+  s.heading("tailscale serve");
+  s.note(
+    "it holds port 443, which vibe-os now serves itself; the ts.net URL stops working",
+  );
+  // Funnel is part of the serve config, so this ends it too.
+  const command = ["tailscale", "serve", "reset"];
+  if (await s.confirm("Turn off tailscale serve?", true, [command]))
+    await s.run(command, true);
+  else s.warn("left on, so vibe-os may not get port 443");
+}
+
+/** Docker's published ports go around ufw, so bind them to loopback. */
+async function dockerStep(s: Session): Promise<void> {
+  if (!(await onPath("docker"))) return;
+  const daemon = await readFile("/etc/docker/daemon.json", "utf8").catch(
+    () => null,
+  );
+  if (daemon !== null && dockerPublishesLocally(daemon)) {
+    s.done("docker publishes ports on 127.0.0.1");
+    return;
+  }
+  s.heading("docker");
+  s.note(
+    "its published ports go around ufw, so a docker run -p is public whatever ufw says",
+  );
+  if (daemon !== null && daemon.trim() !== "" && daemon.trim() !== "{}") {
+    s.warn(
+      'add "ip": "127.0.0.1" to /etc/docker/daemon.json by hand, keeping what is there, then restart docker',
+    );
+    return;
+  }
+  const commands = [
+    ["sh", "-c", `echo '{ "ip": "127.0.0.1" }' > /etc/docker/daemon.json`],
+    ["systemctl", "restart", "docker"],
+  ];
+  // Restarting docker stops what is running, so that is a no unless asked.
+  const running = (
+    (await s.capture(["docker", "ps", "-q"], true)) ?? ""
+  ).trim();
+  if (running)
+    s.warn(
+      `restarting docker stops its ${running.split("\n").length} running container(s)`,
+    );
+  if (
+    await s.confirm(
+      "Publish Docker's ports on 127.0.0.1 by default?",
+      !running,
+      commands,
+    )
+  )
+    await s.runAll(commands, true);
+}
+
 interface Service {
   port: number;
   host: string;
@@ -756,34 +827,71 @@ interface Service {
   installed: boolean;
 }
 
+/**
+ * The installed unit's other flags, less any that setup was just given, so a
+ * flag on this run replaces the old one rather than appearing twice.
+ */
+export function keptFlags(rest: string[], given: string[]): string[] {
+  const replaced = new Set(given.filter((w) => w.startsWith("--")));
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const word = rest[i] as string;
+    if (replaced.has(word.split("=")[0] as string)) {
+      if (!word.includes("=") && !rest[i + 1]?.startsWith("-")) i++;
+      continue;
+    }
+    out.push(word);
+  }
+  return out;
+}
+
+/**
+ * Where setup puts the service, and whether the installed unit already has it.
+ *
+ * An installed unit is kept unless asked for something different, which is
+ * what makes a second run of setup safe on a box set up by hand. One with no
+ * --port or --host has vibe-os's own defaults, not setup's. With a domain,
+ * vibe-os serves the internet itself: port 80 for Let's Encrypt and the
+ * redirect, on every address, IPv6 included.
+ */
+export function servicePlan(
+  current: UnitFlags | null,
+  given: { port?: number; host?: string },
+  domain: string | null,
+): { port: number; host: string; keep: boolean } {
+  const port =
+    given.port ?? (domain ? 80 : current ? (current.port ?? 80) : SETUP_PORT);
+  const host =
+    given.host ??
+    (domain ? "::" : current ? (current.host ?? "0.0.0.0") : "127.0.0.1");
+  if (!current) return { port, host, keep: false };
+  const keep =
+    (current.port ?? 80) === port &&
+    (current.host ?? "0.0.0.0") === host &&
+    (domain === null || current.domain === domain);
+  return { port, host, keep };
+}
+
 async function serviceStep(
   s: Session,
   config: Config,
   values: RawOptions,
+  domain: string | null,
 ): Promise<Service> {
   const unit = await readFile(UNIT_PATH, "utf8").catch(() => null);
   const current = unit ? unitFlags(unit) : null;
-  // An installed unit with no --port or --host has vibe-os's own defaults, not
-  // setup's.
-  const port = values.port
-    ? config.port
-    : current
-      ? (current.port ?? 80)
-      : SETUP_PORT;
-  const host = values.host
-    ? config.host
-    : current
-      ? (current.host ?? "0.0.0.0")
-      : "127.0.0.1";
-
-  // An existing unit is kept unless asked for something different, which is
-  // what makes a second run of setup safe on a box set up by hand.
-  const differs =
-    current !== null &&
-    ((values.port !== undefined && current.port !== port) ||
-      (values.host !== undefined && current.host !== host));
-  if (current && !differs) {
-    s.done(`service installed, on ${host}:${port}`);
+  const { port, host, keep } = servicePlan(
+    current,
+    {
+      port: values.port ? config.port : undefined,
+      host: values.host ? config.host : undefined,
+    },
+    domain,
+  );
+  if (current && keep) {
+    s.done(
+      `service installed, on ${host.includes(":") ? `[${host}]` : host}:${port}`,
+    );
     return {
       port,
       host,
@@ -792,12 +900,18 @@ async function serviceStep(
     };
   }
 
-  // Forwarded so the service sees the same paths setup was given.
+  // Forwarded so the service sees the same paths setup was given, and keeps
+  // the flags the installed unit had that setup does not set.
   const forwarded: string[] = ["--port", String(port), "--host", host];
+  if (domain) forwarded.push("--domain", domain);
+  if (domain && typeof values.email === "string")
+    forwarded.push("--email", values.email);
+  const given: string[] = [];
   for (const key of ["workspace", "state-dir", "theme-color"] as const) {
     const value = values[key];
-    if (typeof value === "string") forwarded.push(`--${key}`, value);
+    if (typeof value === "string") given.push(`--${key}`, value);
   }
+  forwarded.push(...keptFlags(current?.rest ?? [], given), ...given);
   const command = [...SELF, "install-service", ...forwarded];
 
   s.heading("service");
@@ -931,12 +1045,13 @@ async function hardeningStep(s: Session, config: Config): Promise<void> {
 }
 
 /**
- * Closes the box to everything but the tailnet.
+ * Closes the box to everything but the tailnet or, with a domain, to all but
+ * ssh, HTTP and HTTPS.
  *
  * The one step that can cost the operator the machine, so it is arranged to
  * fail open. A transient systemd timer that turns ufw off is armed before ufw
  * is turned on, and the only thing that cancels it is a file written from a new
- * session that arrived over the tailnet. Nothing typed into this terminal
+ * ssh session. Nothing typed into this terminal
  * counts: this session is already connected, and ufw lets established
  * connections live, so it cannot prove a new one would get in.
  */
@@ -945,8 +1060,9 @@ async function firewallStep(
   config: Config,
   tailnet: TailscaleState,
   manager: Manager | null,
+  domain: string | null,
 ): Promise<void> {
-  if (!tailnet.running) {
+  if (!domain && !tailnet.running) {
     s.warn(
       "firewall skipped: it allows only the tailnet, and Tailscale is not up",
     );
@@ -958,21 +1074,36 @@ async function firewallStep(
     ? await s.capture(["ufw", "status", "verbose"], true)
     : null;
   if (status) {
-    const fw = parseUfw(status);
     if (
-      fw.active &&
-      fw.defaultDeny &&
-      fw.tailnetAllowed &&
-      fw.directUdpAllowed
+      firewallCheck(
+        { tool: "ufw", unreadable: false, ...parseUfw(status) },
+        domain,
+      ).ok
     ) {
-      s.done("ufw allows the tailnet and denies the rest");
+      s.done(
+        domain
+          ? "ufw allows ssh, HTTP and HTTPS and denies the rest"
+          : "ufw allows the tailnet and denies the rest",
+      );
       return;
     }
   }
 
-  const rules = [
+  const tailnetRules = [
     ["ufw", "allow", "in", "on", "tailscale0"],
     ["ufw", "allow", "41641/udp"],
+  ];
+  const rules = [
+    // With a domain the tailnet stays allowed if it is up, as a second way in.
+    ...(!domain || tailnet.running ? tailnetRules : []),
+    ...(domain
+      ? [
+          // limit allows ssh, and refuses an address after 6 tries in 30s.
+          ["ufw", "limit", "22/tcp"],
+          ["ufw", "allow", "80/tcp"],
+          ["ufw", "allow", "443/tcp"],
+        ]
+      : []),
     ["ufw", "default", "deny", "incoming"],
     ["ufw", "default", "allow", "outgoing"],
   ];
@@ -994,11 +1125,13 @@ async function firewallStep(
     `ufw is turned back off after ${minutes} minutes unless a new ssh session`,
   );
   s.note(
-    "over the tailnet confirms it got in. Know where your provider's console is.",
+    `${domain ? "" : "over the tailnet "}confirms it got in. Know where your provider's console is.`,
   );
   if (
     !(await s.confirm(
-      "Close the box to everything but the tailnet?",
+      domain
+        ? "Close the box to everything but ssh, HTTP and HTTPS?"
+        : "Close the box to everything but the tailnet?",
       s.opts.firewall,
       [arm(ufw ?? "/usr/sbin/ufw"), ...rules, ["ufw", "--force", "enable"]],
     ))
@@ -1042,9 +1175,13 @@ async function firewallStep(
     return;
   }
 
-  const where = tailnet.dnsName ?? tailnet.ip ?? "<tailnet address>";
+  const where = domain ?? tailnet.dnsName ?? tailnet.ip ?? "<tailnet address>";
   console.log("");
-  console.log("  From a new terminal, over the tailnet:");
+  console.log(
+    domain
+      ? "  From a new terminal:"
+      : "  From a new terminal, over the tailnet:",
+  );
   console.log("");
   console.log(
     `    ${color.cyan(`ssh ${config.user}@${where} ${invocation()} confirm-firewall`)}`,
@@ -1066,9 +1203,15 @@ async function firewallStep(
 
   if (confirmed) {
     await cancel();
-    s.done("confirmed over the tailnet; ufw stays on");
+    s.done(
+      domain
+        ? "confirmed from a new session; ufw stays on"
+        : "confirmed over the tailnet; ufw stays on",
+    );
     s.next.push(
-      "Your provider's firewall is separate: leave 41641/udp open there for a direct Tailscale path",
+      domain
+        ? "Your provider's firewall is separate: leave 22, 80 and 443 open there"
+        : "Your provider's firewall is separate: leave 41641/udp open there for a direct Tailscale path",
     );
   } else {
     // The timer has fired by now, or is about to; make sure rather than trust it.
@@ -1104,6 +1247,7 @@ async function doctorStep(
   config: Config,
   port: number,
   host: string,
+  domain: string | null,
 ): Promise<void> {
   s.heading("doctor");
   // sudo resets PATH to secure_path, which has no ~/.local/bin, and doctor
@@ -1122,6 +1266,7 @@ async function doctorStep(
       String(port),
       "--host",
       host,
+      ...(domain ? ["--domain", domain] : []),
     ],
     true,
   );
@@ -1167,17 +1312,37 @@ export async function runSetup(
     await lingerStep(s, config);
     await sshdStep(s, config);
     await harnessStep(s);
-    const tailnet = await tailscaleStep(s);
-    const service = await serviceStep(s, config, values);
-    const served = await serveStep(s, tailnet, service.port);
-    await hardeningStep(s, config);
-    await firewallStep(s, config, tailnet, manager);
+    const domain = typeof values.domain === "string" ? values.domain : null;
+    let tailnet: TailscaleState;
+    let service: Service;
+    let served = false;
+    if (domain) {
+      // Public: vibe-os serves HTTPS itself. The firewall goes first, so port
+      // 80 is open when the service asks Let's Encrypt for a certificate.
+      tailnet = await tailnetIfUp(s);
+      await dnsStep(s, domain);
+      await releaseServeStep(s, tailnet);
+      await hardeningStep(s, config);
+      await firewallStep(s, config, tailnet, manager, domain);
+      service = await serviceStep(s, config, values, domain);
+      await dockerStep(s);
+    } else {
+      tailnet = await tailscaleStep(s);
+      service = await serviceStep(s, config, values, null);
+      served = await serveStep(s, tailnet, service.port);
+      await hardeningStep(s, config);
+      await firewallStep(s, config, tailnet, manager, null);
+    }
 
-    await doctorStep(s, config, service.port, service.host);
+    await doctorStep(s, config, service.port, service.host, domain);
 
     const query = service.token ? `/?token=${service.token}` : "/";
     console.log("");
-    if (service.installed && served && tailnet.dnsName) {
+    if (service.installed && domain) {
+      console.log(
+        `  ${color.bold("Open:")} ${color.cyan(`https://${domain}${query}`)}`,
+      );
+    } else if (service.installed && served && tailnet.dnsName) {
       console.log(
         `  ${color.bold("Open:")} ${color.cyan(`https://${tailnet.dnsName}${query}`)}`,
       );

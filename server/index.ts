@@ -6,14 +6,7 @@ import type { Server } from "bun";
 import { Acme } from "./acme.ts";
 import { createApi } from "./api.ts";
 import { interruptedWindows } from "./attach.ts";
-import {
-  createGate,
-  hostAllowed,
-  hostName,
-  isLoopback,
-  isSecureRequest,
-  originAllowed,
-} from "./auth.ts";
+import { createGate, hostName, isLoopback, isSecureRequest } from "./auth.ts";
 import {
   type BridgeData,
   bridgeConnections,
@@ -21,9 +14,10 @@ import {
 } from "./bridge.ts";
 import { type Config, savePersisted } from "./config.ts";
 import { openDb } from "./db.ts";
+import { frontDoor } from "./front-door.ts";
 import { discover, harnesses } from "./harness.ts";
 import { Hibernator } from "./hibernate.ts";
-import { json, withSecurityHeaders } from "./http.ts";
+import { withSecurityHeaders } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
 import { createMcpEndpoint, mcpRoute } from "./mcp-server.ts";
 import { createOps } from "./ops.ts";
@@ -105,11 +99,6 @@ function webManifest(themeColor: string) {
     ],
   };
 }
-
-const UNAUTHORISED_PAGE = `<!doctype html><meta charset="utf-8"><title>vibe-os</title>
-<body style="font:14px ui-monospace,monospace;background:#07090d;color:#c8cedb;padding:2rem">
-<h1 style="font-weight:600">vibe-os</h1>
-<p>This server requires a token. Open the URL printed in the server log.</p></body>`;
 
 /**
  * Addresses a browser can actually reach.
@@ -284,7 +273,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
     ops,
   });
   const mcp = createMcpEndpoint({ ops, db });
-  const serveMcp = mcpRoute(gate, mcp);
+  const serveMcp = mcpRoute(mcp);
   const bridge = createBridgeHandlers({
     host: config.sshHost,
     port: config.sshPort,
@@ -300,120 +289,88 @@ export async function startServer(config: Config): Promise<RunningServer> {
 
   let tlsReady = false;
 
-  const handle = async (
-    req: Request,
-    server: Server<BridgeData>,
-    secure: boolean,
-  ): Promise<Response | undefined> => {
-    const url = new URL(req.url);
+  interface Arrival {
+    secure: boolean;
+    server: Server<BridgeData>;
+  }
 
-    // ACME challenges must answer on plain HTTP, unauthenticated, before any
-    // redirect — Let's Encrypt will not follow a 302 to a cert we do not have.
-    if (!secure && acme) {
-      const challenge = acme.handleChallenge(url);
-      if (challenge) return challenge;
-    }
-
-    // With --domain, plain HTTP serves only this machine, which is how the
-    // client verbs on the box and a proxy on loopback reach it. Everyone else
-    // is sent to HTTPS, or turned away until there is a certificate, so the
-    // token never crosses the network in the clear.
-    if (
-      !secure &&
-      config.domain &&
-      !isLoopback(server.requestIP(req)?.address)
-    ) {
-      if (tlsReady)
-        return Response.redirect(
-          `https://${config.domain}${config.tlsPort === 443 ? "" : `:${config.tlsPort}`}${url.pathname}${url.search}`,
-          308,
-        );
-      return new Response(
-        `vibe-os is waiting for a TLS certificate for ${config.domain}, and answers only over HTTPS. The server log says why.\n`,
-        {
-          status: 503,
-          headers: {
-            "content-type": "text/plain; charset=utf-8",
-            "retry-after": "60",
+  const handle = frontDoor<Arrival>(
+    {
+      gate,
+      token: Boolean(config.token),
+      hosts,
+      unguarded(req, url, { secure, server }) {
+        if (secure) return null;
+        // ACME challenges must answer on plain HTTP, unauthenticated, before
+        // any redirect: Let's Encrypt will not follow a 302 to a cert we do not
+        // have.
+        const challenge = acme?.handleChallenge(url);
+        if (challenge) return challenge;
+        // With --domain, plain HTTP serves only this machine, which is how the
+        // client verbs on the box and a proxy on loopback reach it. Everyone
+        // else is sent to HTTPS, or turned away until there is a certificate,
+        // so the token never crosses the network in the clear.
+        if (!config.domain || isLoopback(server.requestIP(req)?.address))
+          return null;
+        if (tlsReady)
+          return Response.redirect(
+            `https://${config.domain}${config.tlsPort === 443 ? "" : `:${config.tlsPort}`}${url.pathname}${url.search}`,
+            308,
+          );
+        return new Response(
+          `vibe-os is waiting for a TLS certificate for ${config.domain}, and answers only over HTTPS. The server log says why.\n`,
+          {
+            status: 503,
+            headers: {
+              "content-type": "text/plain; charset=utf-8",
+              "retry-after": "60",
+            },
           },
-        },
-      );
-    }
+        );
+      },
+    },
+    // Everything below is behind the gate.
+    async (req, url, { server }) => {
+      if (url.pathname === "/mcp") return serveMcp(req);
 
-    if (!originAllowed(req)) {
-      log.warn(
-        `rejected ${req.method} ${url.pathname} from origin ${req.headers.get("origin")}`,
-      );
-      return new Response("forbidden: cross-origin request\n", {
-        status: 403,
+      if (url.pathname === "/websocket") {
+        if (bridge.atCapacity())
+          return new Response("too many connections", { status: 503 });
+
+        const data: BridgeData = {
+          socket: null,
+          peer: server.requestIP(req)?.address ?? "?",
+          closed: false,
+        };
+        if (server.upgrade(req, { data })) return undefined;
+        return new Response("websocket upgrade failed", { status: 400 });
+      }
+
+      // Generated rather than a file in public/, because the theme colour is
+      // configurable and the whole point of that is telling two installed
+      // instances apart.
+      if (url.pathname === "/manifest.webmanifest") {
+        return Response.json(webManifest(config.themeColor), {
+          headers: {
+            "content-type": "application/manifest+json",
+            // Cheap to fetch and it changes with a flag, so never cache it.
+            "cache-control": "no-store",
+          },
+        });
+      }
+
+      const api = await handleApi(req, url);
+      if (api) return api;
+
+      const asset = await serveStatic(req, url.pathname);
+      if (asset) return asset;
+
+      return new Response("not found\n", {
+        status: 404,
+        headers: { "content-type": "text/plain; charset=utf-8" },
       });
-    }
-    if (!config.token && !hostAllowed(req, hosts)) {
-      const name = hostName(req.headers.get("host") ?? "");
-      log.warn(
-        `rejected a request for host ${JSON.stringify(name)}; if that is this server, add --allowed-host ${name}`,
-      );
-      return new Response(
-        `forbidden: this server does not answer to ${name}\n` +
-          `If it should, restart it with --allowed-host ${name}, or with a token.\n`,
-        { status: 403 },
-      );
-    }
-
-    // Before the token parameter is consumed: see `mcpRoute`.
-    if (url.pathname === "/mcp") return serveMcp(req);
-
-    const redirect = gate.consumeTokenParam(req, url, secure);
-    if (redirect) return redirect;
-
-    const denied = gate.check(req);
-
-    if (url.pathname === "/websocket") {
-      if (denied) return new Response("unauthorized", { status: 401 });
-      if (bridge.atCapacity())
-        return new Response("too many connections", { status: 503 });
-
-      const data: BridgeData = {
-        socket: null,
-        peer: server.requestIP(req)?.address ?? "?",
-        closed: false,
-      };
-      if (server.upgrade(req, { data })) return undefined;
-      return new Response("websocket upgrade failed", { status: 400 });
-    }
-
-    if (denied) {
-      if (url.pathname.startsWith("/api/")) return json({ error: denied }, 401);
-      return new Response(UNAUTHORISED_PAGE, {
-        status: 401,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
-    }
-
-    // Generated rather than a file in public/, because the theme colour is
-    // configurable and the whole point of that is telling two installed
-    // instances apart.
-    if (url.pathname === "/manifest.webmanifest") {
-      return Response.json(webManifest(config.themeColor), {
-        headers: {
-          "content-type": "application/manifest+json",
-          // Cheap to fetch and it changes with a flag, so never cache it.
-          "cache-control": "no-store",
-        },
-      });
-    }
-
-    const api = await handleApi(req, url);
-    if (api) return api;
-
-    const asset = await serveStatic(req, url.pathname);
-    if (asset) return asset;
-
-    return new Response("not found\n", {
-      status: 404,
-      headers: { "content-type": "text/plain; charset=utf-8" },
-    });
-  };
+    },
+  );
 
   const makeServer = (
     port: number,
@@ -433,7 +390,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
       async fetch(req, server) {
         let res: Response | undefined;
         try {
-          res = await handle(req, server, secure);
+          res = await handle(req, { secure, server });
         } catch (err) {
           log.error(`request failed: ${describeError(err)}`);
           res = new Response("internal error\n", { status: 500 });
@@ -500,10 +457,24 @@ export async function startServer(config: Config): Promise<RunningServer> {
       tlsReady = true;
       // Certificates last 90 days and this process is meant to run for longer,
       // so expiry has to be re-checked while it runs, not only at boot.
-      stopRenewal = a.watch((renewed) => {
+      // Bun cannot change a running server's certificate, so the HTTPS
+      // server is replaced. Open connections drop, and the desktop reconnects.
+      // A failed bind is retried rather than leaving HTTPS down until a
+      // restart.
+      stopRenewal = a.watch(async (renewed) => {
         httpsServer?.stop(true);
-        httpsServer = makeServer(config.tlsPort, true, renewed);
-        log.ok(`TLS certificate renewed for ${domain}`);
+        for (let attempt = 1; ; attempt++) {
+          try {
+            httpsServer = makeServer(config.tlsPort, true, renewed);
+            log.ok(`TLS certificate renewed for ${domain}`);
+            return;
+          } catch (err) {
+            log.error(
+              `could not serve HTTPS on ${config.tlsPort} with the renewed certificate (attempt ${attempt}): ${describeError(err)}`,
+            );
+            await Bun.sleep(Math.min(60_000, 1_000 * 2 ** attempt));
+          }
+        }
       });
       return true;
     } catch (err) {

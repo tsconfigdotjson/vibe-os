@@ -74,7 +74,8 @@ the same flags the service uses to get a true answer.
 ## Setup
 
 ```bash
-vibe-os setup
+vibe-os setup                            # private, over Tailscale
+vibe-os setup --domain box.example.com   # public, on that name
 ```
 
 Each step checks first and skips itself when there is nothing to do, so running
@@ -86,6 +87,9 @@ it again on a configured box changes nothing. In order:
    `curl` and optionally `gh`, through apt, dnf, yum, pacman or zypper.
 3. **sshd**, enabled and started if nothing answers on port 22.
 4. **Harnesses.** Claude Code, then optionally Hermes and Cursor.
+
+Then, for a private box:
+
 5. **Tailscale**, installed and brought up (it prints a login URL).
 6. **The service**, on `127.0.0.1:7681` with a generated token kept in
    `~/.vibe-os/config.json`. An installed unit is left alone unless you pass a
@@ -94,34 +98,54 @@ it again on a configured box changes nothing. In order:
 8. **SSH hardening.** Writes `01-hardening.conf` to turn off password logins,
    runs `sshd -t` and reloads. Skipped if your user has no SSH key yet.
 9. **Firewall**, with ufw: allow the tailnet and `41641/udp`, deny the rest.
-10. **`doctor`**, run with sudo, then the URL with `?token=`.
+
+Or, with `--domain`:
+
+5. **DNS.** Warns if the name does not point at this machine.
+6. **`tailscale serve`**, turned off if it is on, since it holds port 443.
+   Tailscale itself stays up, as a second way in.
+7. **SSH hardening**, as above.
+8. **Firewall**, with ufw: `limit 22/tcp`, allow 80 and 443, and the tailnet
+   if Tailscale is up, deny the rest. This comes before the service, so port 80
+   is open when it asks Let's Encrypt for a certificate.
+9. **The service**, on `::` (every address, IPv4 and IPv6) with `--domain`.
+   Port 80 answers Let's Encrypt and redirects to HTTPS on 443.
+10. **Docker**, if installed: publish ports on `127.0.0.1` by default, since
+    Docker's rules go around ufw.
+
+Last, **`doctor`**, run with sudo, then the URL with `?token=`.
 
 The firewall step can lock you out, so before enabling ufw it arms a systemd
 timer that disables it again in five minutes. Setup then waits for you to
-confirm from a **new** session over the tailnet:
+confirm from a **new** SSH session, over the tailnet or, with `--domain`, to
+that name:
 
 ```bash
 ssh <user>@<machine>.<tailnet>.ts.net vibe-os confirm-firewall
+ssh <user>@box.example.com vibe-os confirm-firewall
 ```
 
 If that never arrives, ufw turns itself off. Your provider's firewall is
-separate; leave `41641/udp` open there.
+separate; leave `41641/udp` open there for Tailscale, or 22, 80 and 443 for a
+public box.
 
 | flag | |
 | --- | --- |
 | `-y`, `--yes` | take the default answer to every question |
+| `--domain <fqdn>` | serve publicly on this name instead of through Tailscale |
+| `--email <addr>` | with `--domain`, the contact address for Let's Encrypt |
 | `--firewall` | with `--yes`, do the firewall step too (it is skipped otherwise) |
 | `--hermes`, `--cursor` | install those harnesses too |
 | `--user <name>` | as root, the user to create |
-| `--port`, `--host` | where the service listens (default `7681`, `127.0.0.1`) |
+| `--port`, `--host` | where the service listens (default `7681` and `127.0.0.1`, or `80` and `::` with `--domain`) |
 
 With `--yes`, an agent runs the firewall confirmation from a second SSH
 connection while setup waits in the first.
 
 ## Behind Tailscale
 
-The recommended setup. You stop needing to bind port 80, and you stop needing
-Let's Encrypt.
+The private setup: only devices on your tailnet can reach the box. You stop
+needing to bind port 80, and you stop needing Let's Encrypt.
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -141,10 +165,10 @@ offer to install the app.
 
 Without Tailscale, vibe-os serves HTTPS itself. Point a DNS name at the box
 (many providers give each VPS one, such as OVH's `vps-xxxxxxxx.vps.ovh.ca`),
-then:
+then run `vibe-os setup --domain box.example.com`, or by hand:
 
 ```bash
-sudo vibe-os install-service --host 0.0.0.0 --domain box.example.com --token
+sudo vibe-os install-service --host :: --domain box.example.com --token
 ```
 
 Port 80 answers Let's Encrypt and redirects to HTTPS on 443. The token is the

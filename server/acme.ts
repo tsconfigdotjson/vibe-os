@@ -162,12 +162,14 @@ export class Acme {
    * Returns a stop function. The caller owns swapping the running HTTPS server
    * over; this only decides when there is something to swap to.
    */
-  watch(onRenewed: (material: TlsMaterial) => void): () => void {
+  watch(
+    onRenewed: (material: TlsMaterial) => void | Promise<void>,
+  ): () => void {
     const timer = setInterval(() => {
       void (async () => {
         try {
           if (await this.loadExisting()) return; // still good
-          onRenewed(await this.obtain());
+          await onRenewed(await this.obtain());
         } catch (err) {
           // A failed renewal must not take the process down: the current
           // certificate is still being served and there are 30 days of runway.

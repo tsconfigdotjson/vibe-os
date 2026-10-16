@@ -66,11 +66,16 @@ creates one):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh
-vibe-os setup
+vibe-os setup                            # private: reached over your tailnet
+vibe-os setup --domain box.example.com   # or public: HTTPS on a name pointing at the box
 ```
 
 `setup` runs the same checks as `doctor` and offers to fix each one, printing
-every command before it runs it. See [Setup](docs/deploying.md#setup) for what it does.
+every command before it runs it. Private puts it behind
+[Tailscale](docs/deploying.md#behind-tailscale), so only your tailnet can reach
+it. Public serves it to the internet with its own Let's Encrypt certificate and
+the token as the gate ([On a public address](docs/deploying.md#on-a-public-address)).
+See [Setup](docs/deploying.md#setup) for each step.
 
 For an agent with SSH access to the box, the prompt is one line:
 
