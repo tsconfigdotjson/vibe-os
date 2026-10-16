@@ -507,6 +507,7 @@ export class Hibernator {
       log.debug(`not hibernating ${session}: it changed under the lock`);
       return;
     }
+    this.screens.noteAsleep(session);
     log.info(
       `hibernated ${session} after ${idle}m idle` +
         (freed.bytes !== null ? `, freeing ${formatBytes(freed.bytes)}` : "") +

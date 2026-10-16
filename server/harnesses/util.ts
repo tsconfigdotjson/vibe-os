@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { HarnessReport, HarnessSpec } from "../../shared/harness.ts";
+import type { TranscriptMessage } from "../../shared/wire.ts";
 
 export const home = process.env.HOME ?? "";
 
@@ -178,4 +179,12 @@ export interface HarnessAdapter<D = unknown> {
   setup?: (where: { cwd: string; stateDir: string }) => string;
   /** Doctor checks beyond installed and logged in. */
   checks?: (report: HarnessReport, detail: D | undefined) => HarnessCheck[];
+  /**
+   * The last `last` messages of the conversation in a window, read from the
+   * harness's own transcript. Null when there is none to be found.
+   */
+  messages?: (
+    window: { sock: string; cwd: string },
+    last: number,
+  ) => Promise<TranscriptMessage[] | null>;
 }

@@ -19,8 +19,8 @@ import { readdir } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import { promisify } from "node:util";
-import { type IBufferLine, Terminal } from "@xterm/headless";
-import type { Activity } from "../shared/wire.ts";
+import { type IBuffer, type IBufferLine, Terminal } from "@xterm/headless";
+import type { Activity, Turn } from "../shared/wire.ts";
 import type { Config } from "./config.ts";
 import { sessionTty } from "./headless.ts";
 import { log } from "./log.ts";
@@ -127,12 +127,47 @@ async function ttySize(
 }
 
 /**
+ * Rows `from` to `to` of a buffer as plain text lines.
+ *
+ * A row the terminal wrapped is joined to the one it continues, and faint text
+ * on `cursorRow` is left out (see `bufferText`).
+ */
+function rowsText(
+  buf: IBuffer,
+  from: number,
+  to: number,
+  cursorRow: number,
+): string[] {
+  const lines: string[] = [];
+  for (let i = from; i < to; i++) {
+    const line = buf.getLine(i);
+    if (!line) continue;
+    // Untrimmed until joined, or a space at the wrap point would be lost.
+    const text =
+      i === cursorRow ? withoutFaint(line) : line.translateToString(true);
+    if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  const trimmed: string[] = [];
+  for (const line of lines.map((l) => l.trimEnd())) {
+    // One blank line says as much as ten. A full-screen harness pads the
+    // space between a short conversation and its input box with blank rows,
+    // and counted as lines they pushed the answer out of a short read.
+    if (line === "" && trimmed.at(-1) === "") continue;
+    trimmed.push(line);
+  }
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1] === "")
+    trimmed.pop();
+  return trimmed;
+}
+
+/**
  * The last `count` lines of a terminal, as plain text.
  *
  * A line the terminal wrapped is joined back to the one it continues, so a
  * long line reads as it was written rather than as the width it was drawn at.
  * Blank lines at the bottom, which are only the unused part of the screen, are
- * dropped.
+ * dropped, and a run of blank lines anywhere else reads as one.
  *
  * Faint text on the cursor's line is left out. That is where a harness draws a
  * placeholder or a suggested prompt, greyed out with SGR 2 (Claude's `Try
@@ -142,21 +177,42 @@ async function ttySize(
  */
 export function bufferText(term: Terminal, count: number): string {
   const buf = term.buffer.active;
-  const cursorRow = buf.baseY + buf.cursorY;
-  const lines: string[] = [];
-  for (let i = 0; i < buf.length; i++) {
-    const line = buf.getLine(i);
-    if (!line) continue;
-    // Untrimmed until joined, or a space at the wrap point would be lost.
-    const text =
-      i === cursorRow ? withoutFaint(line) : line.translateToString(true);
-    if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
-    else lines.push(text);
-  }
-  const trimmed = lines.map((l) => l.trimEnd());
-  while (trimmed.length > 0 && trimmed[trimmed.length - 1] === "")
-    trimmed.pop();
-  return trimmed.slice(-count).join("\n");
+  return rowsText(buf, 0, buf.length, buf.baseY + buf.cursorY)
+    .slice(-count)
+    .join("\n");
+}
+
+/** What `Screen.since` returns: the history added after a cursor, and the screen. */
+export interface Since {
+  /** Lines that scrolled off the screen after the cursor, oldest first. */
+  text: string;
+  /** The screen as it is now, which can still be redrawn. */
+  screen: string;
+  /** Pass this back as `after` next time. */
+  cursor: number;
+  /** Some of what came after the cursor is no longer held. */
+  truncated: boolean;
+}
+
+/**
+ * A screen's state changes, and how the turn after a send is going.
+ *
+ * `null` for a state is a session that stopped running.
+ */
+export type ScreenEvent =
+  | {
+      type: "state";
+      session: string;
+      from: Activity | null;
+      to: Activity | null;
+      at: number;
+    }
+  | { type: "turn"; session: string; turn: Turn; at: number }
+  | { type: "asleep" | "woke"; session: string; at: number };
+
+/** The xterm internals the cursor needs: the normal buffer's line list. */
+interface LineList {
+  onTrim: (fn: (n: number) => void) => { dispose(): void };
 }
 
 /** A line's text with every faint cell read as a blank. */
@@ -181,19 +237,140 @@ export class Screen {
   });
   /** When the program last drew anything, or null if not since we attached. */
   lastOutputAt: number | null = null;
+  /**
+   * The state last announced to `onState`. It follows `activity()`, except
+   * that it changes when the quiet timer fires rather than the moment the
+   * quiet begins.
+   */
+  state: Activity = "idle";
+  /** Called on the next output, once. How a send learns its turn began. */
+  onOutput: (() => void) | null = null;
   private tty: string | null = null;
   private sizeCheckedAt = 0;
   private sizing = false;
+  private quietTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The output cursor is `base + trimmed + baseY` of the normal buffer: rows
+   * dropped off the top of the scrollback, plus rows in it. `base` moves
+   * whenever xterm rebuilds the rows (a resize reflows them, a reset clears
+   * them) so that the cursor never goes backwards.
+   */
+  private base = 0;
+  private trimmed = 0;
+  private lines: LineList | null = null;
+  private trimWatch: { dispose(): void } | null = null;
+  /** The highest cursor handed out. */
+  private issued = 0;
 
   constructor(
     private readonly sock: string,
     private readonly socket: net.Socket,
-  ) {}
+    private readonly onState: (
+      from: Activity | null,
+      to: Activity | null,
+    ) => void = () => {},
+  ) {
+    this.watchTrims();
+  }
 
   feed(data: Buffer): void {
     this.lastOutputAt = Date.now();
     this.term.write(data);
+    this.setState("busy");
+    const hook = this.onOutput;
+    this.onOutput = null;
+    hook?.();
+    // Quiet is the absence of output, so it takes a timer to notice. Reset on
+    // every write; firing means nothing came for QUIET_MS.
+    if (this.quietTimer) clearTimeout(this.quietTimer);
+    this.quietTimer = setTimeout(this.quiet, QUIET_MS + 10);
     if (Date.now() - this.sizeCheckedAt > SIZE_CHECK_MS) void this.syncSize();
+  }
+
+  private readonly quiet = (): void => {
+    this.quietTimer = null;
+    const now = this.activity();
+    if (now === "busy" && this.lastOutputAt !== null) {
+      const left = QUIET_MS - (Date.now() - this.lastOutputAt);
+      this.quietTimer = setTimeout(this.quiet, Math.max(left, 0) + 10);
+      return;
+    }
+    this.setState(now);
+  };
+
+  private setState(to: Activity): void {
+    if (to === this.state) return;
+    const from = this.state;
+    this.state = to;
+    this.onState(from, to);
+  }
+
+  /**
+   * Follows the normal buffer's line list, which xterm replaces on a reset.
+   *
+   * Its trim event is the one count of rows dropped from the top that xterm
+   * keeps, and it is not in the public API, so this reaches for it. If a
+   * version of xterm moves it, the cursor still works, but counts from
+   * whatever the scrollback holds.
+   */
+  private watchTrims(): void {
+    const core = (
+      this.term as unknown as {
+        _core?: {
+          _bufferService?: { buffers?: { normal?: { lines?: LineList } } };
+        };
+      }
+    )._core;
+    const lines = core?._bufferService?.buffers?.normal?.lines ?? null;
+    if (lines === this.lines) return;
+    this.trimWatch?.dispose();
+    this.lines = lines;
+    this.trimmed = 0;
+    // The rows before a reset are gone. Count on from the last cursor handed
+    // out, which is as far as any caller can have got.
+    this.base = this.issued;
+    this.trimWatch =
+      lines?.onTrim((n) => {
+        this.trimmed += n;
+      }) ?? null;
+  }
+
+  /** How many rows have entered the scrollback since this screen began. */
+  cursor(): number {
+    this.watchTrims();
+    const cursor = this.base + this.trimmed + this.term.buffer.normal.baseY;
+    this.issued = Math.max(this.issued, cursor);
+    return cursor;
+  }
+
+  /**
+   * What has scrolled into the history since `after`, and the screen now.
+   *
+   * The history is fixed once written, so a caller who keeps the cursor sees
+   * each line once. The screen is not: a harness redraws its live region and
+   * input box in place, so it comes back whole every time.
+   */
+  since(after: number): Since {
+    const cursor = this.cursor();
+    const buf = this.term.buffer.normal;
+    const held = cursor - buf.baseY; // the cursor at the top of the history
+    // A cursor from the future belongs to an earlier screen, from before a
+    // restart or a reconnect: everything held is new to that caller.
+    const fresh = after > cursor;
+    const start = fresh ? 0 : Math.max(after - held, 0);
+    const active = this.term.buffer.active;
+    const screen = rowsText(
+      active,
+      active.baseY,
+      active.baseY + this.term.rows,
+      active.baseY + active.cursorY,
+    );
+    return {
+      text: rowsText(buf, start, buf.baseY, -1).join("\n"),
+      screen: screen.join("\n"),
+      cursor,
+      truncated: fresh || after < held,
+    };
   }
 
   activity(now = Date.now()): Activity {
@@ -249,7 +426,7 @@ export class Screen {
         size &&
         (size.rows !== this.term.rows || size.cols !== this.term.cols)
       )
-        this.term.resize(size.cols, size.rows);
+        this.resize(size.cols, size.rows);
       return size;
     } finally {
       this.sizing = false;
@@ -275,16 +452,42 @@ export class Screen {
       this.socket.write(packet(MSG_REDRAW, REDRAW_WINCH, size));
   }
 
+  /**
+   * Resizes the terminal, keeping the cursor where it was.
+   *
+   * xterm reflows the history to the new width, so rows wrap and unwrap and a
+   * row's index means something different afterwards. The cursor is held
+   * still across it rather than allowed to jump either way.
+   */
+  resize(cols: number, rows: number): void {
+    const before = this.cursor();
+    this.term.resize(cols, rows);
+    this.base += before - this.cursor();
+  }
+
   close(): void {
+    if (this.quietTimer) clearTimeout(this.quietTimer);
+    this.quietTimer = null;
+    this.trimWatch?.dispose();
     this.socket.destroy();
     this.term.dispose();
   }
+}
+
+/** Where a window is with its last send. Kept in memory only. */
+export interface TurnState {
+  lastSendAt: number;
+  turn: Turn;
 }
 
 /** Every running session's screen, keyed by session name. */
 export class Screens {
   private readonly open = new Map<string, Screen>();
   private readonly pending = new Map<string, Promise<Screen | undefined>>();
+  private readonly listeners = new Set<(e: ScreenEvent) => void>();
+  private readonly turns = new Map<string, TurnState>();
+  /** Sessions known to be hibernated, so their next screen is a wake. */
+  private readonly asleep = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly config: Config) {}
@@ -304,6 +507,81 @@ export class Screens {
 
   get(session: string): Screen | undefined {
     return this.open.get(session);
+  }
+
+  /** Calls `fn` with every event until the returned function is called. */
+  subscribe(fn: (e: ScreenEvent) => void): () => void {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
+  }
+
+  /** How many subscribers there are, for tests that check none leak. */
+  get subscribers(): number {
+    return this.listeners.size;
+  }
+
+  private emit(e: ScreenEvent): void {
+    for (const fn of [...this.listeners]) {
+      try {
+        fn(e);
+      } catch (err) {
+        log.warn(`an event listener failed: ${String(err)}`);
+      }
+    }
+  }
+
+  /** The window's last send and how its turn is going, if it had one. */
+  turnOf(session: string): TurnState | undefined {
+    return this.turns.get(session);
+  }
+
+  /**
+   * Records a send that starts a turn: text that was submitted, or keys.
+   *
+   * `at` is when it went in. Output since then means the window is already
+   * answering, which happens when it draws before this is called.
+   */
+  noteSend(session: string, at: number): void {
+    const screen = this.open.get(session);
+    this.turns.set(session, { lastSendAt: at, turn: "pending" });
+    if (screen && screen.lastOutputAt !== null && screen.lastOutputAt >= at) {
+      this.setTurn(session, "working");
+      if (screen.state !== "busy") this.setTurn(session, "done");
+      return;
+    }
+    this.emit({ type: "turn", session, turn: "pending", at: Date.now() });
+    if (screen) screen.onOutput = () => this.setTurn(session, "working");
+  }
+
+  private setTurn(session: string, turn: Turn): void {
+    const t = this.turns.get(session);
+    if (!t || t.turn === turn) return;
+    t.turn = turn;
+    this.emit({ type: "turn", session, turn, at: Date.now() });
+  }
+
+  /** Drops what is remembered about a session whose window was closed. */
+  forget(session: string): void {
+    this.turns.delete(session);
+    this.asleep.delete(session);
+  }
+
+  /** Records a hibernation, which `Hibernator` does. */
+  noteAsleep(session: string): void {
+    this.asleep.add(session);
+    this.emit({ type: "asleep", session, at: Date.now() });
+  }
+
+  private changed(
+    session: string,
+    from: Activity | null,
+    to: Activity | null,
+  ): void {
+    this.emit({ type: "state", session, from, to, at: Date.now() });
+    if (to !== "busy" && this.turns.get(session)?.turn === "working")
+      this.setTurn(session, "done");
   }
 
   /**
@@ -350,13 +628,23 @@ export class Screens {
       socket.once("error", () => resolve(undefined));
       socket.once("connect", () => {
         socket.write(packet(MSG_ATTACH));
-        const screen = new Screen(sock, socket);
+        const screen = new Screen(sock, socket, (from, to) =>
+          this.changed(session, from, to),
+        );
         this.open.set(session, screen);
+        if (this.asleep.delete(session))
+          this.emit({ type: "woke", session, at: Date.now() });
+        this.changed(session, null, screen.state);
+        // A send still waiting for its first output carries on in this screen.
+        if (this.turns.get(session)?.turn === "pending")
+          screen.onOutput = () => this.setTurn(session, "working");
         socket.on("data", (data: Buffer) => screen.feed(data));
         socket.on("error", () => {});
         socket.on("close", () => {
-          if (this.open.get(session) === screen) this.open.delete(session);
           screen.close();
+          if (this.open.get(session) !== screen) return;
+          this.open.delete(session);
+          this.changed(session, screen.state, null);
         });
         log.debug(`watching ${session}`);
         if (fresh) void screen.syncSize();
@@ -374,9 +662,15 @@ export class Screens {
     } catch {
       return;
     }
+    // Hibernated before this server started, or while it was not looking.
+    const socks = new Set(names.filter((n) => n.endsWith(".sock")));
+    for (const n of names) {
+      const sock = n.slice(0, -".resume".length);
+      if (n.endsWith(".sock.resume") && !socks.has(sock))
+        this.asleep.add(sock.slice(0, -".sock".length));
+    }
     await Promise.all(
-      names
-        .filter((n) => n.endsWith(".sock"))
+      [...socks]
         .map((n) => n.slice(0, -".sock".length))
         .filter((s) => !this.open.has(s))
         .map((s) => this.watch(s)),

@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import type net from "node:net";
 import os from "node:os";
 import { Terminal } from "@xterm/headless";
 import { killSession } from "../server/attach.ts";
@@ -13,9 +14,11 @@ import {
   packet,
   parseSize,
   QUIET_MS,
+  Screen,
   Screens,
 } from "../server/screens.ts";
 import { windowCommand } from "../server/session.ts";
+import type { Activity } from "../shared/wire.ts";
 
 const write = (term: Terminal, data: string) =>
   new Promise<void>((resolve) => term.write(data, resolve));
@@ -82,6 +85,16 @@ describe("bufferText", () => {
     term.dispose();
   });
 
+  test("a run of blank lines reads as one", async () => {
+    const term = new Terminal({ rows: 12, cols: 20, allowProposedApi: true });
+    await write(term, "answer\r\n\r\n\r\n\r\n\r\n\r\n❯\r\nstatus");
+    expect(bufferText(term, 3)).toBe(
+      "answer\n\n❯\nstatus".split("\n").slice(-3).join("\n"),
+    );
+    expect(bufferText(term, 10)).toBe("answer\n\n❯\nstatus");
+    term.dispose();
+  });
+
   test("joins a line the terminal wrapped", async () => {
     const term = new Terminal({ rows: 5, cols: 10, allowProposedApi: true });
     await write(term, "abcdefghijklmno\r\nfive five next");
@@ -112,6 +125,149 @@ describe("bufferText", () => {
     await write(term, `${suggestion}\r\n$ `);
     expect(bufferText(term, 10)).toBe('❯ Try "fix lint errors"\n$');
     term.dispose();
+  });
+});
+
+/** A screen with no session behind it, fed by hand. */
+function detached(
+  onState?: (from: Activity | null, to: Activity | null) => void,
+) {
+  const socket = { destroy() {}, write() {}, destroyed: false };
+  const screen = new Screen(
+    "/nonexistent.sock",
+    socket as unknown as net.Socket,
+    onState,
+  );
+  // No pty to ask the size of.
+  (screen as unknown as { sizeCheckedAt: number }).sizeCheckedAt =
+    Number.MAX_SAFE_INTEGER;
+  return screen;
+}
+
+/** Feeds a screen and waits until xterm has parsed it. */
+const feed = (screen: Screen, data: string) => {
+  screen.feed(Buffer.from(data));
+  return write(screen.term, "");
+};
+
+describe("state events", () => {
+  test("output is busy at once, and quiet becomes idle after QUIET_MS", async () => {
+    const seen: [Activity | null, Activity | null][] = [];
+    const screen = detached((from, to) => seen.push([from, to]));
+    await feed(screen, "working...\r\n");
+    expect(seen).toEqual([["idle", "busy"]]);
+    await feed(screen, "more\r\n");
+    expect(seen).toHaveLength(1);
+    await Bun.sleep(QUIET_MS + 200);
+    expect(seen).toEqual([
+      ["idle", "busy"],
+      ["busy", "idle"],
+    ]);
+    screen.close();
+  });
+
+  test("quiet on a question is a question", async () => {
+    const seen: (Activity | null)[] = [];
+    const screen = detached((_, to) => seen.push(to));
+    await feed(screen, "Overwrite it? (y/n) ");
+    await Bun.sleep(QUIET_MS + 200);
+    expect(seen).toEqual(["busy", "question"]);
+    expect(screen.state).toBe("question");
+    screen.close();
+  });
+
+  test("closing stops the quiet timer", async () => {
+    const seen: (Activity | null)[] = [];
+    const screen = detached((_, to) => seen.push(to));
+    await feed(screen, "x");
+    screen.close();
+    await Bun.sleep(QUIET_MS + 200);
+    expect(seen).toEqual(["busy"]);
+  });
+
+  test("the next output after a send is announced once", async () => {
+    const screen = detached();
+    let calls = 0;
+    screen.onOutput = () => calls++;
+    await feed(screen, "a");
+    await feed(screen, "b");
+    expect(calls).toBe(1);
+    screen.close();
+  });
+});
+
+describe("turns", () => {
+  test("a closed window's turn is forgotten, for the next one at its index", () => {
+    const screens = new Screens({ stateDir: "/nonexistent" } as Config);
+    screens.noteSend("vibe-w-1", Date.now());
+    expect(screens.turnOf("vibe-w-1")?.turn).toBe("pending");
+    screens.forget("vibe-w-1");
+    expect(screens.turnOf("vibe-w-1")).toBeUndefined();
+  });
+});
+
+describe("output cursor", () => {
+  const numbered = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) => `line ${from + i}`).join("\r\n");
+
+  test("only what scrolled into the history after the cursor", async () => {
+    const screen = detached();
+    await feed(screen, numbered(0, 100));
+    const first = screen.since(0);
+    expect(first.truncated).toBe(false);
+    expect(first.text.split("\n")[0]).toBe("line 0");
+    await feed(screen, `\r\n${numbered(100, 5)}`);
+    const next = screen.since(first.cursor);
+    expect(next.cursor).toBe(first.cursor + 5);
+    // Five rows scrolled off the top of the screen: the five oldest it showed.
+    expect(next.text.split("\n")).toHaveLength(5);
+    expect(next.screen.split("\n").at(-1)).toBe("line 104");
+    expect(screen.since(next.cursor).text).toBe("");
+    screen.close();
+  });
+
+  test("stays monotonic as the history is trimmed past 1000 lines", async () => {
+    const screen = detached();
+    let last = screen.cursor();
+    for (let i = 0; i < 6; i++) {
+      await feed(screen, `${numbered(i * 500, 500)}\r\n`);
+      const now = screen.cursor();
+      expect(now).toBeGreaterThan(last);
+      last = now;
+    }
+    expect(last).toBeGreaterThan(2_000);
+    screen.close();
+  });
+
+  test("a cursor older than the history held is truncated", async () => {
+    const screen = detached();
+    await feed(screen, numbered(0, 50));
+    const old = screen.since(0).cursor;
+    await feed(screen, `\r\n${numbered(50, 2_000)}`);
+    const since = screen.since(old);
+    expect(since.truncated).toBe(true);
+    expect(since.text.split("\n")).toHaveLength(1_000);
+    screen.close();
+  });
+
+  test("a cursor from before a restart reads everything as new", async () => {
+    const screen = detached();
+    await feed(screen, numbered(0, 80));
+    const since = screen.since(1_000_000);
+    expect(since.truncated).toBe(true);
+    expect(since.text.split("\n")[0]).toBe("line 0");
+    screen.close();
+  });
+
+  test("a resize does not move the cursor", async () => {
+    const screen = detached();
+    await feed(screen, numbered(0, 300));
+    const before = screen.cursor();
+    screen.resize(20, 10);
+    expect(screen.cursor()).toBe(before);
+    screen.resize(200, 50);
+    expect(screen.cursor()).toBe(before);
+    screen.close();
   });
 });
 

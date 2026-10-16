@@ -38,6 +38,7 @@ import { type Check, homeFor, onPath, runDoctor } from "./doctor.ts";
 import { loadHarnesses } from "./harness.ts";
 import { startServer } from "./index.ts";
 import { color, describeError, log } from "./log.ts";
+import { runMcpBridge } from "./mcp-stdio.ts";
 import { reapLeaks } from "./reaper.ts";
 import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
 import { confirmFirewall, runSetup } from "./setup.ts";
@@ -67,10 +68,16 @@ const HELP = `
                                  list workspaces
     vibe-os open <workspace> [--profile <name>] [--prompt <text>]
                  [--blank label=value] [--submit] [--force] [--label <text>]
+                 [--reuse]
                                  open a window and start it
-    vibe-os output <window> [--lines <n>]
+    vibe-os output <window> [--lines <n>] [--follow]
                                  print what a window shows
+    vibe-os wait <window...> [--until <state>] [--timeout <s>] [--turn]
+                                 wait for a window to settle
+    vibe-os events [window...] [--label <text>]
+                                 print window events as JSON lines
     vibe-os close <window>       close a window and end its session
+    vibe-os mcp                  serve the MCP tools over stdio
 
   ${color.bold("Options")}
     --port <n>          HTTP port (default 80)
@@ -114,7 +121,7 @@ const HELP = `
     -h, --help          show this
     -v, --version       print the version
 
-  ${color.bold("ls, workspace, open, output, close")}
+  ${color.bold("ls, workspace, open, output, wait, events, close, mcp")}
     --url <url>         the server to talk to (default VIBE_OS_URL, or on this
                         box the address start is listening on)
     --token <value>     its token (default VIBE_OS_TOKEN, or on this box the
@@ -127,7 +134,14 @@ const HELP = `
     --submit            press Enter after pasting
     --force             open even when the box is short of memory
     --label <text>      tag the window, to find it again in ls --json
+    --reuse             with --label: use the window already open with that
+                        label instead of opening another
     --lines <n>         how many lines output prints (default 50)
+    --follow            keep printing output as it comes
+    --until <state>     what wait waits for: settled (default: not busy),
+                        idle, question, or change
+    --timeout <s>       how long wait waits (default 60). Exits 2 if it ran out
+    --turn              wait for the answer to the last send, not just quiet
 
   ${color.bold("install-browser")}
     --geometry <WxH>    virtual screen size (default 1600x900)
@@ -674,6 +688,9 @@ export async function main(argv: string[]): Promise<number> {
 
   const { values, positionals } = parsed;
   const command = positionals[0] ?? "start";
+  // The MCP bridge speaks JSON-RPC on stdout, so a stray log line there would
+  // break the client reading it. Everything else this prints goes to stderr.
+  if (command === "mcp") console.log = console.error;
 
   if (values.help) {
     console.log(HELP);
@@ -746,7 +763,11 @@ export async function main(argv: string[]): Promise<number> {
     case "open":
     case "output":
     case "close":
+    case "wait":
+    case "events":
       return runClient(command, positionals.slice(1), values, config);
+    case "mcp":
+      return runMcpBridge(values, config);
     case "help":
       console.log(HELP);
       return 0;

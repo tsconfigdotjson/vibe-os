@@ -18,6 +18,8 @@ import { discover, harnesses } from "./harness.ts";
 import { Hibernator } from "./hibernate.ts";
 import { json } from "./http.ts";
 import { color, describeError, log } from "./log.ts";
+import { createMcpEndpoint, mcpRoute } from "./mcp-server.ts";
+import { createOps } from "./ops.ts";
 import { ensureWasm, ensureWebRoot } from "./preflight.ts";
 import { scanProjects } from "./projects.ts";
 import { Screens } from "./screens.ts";
@@ -262,6 +264,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
   if (config.sessions) screens.start();
   const hibernator = new Hibernator(db, config, screens);
   hibernator.start();
+  const ops = createOps({ config, ca, hostKey, db, screens });
   const handleApi = createApi({
     config,
     ca,
@@ -269,7 +272,10 @@ export async function startServer(config: Config): Promise<RunningServer> {
     wallpapers,
     db,
     screens,
+    ops,
   });
+  const mcp = createMcpEndpoint({ ops, db });
+  const serveMcp = mcpRoute(gate, mcp);
   const bridge = createBridgeHandlers({
     host: config.sshHost,
     port: config.sshPort,
@@ -325,6 +331,9 @@ export async function startServer(config: Config): Promise<RunningServer> {
         { status: 403 },
       );
     }
+
+    // Before the token parameter is consumed: see `mcpRoute`.
+    if (url.pathname === "/mcp") return serveMcp(req);
 
     const redirect = gate.consumeTokenParam(req, url, secure);
     if (redirect) return redirect;
@@ -496,6 +505,7 @@ export async function startServer(config: Config): Promise<RunningServer> {
     port,
     close() {
       stopRenewal?.();
+      void mcp.close();
       screens.stop();
       hibernator.stop();
       httpServer.stop(true);

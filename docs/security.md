@@ -19,8 +19,8 @@ vibe-os --token hunter2  # or pick your own
 vibe-os --no-token       # no gate, with a warning at startup
 ```
 
-It gates the app, the API, the certificate signer, the wallpaper upload and the
-WebSocket bridge.
+It gates the app, the API, the MCP server, the certificate signer, the
+wallpaper upload and the WebSocket bridge.
 
 Two checks run in front of it:
 
@@ -36,7 +36,8 @@ Two checks run in front of it:
 
 Open the URL with `?token=…` once and the server sets an `HttpOnly` cookie, then
 redirects without the token so it does not linger in history. Scripts can send
-`Authorization: Bearer <token>` (see the [API reference](api.md)).
+`Authorization: Bearer <token>` (see the [API reference](api.md)). The MCP
+server at `/mcp` takes only the header or the cookie, never `?token=`.
 Comparison is constant-time.
 
 The cookie value is the token rather than a derived session id, so there is no

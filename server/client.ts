@@ -1,5 +1,5 @@
 // The CLI verbs that drive a running server: `ls`, `workspace`, `open`,
-// `output`, `close`.
+// `output`, `wait`, `events`, `close`.
 //
 // Every one of them goes through the HTTP API rather than the database, so the
 // same command works on the box and from anywhere else with `--url` and
@@ -9,11 +9,13 @@ import { readFile } from "node:fs/promises";
 import type {
   Profile,
   SendResult,
+  WaitResult,
   WindowSummary,
   WorkspaceSummary,
 } from "../shared/wire.ts";
 import { loadPersisted, type RawOptions } from "./config.ts";
 import { color, describeError, log } from "./log.ts";
+import { MAX_WAIT_S, UNTIL } from "./ops.ts";
 
 export interface Remote {
   url: string;
@@ -69,14 +71,17 @@ export class ApiError extends Error {
   }
 }
 
+/** The headers every call carries: the token, if there is one. */
+const authHeaders = (remote: Remote): Record<string, string> =>
+  remote.token ? { authorization: `Bearer ${remote.token}` } : {};
+
 export async function request<T>(
   remote: Remote,
   method: string,
   route: string,
   body?: unknown,
 ): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (remote.token) headers.authorization = `Bearer ${remote.token}`;
+  const headers = authHeaders(remote);
   if (body !== undefined) headers["content-type"] = "application/json";
 
   let res: Response;
@@ -86,7 +91,9 @@ export async function request<T>(
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: "manual",
-    });
+      // A wait holds the request open for up to four minutes on purpose.
+      timeout: false,
+    } as RequestInit);
   } catch (err) {
     throw new Error(
       `could not reach vibe-os at ${remote.url}: ${describeError(err)}`,
@@ -326,7 +333,10 @@ async function open(
   // One call: the server creates the window, starts it, waits for it to be
   // ready and pastes, and takes the window back out if it cannot start.
   const send = text !== undefined || hasBlanks;
-  type Opened = Partial<SendResult> & { window: WindowSummary };
+  type Opened = Partial<SendResult> & {
+    window: WindowSummary;
+    reused?: boolean;
+  };
   let result: Opened;
   try {
     result = await request<Opened>(
@@ -337,6 +347,7 @@ async function open(
         profileId,
         force: values.force === true,
         label: values.label,
+        reuse: values.reuse === true ? true : undefined,
         start: true,
         prompt: text,
         blanks: hasBlanks ? blanks : undefined,
@@ -354,10 +365,12 @@ async function open(
     console.log(window.ref);
     console.log(
       color.dim(
-        `  ${window.role ?? "terminal"} in ${window.project}/${window.workspace}${send && result.delivered ? (values.submit ? ", prompt submitted" : ", prompt pasted") : ""}`,
+        `  ${window.role ?? "terminal"} in ${window.project}/${window.workspace}${result.reused ? ", already open" : ""}${send && result.delivered ? (values.submit ? ", prompt submitted" : ", prompt pasted") : ""}`,
       ),
     );
   });
+  // A reused window that was running already had its prompt.
+  if (result.reused && result.delivered === undefined) return 0;
   if (send && !result.delivered) {
     log.error(
       `${window.ref} is open, but the prompt was not sent: ${result.reason ?? result.state}.` +
@@ -374,13 +387,14 @@ async function output(
   name: string | undefined,
 ): Promise<number> {
   if (!name) {
-    log.error("usage: vibe-os output <window> [--lines <n>]");
+    log.error("usage: vibe-os output <window> [--lines <n>] [--follow]");
     return 1;
   }
   const win = findWindow(
     await request<WindowSummary[]>(remote, "GET", "/api/windows"),
     name,
   );
+  if (values.follow) return follow(remote, values, win);
   const lines =
     values.lines === undefined
       ? ""
@@ -391,6 +405,204 @@ async function output(
     `/api/windows/${encodeURIComponent(win.id)}/output${lines}`,
   );
   print(values, out, () => console.log(out.text));
+  return 0;
+}
+
+/** How often `output --follow` looks for new lines. */
+const FOLLOW_MS = 1_000;
+
+interface Output {
+  text: string;
+  state: WindowSummary["state"];
+  cursor: number;
+  screen?: string;
+}
+
+/**
+ * Prints a window's output and then each line as it scrolls into the history,
+ * until the window stops or this is interrupted.
+ *
+ * The screen itself is redrawn in place, so it is printed when the window goes
+ * quiet, and only if it changed: that is the answer an agent left at its
+ * prompt. Rows already printed that way are not printed again when they
+ * scroll into the history.
+ */
+async function follow(
+  remote: Remote,
+  values: RawOptions,
+  win: WindowSummary,
+): Promise<number> {
+  const route = `/api/windows/${encodeURIComponent(win.id)}/output`;
+  const lines = String(values.lines ?? 50);
+  let shown: string[] = [];
+  let echo: string[] = [];
+  const printScreen = (screen: string) => {
+    shown = screen === "" ? [] : screen.split("\n");
+    echo = [...shown];
+    if (screen) console.log(screen);
+  };
+  const printHistory = (text: string) => {
+    if (text === "") return;
+    for (const line of text.split("\n")) {
+      if (echo.length > 0 && echo[0] === line) {
+        echo.shift();
+        continue;
+      }
+      echo = [];
+      console.log(line);
+    }
+  };
+
+  const first = await request<Output>(
+    remote,
+    "GET",
+    `${route}?after=0&lines=${encodeURIComponent(lines)}`,
+  );
+  if (values.json) console.log(JSON.stringify(first));
+  else {
+    printHistory(first.text);
+    printScreen(first.screen ?? "");
+  }
+  let cursor = first.cursor;
+  let state = first.state;
+  for (;;) {
+    await Bun.sleep(FOLLOW_MS);
+    let out: Output;
+    try {
+      out = await request<Output>(remote, "GET", `${route}?after=${cursor}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        log.info(`${win.ref} is not running`);
+        return 0;
+      }
+      throw err;
+    }
+    if (values.json) {
+      if (out.text || out.state !== state) console.log(JSON.stringify(out));
+    } else {
+      printHistory(out.text);
+      const screen = out.screen ?? "";
+      if (
+        out.state !== "busy" &&
+        state === "busy" &&
+        screen !== shown.join("\n")
+      ) {
+        console.log(color.dim(`── ${win.ref} is ${out.state} ──`));
+        printScreen(screen);
+      }
+    }
+    cursor = out.cursor;
+    state = out.state;
+    if (state === "asleep") return 0;
+  }
+}
+
+/**
+ * Waits for windows to settle. Exits 0 when one did, 2 when time ran out, and
+ * 1 when a window is not running (or anything else went wrong).
+ */
+async function wait(
+  remote: Remote,
+  values: RawOptions,
+  names: string[],
+): Promise<number> {
+  if (names.length === 0) {
+    log.error(
+      "usage: vibe-os wait <window...> [--until settled|idle|question|change] [--timeout <s>] [--turn]",
+    );
+    return 1;
+  }
+  const until = values.until === undefined ? "settled" : String(values.until);
+  if (!(UNTIL as readonly string[]).includes(until))
+    throw new Error(`--until must be one of ${UNTIL.join(", ")}`);
+  const timeout = values.timeout === undefined ? 60 : Number(values.timeout);
+  if (!Number.isInteger(timeout) || timeout < 1)
+    throw new Error("--timeout must be a whole number of seconds");
+
+  const all = await request<WindowSummary[]>(remote, "GET", "/api/windows");
+  const refs = names.map((n) => findWindow(all, n).ref);
+  const query = new URLSearchParams({ refs: refs.join(","), until });
+  if (values.turn) query.set("turn", "1");
+  if (values.lines !== undefined) query.set("lines", String(values.lines));
+
+  // A wait longer than one request may be is several in a row.
+  let left = timeout;
+  let result: WaitResult;
+  for (;;) {
+    const chunk = Math.min(left, MAX_WAIT_S);
+    query.set("timeout", String(chunk));
+    result = await request<WaitResult>(
+      remote,
+      "GET",
+      `/api/windows/wait?${query}`,
+    );
+    left -= chunk;
+    const stopped = result.state === null || result.state === "asleep";
+    if (result.reached || stopped || left <= 0) break;
+  }
+
+  print(values, result, () => {
+    const secs = Math.round(result.waitedMs / 1000);
+    console.log(
+      result.reached
+        ? `${result.ref} ${result.state}`
+        : result.state === null
+          ? `${result.ref} is not running`
+          : `timed out after ${timeout}s: ${result.ref} is ${result.state}`,
+    );
+    if (result.reached) console.log(color.dim(`  after ${secs}s`));
+    if (result.text) console.log(result.text);
+  });
+  if (result.reached) return 0;
+  return result.state === null || result.state === "asleep" ? 1 : 2;
+}
+
+/**
+ * Prints window events as JSON lines until interrupted. Window names given
+ * narrow it to those windows, and `--label` to windows with that label.
+ */
+async function events(
+  remote: Remote,
+  values: RawOptions,
+  names: string[],
+): Promise<number> {
+  const query = new URLSearchParams();
+  if (names.length > 0) {
+    const all = await request<WindowSummary[]>(remote, "GET", "/api/windows");
+    query.set("refs", names.map((n) => findWindow(all, n).ref).join(","));
+  }
+  if (values.label !== undefined) query.set("label", String(values.label));
+  let res: Response;
+  try {
+    res = await fetch(`${remote.url}/api/events?${query}`, {
+      headers: { ...authHeaders(remote), accept: "text/event-stream" },
+      redirect: "manual",
+      timeout: false,
+    } as RequestInit);
+  } catch (err) {
+    throw new Error(
+      `could not reach vibe-os at ${remote.url}: ${describeError(err)}`,
+    );
+  }
+  if (res.status === 401)
+    throw new Error(
+      `${remote.url} wants a token: pass --token or set VIBE_OS_TOKEN`,
+    );
+  if (!res.ok || !res.body)
+    throw new Error(`GET /api/events answered ${res.status}`);
+  const decoder = new TextDecoder();
+  let pending = "";
+  for await (const chunk of res.body) {
+    pending += decoder.decode(chunk, { stream: true });
+    let end = pending.indexOf("\n");
+    while (end !== -1) {
+      const line = pending.slice(0, end);
+      pending = pending.slice(end + 1);
+      if (line.startsWith("data: ")) console.log(line.slice("data: ".length));
+      end = pending.indexOf("\n");
+    }
+  }
+  log.info("the server closed the event stream");
   return 0;
 }
 
@@ -413,7 +625,7 @@ async function close(
 
 /** Runs one client verb. Errors are printed here, as one line. */
 export async function runClient(
-  command: "ls" | "workspace" | "open" | "output" | "close",
+  command: "ls" | "workspace" | "open" | "output" | "close" | "wait" | "events",
   args: string[],
   values: RawOptions,
   local: { port: number; stateDir: string },
@@ -431,6 +643,10 @@ export async function runClient(
         return await output(remote, values, args[0]);
       case "close":
         return await close(remote, args[0]);
+      case "wait":
+        return await wait(remote, values, args);
+      case "events":
+        return await events(remote, values, args);
     }
   } catch (err) {
     log.error(describeError(err));

@@ -138,6 +138,11 @@ export const OPTION_SPEC = {
   force: { type: "boolean" as const },
   label: { type: "string" as const },
   lines: { type: "string" as const },
+  reuse: { type: "boolean" as const },
+  follow: { type: "boolean" as const },
+  until: { type: "string" as const },
+  timeout: { type: "string" as const },
+  turn: { type: "boolean" as const },
   help: { type: "boolean" as const, short: "h" },
   version: { type: "boolean" as const, short: "v" },
 };

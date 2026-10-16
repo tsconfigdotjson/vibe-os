@@ -251,4 +251,8 @@ export const claude: HarnessAdapter = {
       },
     };
   },
+  // Loaded when first asked for: the reader needs hibernate.ts, which imports
+  // the profile table, which imports this file.
+  messages: async (window, last) =>
+    (await import("./claude-transcript.ts")).claudeMessages(window, last),
 };
