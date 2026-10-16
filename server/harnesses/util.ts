@@ -187,4 +187,9 @@ export interface HarnessAdapter<D = unknown> {
     window: { sock: string; cwd: string },
     last: number,
   ) => Promise<TranscriptMessage[] | null>;
+  /**
+   * Whether the agent in a window has a command running in the background,
+   * which it will come back to when the command finishes.
+   */
+  background?: (window: { sock: string; cwd: string }) => Promise<boolean>;
 }

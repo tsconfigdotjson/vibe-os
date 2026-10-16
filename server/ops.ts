@@ -102,6 +102,8 @@ const FIRST_PAINT_WAIT_MS = 1_000;
  * minutes an MCP client gives a call that sends nothing.
  */
 export const MAX_WAIT_S = 240;
+/** How often a wait on background commands asks whether they are done. */
+const BACKGROUND_POLL_MS = 3_000;
 
 export const NO_SESSIONS =
   "this server runs plain login shells (--no-sessions)";
@@ -119,6 +121,11 @@ export interface WaitOptions {
   timeoutMs: number;
   /** With `settled`, also wait for the turn after the last send to be done. */
   turn: boolean;
+  /**
+   * With `settled`, also wait for background commands the agent started to
+   * finish. A server left running in the background never does.
+   */
+  background?: boolean;
   /** Lines of output to include, or 0 for none. */
   lines: number;
   signal?: AbortSignal;
@@ -585,6 +592,19 @@ export function createOps(deps: OpsDeps) {
   }
 
   /**
+   * Whether the agent in a window has a command running in the background,
+   * by its harness's own account. False for a harness that cannot say.
+   */
+  async function hasBackground(t: AttachTarget): Promise<boolean> {
+    const profile = t.profileId ? getProfile(db, t.profileId) : undefined;
+    const probe = profile ? harness(profile.harness)?.background : undefined;
+    if (!probe) return false;
+    return probe({ sock: socketPath(config, t.session), cwd: t.cwd }).catch(
+      () => false,
+    );
+  }
+
+  /**
    * Blocks until one of the windows meets `until`, or the time runs out.
    *
    * Driven by the screens' state events, not by polling: a busy window goes
@@ -641,12 +661,25 @@ export function createOps(deps: OpsDeps) {
 
     /**
      * The first window to meet the condition. One that is not running cannot
-     * meet it, and only ends the wait when none of them can.
+     * meet it, and only ends the wait when none of them can. With
+     * `background`, a settled window whose agent still has a background
+     * command running does not count yet.
      */
-    const first = (): { t: AttachTarget; reached: boolean } | null => {
+    const first = async (): Promise<{
+      t: AttachTarget;
+      reached: boolean;
+    } | null> => {
       const verdicts = targets.map(verdict);
-      const met = verdicts.indexOf(true);
-      if (met !== -1) return { t: targets[met], reached: true };
+      for (const [i, v] of verdicts.entries()) {
+        if (v !== true) continue;
+        const t = targets[i];
+        const waitsOnBackground =
+          opts.background &&
+          opts.until === "settled" &&
+          stateOf(t) !== "asleep" &&
+          (await hasBackground(t));
+        if (!waitsOnBackground) return { t, reached: true };
+      }
       if (verdicts.every((v) => v === false))
         return { t: targets[0], reached: false };
       return null;
@@ -654,25 +687,49 @@ export function createOps(deps: OpsDeps) {
 
     const sessions = new Set(targets.map((t) => t.session));
     const outcome =
-      first() ??
+      (await first()) ??
       (await new Promise<{ t: AttachTarget; reached: boolean } | null>(
         (resolve) => {
           let finished = false;
+          let checking = false;
+          let again = false;
           const finish = (v: { t: AttachTarget; reached: boolean } | null) => {
             if (finished) return;
             finished = true;
             off();
             clearTimeout(timer);
+            if (poll) clearInterval(poll);
             opts.signal?.removeEventListener("abort", aborted);
             resolve(v);
+          };
+          // One check at a time; a change during one is looked at after it.
+          const check = async () => {
+            if (checking) {
+              again = true;
+              return;
+            }
+            checking = true;
+            try {
+              do {
+                again = false;
+                const v = await first();
+                if (v) finish(v);
+              } while (again && !finished);
+            } finally {
+              checking = false;
+            }
           };
           const off = screens.subscribe((e) => {
             if (!sessions.has(e.session)) return;
             if (e.type === "state" || e.type === "turn")
               opts.onEvent?.(fromScreen(e));
-            const v = first();
-            if (v) finish(v);
+            void check();
           });
+          // Nothing announces a background command finishing, so while one
+          // is waited on, its harness is asked again every few seconds.
+          const poll = opts.background
+            ? setInterval(() => void check(), BACKGROUND_POLL_MS)
+            : null;
           const timer = setTimeout(() => finish(null), opts.timeoutMs);
           const aborted = () => finish(null);
           if (opts.signal?.aborted) finish(null);
@@ -690,6 +747,8 @@ export function createOps(deps: OpsDeps) {
       lastOutputAt: screen?.lastOutputAt ?? null,
       window: summary(chosen),
     };
+    if (result.state === "idle" || result.state === "question")
+      result.background = await hasBackground(chosen);
     if (opts.lines > 0 && (screen || isAsleep(config, chosen.session))) {
       const out = await output(chosen, { lines: opts.lines });
       result.text = out.text;

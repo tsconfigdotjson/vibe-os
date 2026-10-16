@@ -508,7 +508,7 @@ async function wait(
 ): Promise<number> {
   if (names.length === 0) {
     log.error(
-      "usage: vibe-os wait <window...> [--until settled|idle|question|change] [--timeout <s>] [--turn]",
+      "usage: vibe-os wait <window...> [--until settled|idle|question|change] [--timeout <s>] [--turn] [--background]",
     );
     return 1;
   }
@@ -523,6 +523,7 @@ async function wait(
   const refs = names.map((n) => findWindow(all, n).ref);
   const query = new URLSearchParams({ refs: refs.join(","), until });
   if (values.turn) query.set("turn", "1");
+  if (values.background) query.set("background", "1");
   if (values.lines !== undefined) query.set("lines", String(values.lines));
 
   // A wait longer than one request may be is several in a row.
@@ -551,6 +552,12 @@ async function wait(
           : `timed out after ${timeout}s: ${result.ref} is ${result.state}`,
     );
     if (result.reached) console.log(color.dim(`  after ${secs}s`));
+    if (result.background)
+      console.log(
+        color.dim(
+          "  a background command is still running; --background waits for it",
+        ),
+      );
     if (result.text) console.log(result.text);
   });
   if (result.reached) return 0;

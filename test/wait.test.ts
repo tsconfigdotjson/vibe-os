@@ -22,6 +22,7 @@ import {
   windows,
   workspaces,
 } from "../server/db.ts";
+import { type HarnessAdapter, harness } from "../server/harness.ts";
 import { createProfile, type Profile } from "../server/profiles.ts";
 import { Screens } from "../server/screens.ts";
 import { windowCommand } from "../server/session.ts";
@@ -432,6 +433,52 @@ describe.skipIf(!hasDtach)("waiting on windows", () => {
     expect(status).toBe(409);
     expect(body.error).toContain("read its output instead");
   });
+
+  test("a background command is reported, and background=1 waits it out", async () => {
+    // The window as a Claude window, with its harness's probe stubbed: the
+    // real one reads Claude's registry, which this session has none of.
+    const claude = harness("claude") as HarnessAdapter;
+    const probe = claude.background;
+    let running = true;
+    claude.background = async () => running;
+    const profile = createProfile(db, ids.project, {
+      name: "Agent",
+      harness: "claude",
+    });
+    db.update(windows)
+      .set({ profileId: profile.id })
+      .where(eq(windows.id, ids.one))
+      .run();
+    try {
+      const told = await bodyOf<WaitResult>(
+        call("GET", `/api/windows/${ids.one}/wait?timeout=5`),
+      );
+      expect(told.body.reached).toBe(true);
+      expect(told.body.background).toBe(true);
+
+      const held = await bodyOf<WaitResult>(
+        call("GET", `/api/windows/${ids.one}/wait?background=1&timeout=2`),
+      );
+      expect(held.body.reached).toBe(false);
+      expect(held.body.waitedMs).toBeGreaterThanOrEqual(2_000);
+
+      setTimeout(() => {
+        running = false;
+      }, 1_000);
+      const freed = await bodyOf<WaitResult>(
+        call("GET", `/api/windows/${ids.one}/wait?background=1&timeout=15`),
+      );
+      expect(freed.body.reached).toBe(true);
+      expect(freed.body.background).toBe(false);
+      expect(freed.body.waitedMs).toBeLessThan(8_000);
+    } finally {
+      claude.background = probe;
+      db.update(windows)
+        .set({ profileId: null })
+        .where(eq(windows.id, ids.one))
+        .run();
+    }
+  }, 30_000);
 
   test("closing a window says so on the event stream", async () => {
     const id = addWindow(3, null);

@@ -576,6 +576,12 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
           .boolean()
           .default(true)
           .describe("Also wait for the answer to the last send. Default true"),
+        background: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Also wait for commands the agent left running in the background (Claude) to finish. Off by default: a server left running never finishes",
+          ),
         lines: z
           .number()
           .int()
@@ -592,7 +598,7 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ windows, until, timeout, turn, lines }, ctx) => {
+    async ({ windows, until, timeout, turn, background, lines }, ctx) => {
       try {
         const targets = (Array.isArray(windows) ? windows : [windows]).map(
           windowOf,
@@ -623,6 +629,7 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
             until,
             timeoutMs: timeout * 1000,
             turn,
+            background,
             lines,
             signal: ctx.mcpReq.signal,
             onEvent: (e: WindowEvent) => {
@@ -647,7 +654,9 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
         const hint =
           result.reached && result.state === "question"
             ? "\nIt is asking something: answer with vibe_send keys."
-            : "";
+            : result.background
+              ? "\nIt still has a command running in the background, and will answer again when that finishes. To wait for it, call vibe_wait with background: true."
+              : "";
         return ok(
           `${head}${hint}${others}${result.text ? `\n\n${result.text}` : ""}`,
           { ...result },

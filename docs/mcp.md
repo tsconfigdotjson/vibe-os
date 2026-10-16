@@ -34,7 +34,10 @@ read it with `vibe_read_output`, then `vibe_send` with `keys`, like `["2"]` or
 whether to trust a new workspace. `["Escape"]` stops a busy agent.
 
 `vibe_wait` waits for the window to answer the last send, not just for quiet, so
-the moment before an agent starts on a prompt does not count. With a progress
+the moment before an agent starts on a prompt does not count. Claude can answer
+while a command it started still runs in the background, and say more when it
+finishes; `vibe_wait` says so when it returns, and `background: true` waits for
+those commands as well. With a progress
 token, it reports progress every 20 seconds and on every change, which keeps a
 client's idle timeout from firing during a long turn. Claude Code moves a call
 that runs past two minutes into the background and says when it finishes.

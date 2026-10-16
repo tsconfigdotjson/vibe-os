@@ -14,7 +14,7 @@
 | `vibe-os workspace new <project>` | create a workspace, optionally `--from <branch>` |
 | `vibe-os open <workspace>` | open a window, optionally `--profile`, `--prompt` and `--submit`. `--reuse` with `--label` uses the window already open under that label |
 | `vibe-os output <window>` | print what a window shows, the last `--lines` lines. `--follow` keeps printing new lines |
-| `vibe-os wait <window...>` | wait for a window to settle. `--until settled\|idle\|question\|change`, `--timeout <s>` (default 60), `--turn`. Exits 0 when reached, 2 on timeout |
+| `vibe-os wait <window...>` | wait for a window to settle. `--until settled\|idle\|question\|change`, `--timeout <s>` (default 60), `--turn`, `--background`. Exits 0 when reached, 2 on timeout |
 | `vibe-os events [window...]` | print window events as JSON lines, optionally only `--label <text>` |
 | `vibe-os close <window>` | close a window and end its session |
 | `vibe-os mcp` | serve the [MCP](mcp.md) tools over stdio, for a client that starts a command |
