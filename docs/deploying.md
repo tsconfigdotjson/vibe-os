@@ -137,6 +137,44 @@ That serves it at `https://<machine>.<tailnet>.ts.net` with a real certificate,
 which is also what the browser needs before it will expose the clipboard or
 offer to install the app.
 
+## On a public address
+
+Without Tailscale, vibe-os serves HTTPS itself. Point a DNS name at the box
+(many providers give each VPS one, such as OVH's `vps-xxxxxxxx.vps.ovh.ca`),
+then:
+
+```bash
+sudo vibe-os install-service --host 0.0.0.0 --domain box.example.com --token
+```
+
+Port 80 answers Let's Encrypt and redirects to HTTPS on 443. The token is the
+only gate between the internet and a shell, so keep it out of anything shared
+or logged.
+
+Open only what it needs:
+
+```bash
+sudo ufw limit 22/tcp                  # allows SSH, slowing repeated attempts
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw enable
+```
+
+Docker publishes ports through its own iptables rules, ahead of ufw, so a
+`docker run -p 8080:80` that an agent starts is public whatever ufw says. Bind
+published ports to loopback by default:
+
+```bash
+echo '{ "ip": "127.0.0.1" }' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker
+```
+
+If you used vibe-os from more than one state directory, `~/.ssh/authorized_keys`
+has a `cert-authority` line for each. Keep only the one matching
+`~/.vibe-os/ca.pub`.
+
 ## Firewall
 
 Tailscale does not close ports for you. Until you do, the machine still answers

@@ -3,6 +3,7 @@ import {
   createGate,
   hostAllowed,
   hostName,
+  isLoopback,
   originAllowed,
 } from "../server/auth.ts";
 
@@ -274,5 +275,72 @@ describe("the Host check", () => {
     const req = new Request("http://x/");
     req.headers.delete("host");
     expect(hostAllowed(req, names)).toBe(false);
+  });
+});
+
+/**
+ * A host under the same registrable domain, like another customer's
+ * `vps-*.vps.ovh.ca`, can set a cookie of the same name for the whole domain.
+ * The browser then sends two.
+ */
+describe("cookies planted by a neighbouring host", () => {
+  const gate = createGate(TOKEN);
+  const withCookie = (cookie: string) => gate.check(req({ cookie }));
+
+  test("a planted cookie sent first does not lock the owner out", () => {
+    expect(
+      withCookie(`vibe_os_session=planted; vibe_os_session=${TOKEN}`),
+    ).toBeNull();
+    expect(
+      withCookie(`vibe_os_session=planted; __Host-vibe_os_session=${TOKEN}`),
+    ).toBeNull();
+  });
+
+  test("planted cookies alone do not pass", () => {
+    expect(
+      withCookie("vibe_os_session=planted; __Host-vibe_os_session=other"),
+    ).not.toBeNull();
+  });
+
+  test("over HTTPS the cookie is the __Host- one, which the browser guards", () => {
+    const res = gate.consumeTokenParam(
+      req(),
+      new URL(`https://box/?token=${TOKEN}`),
+      true,
+    );
+    const cookie = res?.headers.get("set-cookie") ?? "";
+    expect(cookie.startsWith("__Host-vibe_os_session=")).toBe(true);
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("Path=/");
+    expect(cookie).not.toContain("Domain");
+  });
+
+  test("over plain HTTP it keeps the plain name, which needs no Secure", () => {
+    const res = gate.consumeTokenParam(
+      req(),
+      new URL(`http://box/?token=${TOKEN}`),
+      false,
+    );
+    expect(res?.headers.get("set-cookie")?.startsWith("vibe_os_session=")).toBe(
+      true,
+    );
+  });
+});
+
+describe("isLoopback", () => {
+  test("this machine, in each form a socket reports it", () => {
+    for (const a of ["127.0.0.1", "127.8.9.1", "::1", "::ffff:127.0.0.1"])
+      expect(isLoopback(a)).toBe(true);
+  });
+
+  test("anything else, including a missing address", () => {
+    for (const a of [
+      "54.39.97.232",
+      "100.96.101.46",
+      "::ffff:10.0.0.1",
+      "",
+      undefined,
+    ])
+      expect(isLoopback(a)).toBe(false);
   });
 });
