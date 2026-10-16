@@ -308,6 +308,12 @@ describe("tools", () => {
       arguments: {},
     });
     expect(textOf(r)).toContain("quiet-amber-otter-1");
+    const progress: unknown[] = [];
+    await client.callTool(
+      { name: "vibe_wait", arguments: { windows: "quiet-amber-otter-1" } },
+      { onprogress: (p) => progress.push(p) },
+    );
+    expect(progress).toHaveLength(2);
   });
 
   test("list_windows filters by state and names the turn", async () => {
