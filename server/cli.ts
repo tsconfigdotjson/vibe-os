@@ -42,6 +42,7 @@ import { runMcpBridge } from "./mcp-stdio.ts";
 import { reapLeaks } from "./reaper.ts";
 import { ENTRY, FETCH_WASM, IS_COMPILED } from "./runtime.ts";
 import { confirmFirewall, runSetup } from "./setup.ts";
+import { UNIT_PATH, unitFlags } from "./unit.ts";
 import { takeResume } from "./windows.ts";
 
 const run = promisify(execFile);
@@ -165,8 +166,12 @@ const HELP = `
 
   ${color.bold("setup")}
     -y, --yes           take the default answer to every question
-    --firewall          close the box to all but the tailnet with ufw; needed
-                        with --yes, which otherwise leaves the firewall alone
+    --domain <fqdn>     serve it publicly on this name, with its own HTTPS
+                        certificate, instead of through Tailscale
+    --email <addr>      with --domain: contact address for Let's Encrypt
+    --firewall          close the box with ufw to all but the tailnet, or with
+                        --domain to all but ssh, HTTP and HTTPS; needed with
+                        --yes, which otherwise leaves the firewall alone
     --hermes            install Hermes too (asked otherwise, default no)
     --cursor            install Cursor too (asked otherwise, default no)
     --user <name>       as root: the user to create and run vibe-os as
@@ -209,7 +214,76 @@ function printChecks(checks: Check[]): number {
   return failed > 0 ? 1 : 0;
 }
 
-const UNIT_PATH = "/etc/systemd/system/vibe-os.service";
+/**
+ * As root, runs doctor again with the checked user's (`--user`, or the one who
+ * ran sudo) HOME and `~/.local/bin` on PATH, where their agents are installed and sudo's PATH does not look.
+ * A compiled binary's children do not see `process.env` changed at runtime,
+ * so the environment has to be set when the process starts. Null when there
+ * is nothing to change, so this run carries on.
+ */
+async function doctorAsSudoUser(values: RawOptions): Promise<number | null> {
+  if (process.getuid?.() !== 0) return null;
+  const user =
+    typeof values.user === "string" ? values.user : process.env.SUDO_USER;
+  if (!user || user === "root") return null;
+  const home = await homeFor(user);
+  if (!home) return null;
+  const bin = path.join(home, ".local", "bin");
+  const PATH = process.env.PATH ?? "";
+  if (process.env.HOME === home && PATH.split(":").includes(bin)) return null;
+  const argv = [
+    process.execPath,
+    ...(IS_COMPILED ? [] : [ENTRY]),
+    ...process.argv.slice(2),
+  ];
+  const child = spawnSync(argv[0] as string, argv.slice(1), {
+    stdio: "inherit",
+    env: { ...process.env, HOME: home, PATH: `${bin}:${PATH}` },
+  });
+  return child.status ?? 1;
+}
+
+/**
+ * The config doctor checks the box against.
+ *
+ * Under sudo it checks the account that ran sudo, whose home holds the state
+ * dir and the agents, rather than root's. Flags not given on the command line
+ * come from the installed service, so doctor checks the box as it is served:
+ * its port, its address, and whether it has a domain.
+ */
+async function doctorConfig(
+  values: RawOptions,
+  config: Config,
+): Promise<Config> {
+  const sudoUser =
+    process.getuid?.() === 0 && process.env.SUDO_USER !== "root"
+      ? process.env.SUDO_USER
+      : undefined;
+  const unit = await readFile(UNIT_PATH, "utf8").catch(() => null);
+  const flags = unit ? unitFlags(unit) : null;
+  if (!sudoUser && !flags) return config;
+
+  const patch: RawOptions = { ...values };
+  if (sudoUser && values.user === undefined) {
+    const home = await homeFor(sudoUser);
+    if (home) {
+      patch.user = sudoUser;
+      if (values["state-dir"] === undefined)
+        patch["state-dir"] = path.join(home, ".vibe-os");
+    }
+  }
+  if (flags) {
+    if (values.port === undefined && flags.port !== null)
+      patch.port = String(flags.port);
+    if (values.host === undefined && flags.host !== null)
+      patch.host = flags.host;
+    if (values.domain === undefined && flags.domain !== null)
+      patch.domain = flags.domain;
+  }
+  const checked = await resolveConfig(patch);
+  loadHarnesses(checked.stateDir);
+  return checked;
+}
 
 async function installService(config: Config, argv: string[]): Promise<number> {
   if (process.getuid?.() !== 0) {
@@ -285,8 +359,11 @@ WantedBy=multi-user.target
   log.ok(`wrote ${UNIT_PATH}`);
 
   await run("systemctl", ["daemon-reload"]);
-  await run("systemctl", ["enable", "--now", "vibe-os"]);
-  log.ok("enabled and started vibe-os.service");
+  // Restart rather than `enable --now`, which leaves a running service on the
+  // flags it started with. Windows are their own sessions, and outlive it.
+  await run("systemctl", ["enable", "vibe-os"]);
+  await run("systemctl", ["restart", "vibe-os"]);
+  log.ok("enabled and (re)started vibe-os.service");
   console.log("");
   console.log(`  logs:    ${color.cyan("journalctl -u vibe-os -f")}`);
   console.log(`  restart: ${color.cyan("systemctl restart vibe-os")}`);
@@ -733,9 +810,12 @@ export async function main(argv: string[]): Promise<number> {
     case "attach":
       return attach(config, positionals[1]);
     case "doctor": {
+      const again = await doctorAsSudoUser(values);
+      if (again !== null) return again;
+      const checked = await doctorConfig(values, config);
       // Reap first, so the check list below reports the box as it now is.
-      if (values.reap) await reapLeaks(config);
-      return printChecks(await runDoctor(config));
+      if (values.reap) await reapLeaks(checked);
+      return printChecks(await runDoctor(checked));
     }
     case "setup":
       return runSetup(config, values);

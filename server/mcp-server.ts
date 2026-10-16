@@ -29,7 +29,6 @@ import type {
   WindowSummary,
 } from "../shared/wire.ts";
 import type { AttachTarget } from "./attach.ts";
-import type { Gate } from "./auth.ts";
 import { findProfile, findProject, findWorkspace } from "./client.ts";
 import type { Db } from "./db.ts";
 import { describeError } from "./log.ts";
@@ -785,32 +784,16 @@ export function createMcpEndpoint(deps: McpDeps): McpHttpHandler {
 }
 
 /**
- * `/mcp` behind the gate: the same token and cookie as /api, and a 401 that
- * says how to authenticate.
- *
- * Mounted before the gate turns `?token=` into a cookie, because the MCP spec
- * forbids a token in the query string, so here one counts for nothing. Origin
- * and Host have been checked by then, as for every request.
+ * The route at `/mcp`. The front door has checked the token by then (see
+ * front-door.ts), and turned a `?token=` into nothing.
  */
 export function mcpRoute(
-  gate: Gate,
   endpoint: McpHttpHandler,
 ): (req: Request) => Promise<Response> {
-  return async (req) => {
-    const denied = gate.check(req);
-    if (denied)
-      return new Response(JSON.stringify({ error: denied }), {
-        status: 401,
-        headers: {
-          "content-type": "application/json",
-          "cache-control": "no-store",
-          "www-authenticate": 'Bearer realm="vibe-os"',
-        },
-      });
+  return (req) =>
     // Who the caller is, for the day tokens have scopes. There is one token
     // today, so there is one caller.
-    return endpoint.fetch(req, {
+    endpoint.fetch(req, {
       authInfo: { token: "", clientId: "token", scopes: [] },
     });
-  };
 }

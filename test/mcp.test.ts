@@ -10,6 +10,7 @@ import type { McpHttpHandler } from "@modelcontextprotocol/server";
 import type { AttachTarget } from "../server/attach.ts";
 import { createGate } from "../server/auth.ts";
 import { type Db, newId, openDb, projects, workspaces } from "../server/db.ts";
+import { frontDoor } from "../server/front-door.ts";
 import {
   clip,
   createMcpEndpoint,
@@ -241,7 +242,13 @@ describe("the gate in front of /mcp", () => {
   const endpoint = {
     fetch: async () => new Response("served"),
   } as unknown as McpHttpHandler;
-  const serve = mcpRoute(createGate("secret"), endpoint);
+  const door = frontDoor(
+    { gate: createGate("secret"), token: true, hosts: new Set() },
+    async (req, url) =>
+      url.pathname === "/mcp" ? mcpRoute(endpoint)(req) : undefined,
+  );
+  const serve = async (req: Request) =>
+    (await door(req, { secure: false })) as Response;
 
   test("no token is a 401 that says how to authenticate", async () => {
     const res = await serve(

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   authorizedKeysPaths,
+  dockerPublishesLocally,
+  exposureCheck,
+  type FirewallState,
+  firewallCheck,
   parseNftOrIptables,
   parseUfw,
 } from "../server/doctor.ts";
@@ -55,6 +59,7 @@ describe("parseUfw", () => {
       defaultDeny: true,
       tailnetAllowed: true,
       directUdpAllowed: true,
+      open: { ssh: false, http: false, https: false },
     });
   });
 
@@ -113,6 +118,7 @@ describe("parseNftOrIptables", () => {
       defaultDeny: true,
       tailnetAllowed: true,
       directUdpAllowed: true,
+      open: { ssh: false, http: false, https: false },
     });
   });
 
@@ -122,6 +128,7 @@ describe("parseNftOrIptables", () => {
       defaultDeny: true,
       tailnetAllowed: true,
       directUdpAllowed: true,
+      open: { ssh: false, http: false, https: false },
     });
   });
 
@@ -142,6 +149,206 @@ describe("parseNftOrIptables", () => {
     const r = parseNftOrIptables("");
     expect(r.active).toBe(false);
     expect(r.defaultDeny).toBe(false);
+  });
+});
+
+/** Copied from the VPS this project runs on, after it went public. */
+const UFW_PUBLIC = `Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+Anywhere on tailscale0     ALLOW IN    Anywhere                  
+41641/udp                  ALLOW IN    Anywhere                  
+22/tcp                     LIMIT IN    Anywhere                  
+80/tcp                     ALLOW IN    Anywhere                  
+443/tcp                    ALLOW IN    Anywhere                  
+Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)             
+41641/udp (v6)             ALLOW IN    Anywhere (v6)             
+22/tcp (v6)                LIMIT IN    Anywhere (v6)             
+80/tcp (v6)                ALLOW IN    Anywhere (v6)             
+443/tcp (v6)               ALLOW IN    Anywhere (v6)             
+`;
+
+/** The same box's iptables and nftables views of those rules. */
+const IPTABLES_PUBLIC = `-P INPUT DROP
+-A ufw-user-input -p tcp -m tcp --dport 22 -m conntrack --ctstate NEW -m recent --set --name DEFAULT --mask 255.255.255.255 --rsource
+-A ufw-user-input -p tcp -m tcp --dport 22 -m conntrack --ctstate NEW -m recent --update --seconds 30 --hitcount 6 --name DEFAULT --mask 255.255.255.255 --rsource -j ufw-user-limit
+-A ufw-user-input -p tcp -m tcp --dport 22 -j ufw-user-limit-accept
+-A ufw-user-input -p tcp -m tcp --dport 80 -j ACCEPT
+-A ufw-user-input -p tcp -m tcp --dport 443 -j ACCEPT
+`;
+
+const NFT_PUBLIC = `table inet filter {
+  chain input {
+    type filter hook input priority 0; policy drop;
+\t\ttcp dport 22 counter packets 17 bytes 972 jump ufw-user-limit-accept
+\t\ttcp dport 80 counter packets 6469 bytes 332652 accept
+\t\ttcp dport 443 counter packets 6567 bytes 338564 accept
+  }
+}
+`;
+
+describe("open ports", () => {
+  const all = { ssh: true, http: true, https: true };
+
+  test("ufw on a public box, LIMIT counting as open", () => {
+    expect(parseUfw(UFW_PUBLIC).open).toEqual(all);
+    expect(parseUfw(UFW_PUBLIC).tailnetAllowed).toBe(true);
+  });
+
+  test("ufw's other spellings: a bare port, a list, a range", () => {
+    const rules = (line: string) =>
+      parseUfw(`Status: active\nTo  Action  From\n${line}\n`).open;
+    expect(rules("80                         ALLOW IN    Anywhere")).toEqual({
+      ssh: false,
+      http: true,
+      https: false,
+    });
+    expect(rules("80,443/tcp                 ALLOW IN    Anywhere")).toEqual({
+      ssh: false,
+      http: true,
+      https: true,
+    });
+    expect(rules("1:1000/tcp                 ALLOW IN    Anywhere")).toEqual(
+      all,
+    );
+  });
+
+  test("a deny rule and a udp rule do not open a tcp port", () => {
+    const r = parseUfw(
+      "Status: active\n80/tcp  DENY IN  Anywhere\n443/udp  ALLOW IN  Anywhere\n",
+    );
+    expect(r.open).toEqual({ ssh: false, http: false, https: false });
+  });
+
+  test("iptables and nftables on a public box", () => {
+    expect(parseNftOrIptables(IPTABLES_PUBLIC).open).toEqual(all);
+    expect(parseNftOrIptables(NFT_PUBLIC).open).toEqual(all);
+    expect(parseNftOrIptables("tcp dport { 80, 443 } accept\n").open).toEqual({
+      ssh: false,
+      http: true,
+      https: true,
+    });
+  });
+
+  test("a port counted but not accepted is not open", () => {
+    expect(
+      parseNftOrIptables("tcp dport 80 counter packets 1 bytes 2 drop\n").open
+        .http,
+    ).toBe(false);
+  });
+});
+
+describe("firewallCheck", () => {
+  const fw = (patch: Partial<FirewallState> = {}): FirewallState => ({
+    tool: "ufw",
+    active: true,
+    defaultDeny: true,
+    tailnetAllowed: false,
+    directUdpAllowed: false,
+    open: { ssh: true, http: true, https: true },
+    unreadable: false,
+    ...patch,
+  });
+
+  test("a public box with 22, 80 and 443 open passes, with no word of Tailscale", () => {
+    const c = firewallCheck(fw(), "box.example.com");
+    expect(c.ok).toBe(true);
+    expect(c.detail).toContain("80 and 443 allowed");
+    expect(c.detail).not.toContain("tailnet");
+  });
+
+  test("a public box names each port it is missing, and why", () => {
+    const c = firewallCheck(
+      fw({ open: { ssh: false, http: false, https: false } }),
+      "box.example.com",
+    );
+    expect(c.ok).toBe(false);
+    expect(c.detail).toContain("Let's Encrypt");
+    expect(c.detail).toContain("443/tcp closed");
+    expect(c.detail).toContain("nothing can ssh in");
+    expect(c.fix).toContain("ufw allow 443/tcp");
+  });
+
+  test("a public box with the tailnet allowed does not need 22", () => {
+    const c = firewallCheck(
+      fw({
+        tailnetAllowed: true,
+        open: { ssh: false, http: true, https: true },
+      }),
+      "box.example.com",
+    );
+    expect(c.ok).toBe(true);
+    expect(c.detail).toContain("and the tailnet");
+  });
+
+  test("a tailnet box still wants the tailnet rules", () => {
+    expect(firewallCheck(fw(), null).ok).toBe(false);
+    expect(
+      firewallCheck(fw({ tailnetAllowed: true, directUdpAllowed: true }), null)
+        .ok,
+    ).toBe(true);
+  });
+
+  test("off or allow-by-default fails either way, with that way's rules", () => {
+    const off = firewallCheck(fw({ active: false }), "box.example.com");
+    expect(off.ok).toBe(false);
+    expect(off.fix).toContain("443/tcp");
+    expect(firewallCheck(fw({ active: false }), null).fix).toContain(
+      "tailscale0",
+    );
+    expect(firewallCheck(fw({ defaultDeny: false }), null).ok).toBe(false);
+  });
+});
+
+describe("exposureCheck", () => {
+  const box = {
+    token: true,
+    host: "::",
+    domain: "box.example.com" as string | null,
+    tailnet: null as string | null,
+  };
+
+  test("public with a token is fine, and says where", () => {
+    const c = exposureCheck(box);
+    expect(c.ok).toBe(true);
+    expect(c.detail).toContain("https://box.example.com");
+  });
+
+  test("public with no token is fatal", () => {
+    const c = exposureCheck({ ...box, token: false });
+    expect(c.ok).toBe(false);
+    expect(c.fatal).toBe(true);
+  });
+
+  test("the tailnet cases are as before", () => {
+    expect(
+      exposureCheck({ ...box, domain: null, tailnet: "100.1.2.3" }).detail,
+    ).toContain("Tailscale is up");
+    expect(
+      exposureCheck({ ...box, domain: null, token: false, host: "127.0.0.1" })
+        .ok,
+    ).toBe(true);
+    expect(exposureCheck({ ...box, domain: null, token: false }).ok).toBe(
+      false,
+    );
+  });
+});
+
+describe("dockerPublishesLocally", () => {
+  test("loopback in daemon.json", () => {
+    expect(dockerPublishesLocally('{ "ip": "127.0.0.1" }')).toBe(true);
+    expect(dockerPublishesLocally('{"ip":"::1","log-driver":"local"}')).toBe(
+      true,
+    );
+  });
+
+  test("missing, empty, unparsable, or another address", () => {
+    for (const text of ["", "{}", "not json", '{ "ip": "0.0.0.0" }'])
+      expect(dockerPublishesLocally(text)).toBe(false);
   });
 });
 

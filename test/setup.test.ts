@@ -8,8 +8,9 @@ import {
   parseTailscaleStatus,
   passwordLoginOn,
   serveCovers,
-  unitFlags,
+  servicePlan,
 } from "../server/setup.ts";
+import { type UnitFlags, unitFlags } from "../server/unit.ts";
 
 describe("packagesFor", () => {
   test("maps commands to each distro's package names", () => {
@@ -72,14 +73,24 @@ describe("unitFlags", () => {
       unitFlags(
         unit("vibe-os start --port 7681 --host 127.0.0.1 --token hunter2"),
       ),
-    ).toEqual({ port: 7681, host: "127.0.0.1", token: "hunter2" });
+    ).toEqual({
+      port: 7681,
+      host: "127.0.0.1",
+      token: "hunter2",
+      domain: null,
+    });
   });
 
   test("an empty --token means the remembered one", () => {
     // What the VPS this runs on actually has.
     expect(
       unitFlags(unit("vibe-os start --port 7681 --host 127.0.0.1 --token=")),
-    ).toEqual({ port: 7681, host: "127.0.0.1", token: undefined });
+    ).toEqual({
+      port: 7681,
+      host: "127.0.0.1",
+      token: undefined,
+      domain: null,
+    });
     expect(unitFlags(unit("vibe-os start --token --port=80")).token).toBe(
       undefined,
     );
@@ -94,7 +105,27 @@ describe("unitFlags", () => {
       port: null,
       host: null,
       token: undefined,
+      domain: null,
     });
+  });
+
+  test("reads the domain of a public box", () => {
+    // What the VPS this runs on has now.
+    expect(
+      unitFlags(
+        unit(
+          "/usr/local/bin/vibe-os start --host :: --domain vps-a272961f.vps.ovh.ca --token= --hibernate-after 5",
+        ),
+      ),
+    ).toEqual({
+      port: null,
+      host: "::",
+      token: undefined,
+      domain: "vps-a272961f.vps.ovh.ca",
+    });
+    expect(
+      unitFlags(unit("vibe-os start --domain=box.example.com")).domain,
+    ).toBe("box.example.com");
   });
 });
 
@@ -174,5 +205,82 @@ describe("serveCovers", () => {
     expect(serveCovers(status, 768)).toBe(false);
     expect(serveCovers(status, 8080)).toBe(false);
     expect(serveCovers("No serve config\n", 7681)).toBe(false);
+  });
+});
+
+describe("servicePlan", () => {
+  const unit = (patch: Partial<UnitFlags> = {}): UnitFlags => ({
+    port: null,
+    host: null,
+    token: undefined,
+    domain: null,
+    ...patch,
+  });
+
+  test("a fresh private box goes on loopback 7681", () => {
+    expect(servicePlan(null, {}, null)).toEqual({
+      port: 7681,
+      host: "127.0.0.1",
+      keep: false,
+    });
+  });
+
+  test("a fresh public box goes on every address, port 80", () => {
+    expect(servicePlan(null, {}, "box.example.com")).toEqual({
+      port: 80,
+      host: "::",
+      keep: false,
+    });
+  });
+
+  test("the public box this runs on is kept as it is", () => {
+    // ExecStart=vibe-os start --host :: --domain vps-a272961f.vps.ovh.ca --token= --hibernate-after 5
+    expect(
+      servicePlan(
+        unit({ host: "::", domain: "vps-a272961f.vps.ovh.ca" }),
+        {},
+        "vps-a272961f.vps.ovh.ca",
+      ),
+    ).toEqual({ port: 80, host: "::", keep: true });
+  });
+
+  test("a private box set up by hand is kept, on its own flags", () => {
+    expect(
+      servicePlan(unit({ port: 7681, host: "127.0.0.1" }), {}, null),
+    ).toEqual({ port: 7681, host: "127.0.0.1", keep: true });
+  });
+
+  test("moving a private box to a domain replaces the unit", () => {
+    expect(
+      servicePlan(
+        unit({ port: 7681, host: "127.0.0.1" }),
+        {},
+        "box.example.com",
+      ),
+    ).toEqual({ port: 80, host: "::", keep: false });
+  });
+
+  test("a different domain replaces it", () => {
+    expect(
+      servicePlan(
+        unit({ host: "::", domain: "old.example.com" }),
+        {},
+        "box.example.com",
+      ).keep,
+    ).toBe(false);
+  });
+
+  test("an explicit --port or --host that differs replaces it", () => {
+    expect(
+      servicePlan(unit({ port: 7681, host: "127.0.0.1" }), { port: 8080 }, null)
+        .keep,
+    ).toBe(false);
+    expect(
+      servicePlan(
+        unit({ host: "::", domain: "b.example" }),
+        { host: "0.0.0.0" },
+        "b.example",
+      ),
+    ).toEqual({ port: 80, host: "0.0.0.0", keep: false });
   });
 });

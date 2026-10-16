@@ -9,6 +9,7 @@
 // accepted for this user?
 
 import { execFile } from "node:child_process";
+import { X509Certificate } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -54,7 +55,7 @@ const run = promisify(execFile);
  * Both of those are why this reports rather than blocks: a wrong "you are safe"
  * is worse than no answer.
  */
-interface FirewallState {
+export interface FirewallState {
   /** null when no firewall tool could be read at all. */
   tool: "ufw" | "nftables" | "iptables" | null;
   active: boolean;
@@ -64,19 +65,39 @@ interface FirewallState {
   tailnetAllowed: boolean;
   /** 41641/udp, which keeps Tailscale on a direct path instead of a relay. */
   directUdpAllowed: boolean;
+  /** TCP ports with an allow or limit rule, of 22, 80 and 443. */
+  open: { ssh: boolean; http: boolean; https: boolean };
   /** True when we could not read the rules — almost always "not root". */
   unreadable: boolean;
+}
+
+/** Whether a port list like `80`, `80,443` or `8000:9000` covers a port. */
+function covers(list: string, port: number): boolean {
+  return list.split(",").some((part) => {
+    const [lo, hi] = part.split(":").map(Number);
+    return hi === undefined ? lo === port : lo <= port && port <= hi;
+  });
+}
+
+/** TCP ports a ruleset lets in, found by `allowed` for each one. */
+function openPorts(allowed: (port: number) => boolean) {
+  return { ssh: allowed(22), http: allowed(80), https: allowed(443) };
 }
 
 export function parseUfw(
   status: string,
 ): Omit<FirewallState, "tool" | "unreadable"> {
   const text = status.toLowerCase();
+  // `22/tcp  LIMIT IN  Anywhere`, `80,443/tcp  ALLOW IN  Anywhere`, `80  ALLOW IN`.
+  const portRules = [
+    ...text.matchAll(/^([\d,:]+)(\/tcp)?(?: \(v6\))?\s+(?:allow|limit) in/gm),
+  ].map((m) => m[1] as string);
   return {
     active: /status:\s*active/.test(text),
     defaultDeny: /default:\s*deny\s*\(incoming\)/.test(text),
     tailnetAllowed: /tailscale\d*\b[^\n]*allow in/.test(text),
     directUdpAllowed: /41641\/udp[^\n]*allow in/.test(text),
+    open: openPorts((port) => portRules.some((list) => covers(list, port))),
   };
 }
 
@@ -98,6 +119,20 @@ export function parseNftOrIptables(
         text,
       ),
     directUdpAllowed: /41641[^\n]*(accept|-j accept)/.test(text),
+    // nft: `tcp dport 80 accept` or `tcp dport { 80, 443 } accept`; iptables:
+    // `--dport 80 -j ACCEPT`. ufw's limit rules jump to `ufw-user-limit-accept`.
+    open: openPorts((port) =>
+      [
+        ...text.matchAll(
+          /dport\s+(\{[^}]*\}|[\d:]+)[^\n]*(\baccept\b|-j accept|limit-accept)/g,
+        ),
+      ].some((m) =>
+        covers(
+          (m[1] as string).replace(/[{}\s]/g, "").replace(/-/g, ":"),
+          port,
+        ),
+      ),
+    ),
   };
 }
 
@@ -107,6 +142,7 @@ async function firewallState(): Promise<FirewallState> {
     defaultDeny: false,
     tailnetAllowed: false,
     directUdpAllowed: false,
+    open: { ssh: false, http: false, https: false },
   };
 
   // ufw first: it is what docs/deploying.md documents, and its status output says
@@ -641,6 +677,188 @@ async function uidOf(user: string): Promise<number | null> {
   }
 }
 
+const DEPLOYING =
+  "https://github.com/tsconfigdotjson/vibe-os/blob/main/docs/deploying.md";
+
+/**
+ * The firewall check, for the way the box is served: through Tailscale, or on
+ * a public address with `--domain`.
+ *
+ * Said on every outcome, including the good one, that this is local rules
+ * only, because a ✓ here is the moment someone is most likely to conclude more
+ * than it means.
+ */
+export function firewallCheck(fw: FirewallState, domain: string | null): Check {
+  const scope =
+    " (local rules only: your provider's firewall is separate, and proving a port is shut needs a packet from outside)";
+  const rules = domain
+    ? "sudo ufw limit 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp"
+    : "sudo ufw allow in on tailscale0 && sudo ufw allow 41641/udp";
+
+  if (fw.unreadable)
+    return bad(
+      "firewall",
+      "could not read any firewall — needs root, or none is installed",
+      `sudo vibe-os doctor    (firewall rules: ${DEPLOYING}#${domain ? "on-a-public-address" : "firewall"})`,
+    );
+  if (!fw.active)
+    return bad(
+      "firewall",
+      `${fw.tool} found but not active — this machine answers on every port of its public address`,
+      `${rules} && sudo ufw default deny incoming && sudo ufw enable`,
+    );
+  if (!fw.defaultDeny)
+    return bad(
+      "firewall",
+      `${fw.tool} is active but does not deny incoming by default`,
+      "sudo ufw default deny incoming",
+    );
+
+  if (domain) {
+    const missing = [
+      fw.open.http
+        ? null
+        : "80/tcp closed, so Let's Encrypt cannot issue or renew the certificate",
+      fw.open.https ? null : "443/tcp closed, so nothing reaches vibe-os",
+      fw.open.ssh || fw.tailnetAllowed
+        ? null
+        : "22/tcp closed and no tailnet, so nothing can ssh in",
+    ].filter(Boolean);
+    const also = fw.tailnetAllowed ? ", and the tailnet" : "";
+    return missing.length === 0
+      ? ok(
+          "firewall",
+          `${fw.tool}: incoming denied by default; ${fw.open.ssh ? "22, " : ""}80 and 443 allowed${also}${scope}`,
+        )
+      : bad(
+          "firewall",
+          `${fw.tool} denies incoming by default, but ${missing.join("; ")}`,
+          rules,
+        );
+  }
+
+  const missing = [
+    fw.tailnetAllowed ? null : "no allow rule for the tailscale interface",
+    fw.directUdpAllowed
+      ? null
+      : "41641/udp closed, so Tailscale relays via DERP",
+  ].filter(Boolean);
+  return missing.length === 0
+    ? ok(
+        "firewall",
+        `${fw.tool}: incoming denied by default, tailnet and 41641/udp allowed${scope}`,
+      )
+    : bad(
+        "firewall",
+        `${fw.tool} denies incoming by default, but ${missing.join("; ")}`,
+        rules,
+      );
+}
+
+/**
+ * Who can reach the port, which is the whole security model: vibe-os hands
+ * out shells.
+ */
+export function exposureCheck(box: {
+  token: boolean;
+  host: string;
+  domain: string | null;
+  tailnet: string | null;
+}): Check {
+  const wildcard = box.host === "0.0.0.0" || box.host === "::";
+  if (box.domain && box.token)
+    return ok(
+      "exposure",
+      `public at https://${box.domain}, and the token is required${box.tailnet ? `; Tailscale is up too (${box.tailnet})` : ""}`,
+    );
+  if (box.domain)
+    return fatal(
+      "exposure",
+      `public at https://${box.domain} with no token — anyone on the internet gets a shell`,
+      "start with --token",
+    );
+  if (box.token)
+    return ok(
+      "exposure",
+      `token required${box.tailnet ? `, and Tailscale is up (${box.tailnet})` : ""}`,
+    );
+  if (!wildcard)
+    return ok("exposure", `no token, but bound only to ${box.host}`);
+  if (box.tailnet)
+    return bad(
+      "exposure",
+      `no token and bound to every interface — Tailscale is up (${box.tailnet}), but so is any public address`,
+      `bind to the tailnet only:  --host ${box.tailnet}   (firewall rules: ${DEPLOYING}#firewall)`,
+    );
+  return bad(
+    "exposure",
+    "no token, bound to every interface, and no tailnet found — anyone who can reach this port gets a shell",
+    "start with --token, or put it behind Tailscale and bind to the tailnet address",
+  );
+}
+
+/** The certificate a box with --domain serves, and how long it has left. */
+async function certificateCheck(config: Config): Promise<Check> {
+  const file = path.join(config.stateDir, "tls", `${config.domain}.crt`);
+  const pem = await readFile(file, "utf8").catch(() => null);
+  if (!pem)
+    return bad(
+      "certificate",
+      `none yet for ${config.domain} — vibe-os asks Let's Encrypt when it starts, and needs ${config.domain} to point here and port 80 open`,
+      "journalctl -u vibe-os | grep -i tls",
+    );
+  try {
+    const notAfter = new X509Certificate(pem).validToDate;
+    const days = Math.floor((notAfter.getTime() - Date.now()) / 86_400_000);
+    if (days < 0)
+      return bad(
+        "certificate",
+        `${config.domain} expired ${-days} days ago`,
+        "journalctl -u vibe-os | grep -i tls",
+      );
+    return ok(
+      "certificate",
+      `${config.domain}, ${days} days left; renewed when 30 remain`,
+    );
+  } catch {
+    return bad("certificate", `${file} does not parse as a certificate`);
+  }
+}
+
+/**
+ * Docker's published ports, which go around ufw.
+ *
+ * Docker writes its own iptables rules ahead of ufw's, so `docker run -p
+ * 8080:80` is reachable from anywhere whatever ufw says. Null when Docker is
+ * not installed.
+ */
+async function dockerCheck(): Promise<Check | null> {
+  if (!(await onPath("docker"))) return null;
+  const daemon = await readFile("/etc/docker/daemon.json", "utf8").catch(
+    () => "",
+  );
+  return dockerPublishesLocally(daemon)
+    ? ok(
+        "docker",
+        "published ports bind to 127.0.0.1 unless a run says otherwise",
+      )
+    : bad(
+        "docker",
+        "published ports bind to every address, and Docker's rules go around ufw",
+        `echo '{ "ip": "127.0.0.1" }' | sudo tee /etc/docker/daemon.json && sudo systemctl restart docker    (merge by hand if that file has other settings)`,
+      );
+}
+
+/** Whether a daemon.json makes published ports default to loopback. */
+export function dockerPublishesLocally(daemonJson: string): boolean {
+  try {
+    const ip = (JSON.parse(daemonJson) as { ip?: unknown }).ip;
+    return ip === "127.0.0.1" || ip === "::1";
+  } catch {
+    return false;
+  }
+}
+
 export async function runDoctor(config: Config): Promise<Check[]> {
   const checks: Check[] = [];
   const user = config.user;
@@ -894,55 +1112,7 @@ export async function runDoctor(config: Config): Promise<Check[]> {
   // fatal: a box on a trusted LAN or inside the container legitimately has no
   // firewall, and doctor exits non-zero on fatals.
   const fw = await firewallState();
-  // Said on every outcome, including the good one, because a ✓ here is the
-  // moment someone is most likely to conclude more than it means.
-  const scope =
-    " (local rules only: your provider's firewall is separate, and proving a port is shut needs a packet from outside)";
-
-  if (fw.unreadable) {
-    checks.push(
-      bad(
-        "firewall",
-        "could not read any firewall — needs root, or none is installed",
-        "sudo vibe-os doctor    (firewall rules: https://github.com/tsconfigdotjson/vibe-os/blob/main/docs/deploying.md#firewall)",
-      ),
-    );
-  } else if (!fw.active) {
-    checks.push(
-      bad(
-        "firewall",
-        `${fw.tool} found but not active — this machine answers on its public address`,
-        "sudo ufw allow in on tailscale0 && sudo ufw allow 41641/udp && sudo ufw default deny incoming && sudo ufw enable",
-      ),
-    );
-  } else if (!fw.defaultDeny) {
-    checks.push(
-      bad(
-        "firewall",
-        `${fw.tool} is active but does not deny incoming by default`,
-        "sudo ufw default deny incoming",
-      ),
-    );
-  } else {
-    const missing = [
-      fw.tailnetAllowed ? null : "no allow rule for the tailscale interface",
-      fw.directUdpAllowed
-        ? null
-        : "41641/udp closed, so Tailscale relays via DERP",
-    ].filter(Boolean);
-    checks.push(
-      missing.length === 0
-        ? ok(
-            "firewall",
-            `${fw.tool}: incoming denied by default, tailnet and 41641/udp allowed${scope}`,
-          )
-        : bad(
-            "firewall",
-            `${fw.tool} denies incoming by default, but ${missing.join("; ")}`,
-            "sudo ufw allow in on tailscale0 && sudo ufw allow 41641/udp",
-          ),
-    );
-  }
+  checks.push(firewallCheck(fw, config.domain ?? null));
 
   // ── the always-on browser ────────────────────────────────────────────────
   //
@@ -996,35 +1166,17 @@ export async function runDoctor(config: Config): Promise<Check[]> {
   //
   // The one check that is about the box rather than the software. vibe-os hands
   // out shells; who can reach the port is the whole security model.
-  const tailnet = await tailscaleAddress();
-  const wildcard = config.host === "0.0.0.0" || config.host === "::";
-
-  if (config.token) {
-    checks.push(
-      ok(
-        "exposure",
-        `token required${tailnet ? `, and Tailscale is up (${tailnet})` : ""}`,
-      ),
-    );
-  } else if (!wildcard) {
-    checks.push(ok("exposure", `no token, but bound only to ${config.host}`));
-  } else if (tailnet) {
-    checks.push(
-      bad(
-        "exposure",
-        `no token and bound to every interface — Tailscale is up (${tailnet}), but so is any public address`,
-        `bind to the tailnet only:  --host ${tailnet}   (firewall rules: https://github.com/tsconfigdotjson/vibe-os/blob/main/docs/deploying.md#firewall)`,
-      ),
-    );
-  } else {
-    checks.push(
-      bad(
-        "exposure",
-        "no token, bound to every interface, and no tailnet found — anyone who can reach this port gets a shell",
-        "start with --token, or put it behind Tailscale and bind to the tailnet address",
-      ),
-    );
-  }
+  checks.push(
+    exposureCheck({
+      token: config.token !== null,
+      host: config.host,
+      domain: config.domain ?? null,
+      tailnet: await tailscaleAddress(),
+    }),
+  );
+  if (config.domain) checks.push(await certificateCheck(config));
+  const docker = await dockerCheck();
+  if (docker) checks.push(docker);
 
   return checks;
 }

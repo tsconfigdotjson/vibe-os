@@ -7,8 +7,15 @@ as equivalent to SSH access to the box.
 
 Report vulnerabilities privately, as described in [SECURITY.md](../SECURITY.md).
 
-The recommended shape is all of it: behind Tailscale, firewalled to the tailnet,
-bound to the tailnet address, and with the token on.
+There are two shapes. Private: behind Tailscale, firewalled to the tailnet,
+bound to loopback, with the token on. Public: `--domain` with its own HTTPS
+certificate, firewalled to ssh, HTTP and HTTPS, with the token as the only
+gate. See [Deploying](deploying.md#setup) for both.
+
+Every request passes one wrapper, `frontDoor` in `server/front-door.ts`, before
+any route is chosen: Origin, then Host when there is no token, then the token.
+The only answers given without a token are the ACME challenge and, with
+`--domain`, the redirect from plain HTTP to HTTPS.
 
 **The gate is on by default.** The first start generates a token, remembers it
 in the state dir, and prints the URL with it.
