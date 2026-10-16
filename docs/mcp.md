@@ -30,7 +30,8 @@ The usual round is: `vibe_open_window` with a prompt, `vibe_wait`, then
 `vibe_read_messages` for a Claude window or `vibe_read_output` for anything else.
 A window on a question (a menu, a yes/no, a permission prompt) needs an answer:
 read it with `vibe_read_output`, then `vibe_send` with `keys`, like `["2"]` or
-`["y"]`. `["Escape"]` stops a busy agent.
+`["y"]`, or `["Down", "Enter"]` in a menu without numbers, such as Claude asking
+whether to trust a new workspace. `["Escape"]` stops a busy agent.
 
 `vibe_wait` waits for the window to answer the last send, not just for quiet, so
 the moment before an agent starts on a prompt does not count. With a progress

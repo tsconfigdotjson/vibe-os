@@ -55,7 +55,7 @@ const INSTRUCTIONS = `vibe-os runs coding agents and terminals in windows, each 
 
 To hand an agent a task: vibe_list_projects to find a project and its profiles, vibe_create_workspace, vibe_open_window with a prompt, then vibe_wait until the window settles, then vibe_read_messages (Claude windows) or vibe_read_output for the answer.
 
-A window is named by its ref, like quiet-amber-otter-1. Its state is busy (drawing), idle (at its prompt), question (stopped on a menu or yes/no question) or asleep (hibernated). A window on a question needs an answer: read it with vibe_read_output, then vibe_send keys, like ["2"] or ["y"].`;
+A window is named by its ref, like quiet-amber-otter-1. Its state is busy (drawing), idle (at its prompt), question (stopped on a menu or yes/no question) or asleep (hibernated). A window on a question needs an answer: read it with vibe_read_output, then vibe_send keys, like ["2"] or ["y"] for a numbered menu or a yes/no, or ["Down", "Enter"] to move the ❯ marker in a menu without numbers.`;
 
 /** Cuts text to `max` characters from the start, keeping the end. */
 export function clip(text: string, max = MAX_RESULT_CHARS): string {
@@ -104,7 +104,7 @@ export function explain(err: unknown, window?: string): CallToolResult {
 function undelivered(ref: string, r: Partial<SendResult>): CallToolResult {
   if (r.state === "question")
     return fail(
-      `${ref} is waiting on a question, so nothing was pasted. Read it with vibe_read_output, then answer with vibe_send keys, like ["2"] or ["y"]. Or pass force: true to paste anyway.`,
+      `${ref} is waiting on a question, so nothing was pasted. Read it with vibe_read_output, then answer with vibe_send keys: the option's number, like ["2"], or ["Up"] and ["Down"] to move the ❯ marker, then ["Enter"]. Or pass force: true to paste anyway.`,
     );
   return fail(
     `${ref} did not take the text: ${r.reason ?? "it did not draw it"}. See what it shows with vibe_read_output.`,
@@ -438,7 +438,7 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
     {
       title: "Send to a window",
       description:
-        'Sends text to a window and presses Enter, or presses keys. Text is refused while the window is on a question: read the question with vibe_read_output, then answer with keys, like ["2"] or ["y"]. ["Escape"] stops a busy agent. A hibernated window wakes on send. Keys are one character or Enter, Escape, Tab, BackTab, Backspace, Delete, Space, Up, Down, Left, Right, Home, End, PageUp, PageDown, Ctrl+<letter>.',
+        'Sends text to a window and presses Enter, or presses keys. Text is refused while the window is on a question: read the question with vibe_read_output, then answer with keys: the number of the option, like ["2"], ["y"] for yes/no, or ["Down", "Enter"] to pick the next option in a menu without numbers. ["Escape"] stops a busy agent. A hibernated window wakes on send. Keys are one character or Enter, Escape, Tab, BackTab, Backspace, Delete, Space, Up, Down, Left, Right, Home, End, PageUp, PageDown, Ctrl+<letter>.',
       inputSchema: z.object({
         window: windowArg,
         text: z.string().optional().describe("Text to paste"),
