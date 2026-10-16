@@ -88,9 +88,12 @@ export function parseUfw(
   status: string,
 ): Omit<FirewallState, "tool" | "unreadable"> {
   const text = status.toLowerCase();
-  // `22/tcp  LIMIT IN  Anywhere`, `80,443/tcp  ALLOW IN  Anywhere`, `80  ALLOW IN`.
+  // `22/tcp  LIMIT IN  Anywhere`, `80,443/tcp  ALLOW IN  Anywhere`. Only from
+  // Anywhere: a rule for one subnet does not open the port to the internet.
   const portRules = [
-    ...text.matchAll(/^([\d,:]+)(\/tcp)?(?: \(v6\))?\s+(?:allow|limit) in/gm),
+    ...text.matchAll(
+      /^([\d,:]+)(\/tcp)?(?: \(v6\))?\s+(?:allow|limit) in\s+anywhere\b/gm,
+    ),
   ].map((m) => m[1] as string);
   return {
     active: /status:\s*active/.test(text),
@@ -124,14 +127,17 @@ export function parseNftOrIptables(
     open: openPorts((port) =>
       [
         ...text.matchAll(
-          /dport\s+(\{[^}]*\}|[\d:]+)[^\n]*(\baccept\b|-j accept|limit-accept)/g,
+          /^[^\n]*?dports?\s+(\{[^}]*\}|[\d:,-]+)[^\n]*(\baccept\b|-j accept|limit-accept)/gm,
         ),
-      ].some((m) =>
-        covers(
-          (m[1] as string).replace(/[{}\s]/g, "").replace(/-/g, ":"),
-          port,
+      ]
+        // A rule for one source address or subnet does not open the port.
+        .filter((m) => !/(\s-s\s|saddr)/.test(m[0]))
+        .some((m) =>
+          covers(
+            (m[1] as string).replace(/[{}\s]/g, "").replace(/-/g, ":"),
+            port,
+          ),
         ),
-      ),
     ),
   };
 }

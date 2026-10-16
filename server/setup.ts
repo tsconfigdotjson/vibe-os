@@ -771,12 +771,10 @@ async function releaseServeStep(
   s.note(
     "it holds port 443, which vibe-os now serves itself; the ts.net URL stops working",
   );
-  const commands = [
-    ["tailscale", "funnel", "reset"],
-    ["tailscale", "serve", "reset"],
-  ];
-  if (await s.confirm("Turn off tailscale serve and funnel?", true, commands))
-    await s.runAll(commands, true);
+  // Funnel is part of the serve config, so this ends it too.
+  const command = ["tailscale", "serve", "reset"];
+  if (await s.confirm("Turn off tailscale serve?", true, [command]))
+    await s.run(command, true);
   else s.warn("left on, so vibe-os may not get port 443");
 }
 
@@ -804,10 +802,18 @@ async function dockerStep(s: Session): Promise<void> {
     ["sh", "-c", `echo '{ "ip": "127.0.0.1" }' > /etc/docker/daemon.json`],
     ["systemctl", "restart", "docker"],
   ];
+  // Restarting docker stops what is running, so that is a no unless asked.
+  const running = (
+    (await s.capture(["docker", "ps", "-q"], true)) ?? ""
+  ).trim();
+  if (running)
+    s.warn(
+      `restarting docker stops its ${running.split("\n").length} running container(s)`,
+    );
   if (
     await s.confirm(
       "Publish Docker's ports on 127.0.0.1 by default?",
-      true,
+      !running,
       commands,
     )
   )
@@ -819,6 +825,24 @@ interface Service {
   host: string;
   token: string | null;
   installed: boolean;
+}
+
+/**
+ * The installed unit's other flags, less any that setup was just given, so a
+ * flag on this run replaces the old one rather than appearing twice.
+ */
+export function keptFlags(rest: string[], given: string[]): string[] {
+  const replaced = new Set(given.filter((w) => w.startsWith("--")));
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const word = rest[i] as string;
+    if (replaced.has(word.split("=")[0] as string)) {
+      if (!word.includes("=") && !rest[i + 1]?.startsWith("-")) i++;
+      continue;
+    }
+    out.push(word);
+  }
+  return out;
 }
 
 /**
@@ -876,15 +900,18 @@ async function serviceStep(
     };
   }
 
-  // Forwarded so the service sees the same paths setup was given.
+  // Forwarded so the service sees the same paths setup was given, and keeps
+  // the flags the installed unit had that setup does not set.
   const forwarded: string[] = ["--port", String(port), "--host", host];
   if (domain) forwarded.push("--domain", domain);
   if (domain && typeof values.email === "string")
     forwarded.push("--email", values.email);
+  const given: string[] = [];
   for (const key of ["workspace", "state-dir", "theme-color"] as const) {
     const value = values[key];
-    if (typeof value === "string") forwarded.push(`--${key}`, value);
+    if (typeof value === "string") given.push(`--${key}`, value);
   }
+  forwarded.push(...keptFlags(current?.rest ?? [], given), ...given);
   const command = [...SELF, "install-service", ...forwarded];
 
   s.heading("service");

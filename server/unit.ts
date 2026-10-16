@@ -10,7 +10,15 @@ export interface UnitFlags {
   token: string | null | undefined;
   /** The name it gets a certificate for and serves HTTPS on. */
   domain: string | null;
+  /**
+   * Every other word after `start`, as written, so a reinstall that changes
+   * the address keeps the rest: `--hibernate-after 5`, `--token=`, and so on.
+   */
+  rest: string[];
 }
+
+/** Flags setup sets itself, so a reinstall does not carry the old ones. */
+const SET_BY_SETUP = ["--port", "--host", "--domain", "--email"];
 
 /**
  * The flags an installed vibe-os unit starts with.
@@ -28,6 +36,7 @@ export function unitFlags(unit: string): UnitFlags {
     host: null,
     token: undefined,
     domain: null,
+    rest: [],
   };
 
   const value = (i: number, name: string): string | undefined => {
@@ -52,5 +61,16 @@ export function unitFlags(unit: string): UnitFlags {
       flags.token = value(i, "--token") || undefined;
     }
   });
+  const start = words.indexOf("start");
+  for (let i = start + 1; start !== -1 && i < words.length; i++) {
+    const word = words[i] as string;
+    const name = word.split("=")[0] as string;
+    if (SET_BY_SETUP.includes(name)) {
+      // `--port 80` takes the next word with it; `--port=80` does not.
+      if (!word.includes("=") && !words[i + 1]?.startsWith("-")) i++;
+      continue;
+    }
+    flags.rest.push(word);
+  }
   return flags;
 }

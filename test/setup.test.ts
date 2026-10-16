@@ -4,6 +4,7 @@ import {
   display,
   hasLoginKey,
   installCommands,
+  keptFlags,
   packagesFor,
   parseTailscaleStatus,
   passwordLoginOn,
@@ -78,6 +79,7 @@ describe("unitFlags", () => {
       host: "127.0.0.1",
       token: "hunter2",
       domain: null,
+      rest: ["--token", "hunter2"],
     });
   });
 
@@ -90,6 +92,7 @@ describe("unitFlags", () => {
       host: "127.0.0.1",
       token: undefined,
       domain: null,
+      rest: ["--token="],
     });
     expect(unitFlags(unit("vibe-os start --token --port=80")).token).toBe(
       undefined,
@@ -106,6 +109,7 @@ describe("unitFlags", () => {
       host: null,
       token: undefined,
       domain: null,
+      rest: [],
     });
   });
 
@@ -122,6 +126,7 @@ describe("unitFlags", () => {
       host: "::",
       token: undefined,
       domain: "vps-a272961f.vps.ovh.ca",
+      rest: ["--token=", "--hibernate-after", "5"],
     });
     expect(
       unitFlags(unit("vibe-os start --domain=box.example.com")).domain,
@@ -214,6 +219,7 @@ describe("servicePlan", () => {
     host: null,
     token: undefined,
     domain: null,
+    rest: [],
     ...patch,
   });
 
@@ -282,5 +288,33 @@ describe("servicePlan", () => {
         "b.example",
       ),
     ).toEqual({ port: 80, host: "0.0.0.0", keep: false });
+  });
+});
+
+describe("keptFlags", () => {
+  test("a reinstall keeps the flags setup does not set", () => {
+    // The box's unit, moved to another address: --hibernate-after survives.
+    const { rest } = unitFlags(
+      "ExecStart=/usr/local/bin/vibe-os start --port 7681 --host 127.0.0.1 --token= --hibernate-after 5\n",
+    );
+    expect(rest).toEqual(["--token=", "--hibernate-after", "5"]);
+    expect(keptFlags(rest, [])).toEqual(["--token=", "--hibernate-after", "5"]);
+  });
+
+  test("a flag given now replaces the old one, in either spelling", () => {
+    expect(
+      keptFlags(
+        ["--workspace", "/old", "--theme-color=#fff", "--no-sessions"],
+        ["--workspace", "/new", "--theme-color", "#000"],
+      ),
+    ).toEqual(["--no-sessions"]);
+  });
+
+  test("setup's own flags never come back from the old unit", () => {
+    expect(
+      unitFlags(
+        "ExecStart=vibe-os start --domain=a.example --email x@y.z --port=80 --host :: --memory-max 60%\n",
+      ).rest,
+    ).toEqual(["--memory-max", "60%"]);
   });
 });

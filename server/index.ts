@@ -457,10 +457,24 @@ export async function startServer(config: Config): Promise<RunningServer> {
       tlsReady = true;
       // Certificates last 90 days and this process is meant to run for longer,
       // so expiry has to be re-checked while it runs, not only at boot.
-      stopRenewal = a.watch((renewed) => {
+      // Bun cannot change a running server's certificate, so the HTTPS
+      // server is replaced. Open connections drop, and the desktop reconnects.
+      // A failed bind is retried rather than leaving HTTPS down until a
+      // restart.
+      stopRenewal = a.watch(async (renewed) => {
         httpsServer?.stop(true);
-        httpsServer = makeServer(config.tlsPort, true, renewed);
-        log.ok(`TLS certificate renewed for ${domain}`);
+        for (let attempt = 1; ; attempt++) {
+          try {
+            httpsServer = makeServer(config.tlsPort, true, renewed);
+            log.ok(`TLS certificate renewed for ${domain}`);
+            return;
+          } catch (err) {
+            log.error(
+              `could not serve HTTPS on ${config.tlsPort} with the renewed certificate (attempt ${attempt}): ${describeError(err)}`,
+            );
+            await Bun.sleep(Math.min(60_000, 1_000 * 2 ** attempt));
+          }
+        }
       });
       return true;
     } catch (err) {

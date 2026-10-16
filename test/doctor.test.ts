@@ -234,6 +234,31 @@ describe("open ports", () => {
     });
   });
 
+  test("a rule for one source does not open the port to everyone", () => {
+    expect(
+      parseUfw(
+        "Status: active\n443/tcp                    ALLOW IN    10.0.0.0/8\n",
+      ).open.https,
+    ).toBe(false);
+    expect(
+      parseNftOrIptables(
+        "-A ufw-user-input -s 10.0.0.0/8 -p tcp -m tcp --dport 443 -j ACCEPT\n",
+      ).open.https,
+    ).toBe(false);
+    expect(
+      parseNftOrIptables("ip saddr 10.0.0.0/8 tcp dport 443 accept\n").open
+        .https,
+    ).toBe(false);
+  });
+
+  test("iptables multiport", () => {
+    expect(
+      parseNftOrIptables(
+        "-A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT\n",
+      ).open,
+    ).toEqual({ ssh: false, http: true, https: true });
+  });
+
   test("a port counted but not accepted is not open", () => {
     expect(
       parseNftOrIptables("tcp dport 80 counter packets 1 bytes 2 drop\n").open

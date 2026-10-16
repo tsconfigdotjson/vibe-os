@@ -215,17 +215,18 @@ function printChecks(checks: Check[]): number {
 }
 
 /**
- * As root, runs doctor again with the checked user's (`--user`, or the one who
- * ran sudo) HOME and `~/.local/bin` on PATH, where their agents are installed and sudo's PATH does not look.
+ * Under sudo, runs doctor again with the HOME and `~/.local/bin` of the user
+ * who ran sudo on PATH, where their agents are installed and sudo's PATH does not look.
  * A compiled binary's children do not see `process.env` changed at runtime,
  * so the environment has to be set when the process starts. Null when there
  * is nothing to change, so this run carries on.
  */
 async function doctorAsSudoUser(values: RawOptions): Promise<number | null> {
-  if (process.getuid?.() !== 0) return null;
-  const user =
-    typeof values.user === "string" ? values.user : process.env.SUDO_USER;
-  if (!user || user === "root") return null;
+  // Only the account that ran sudo: root running another account's
+  // ~/.local/bin would let that account run code as root.
+  const user = process.env.SUDO_USER;
+  if (process.getuid?.() !== 0 || !user || user === "root") return null;
+  if (typeof values.user === "string" && values.user !== user) return null;
   const home = await homeFor(user);
   if (!home) return null;
   const bin = path.join(home, ".local", "bin");
