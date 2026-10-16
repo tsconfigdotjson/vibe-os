@@ -73,6 +73,7 @@ const HELP = `
     vibe-os output <window> [--lines <n>] [--follow]
                                  print what a window shows
     vibe-os wait <window...> [--until <state>] [--timeout <s>] [--turn]
+                 [--background]
                                  wait for a window to settle
     vibe-os events [window...] [--label <text>]
                                  print window events as JSON lines
@@ -142,6 +143,8 @@ const HELP = `
                         idle, question, or change
     --timeout <s>       how long wait waits (default 60). Exits 2 if it ran out
     --turn              wait for the answer to the last send, not just quiet
+    --background        also wait for commands a Claude window left running
+                        in the background
 
   ${color.bold("install-browser")}
     --geometry <WxH>    virtual screen size (default 1600x900)

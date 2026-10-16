@@ -481,6 +481,32 @@ describe("tools", () => {
     });
   });
 
+  test("wait says when a background command is still running", async () => {
+    const c = await connect(
+      stubOps({
+        wait: (async (targets: AttachTarget[]) => ({
+          ref: targets[0].ref,
+          state: "idle",
+          reached: true,
+          waitedMs: 10,
+          lastOutputAt: 1,
+          window: summary(targets[0].ref),
+          background: true,
+        })) as Ops["wait"],
+      }),
+    );
+    const r = await c.callTool({
+      name: "vibe_wait",
+      arguments: { windows: "quiet-amber-otter-1" },
+    });
+    expect(textOf(r)).toContain("background: true");
+    const [, opts] = (calls.find((x) => x.name === "wait")?.args ?? []) as [
+      unknown,
+      WaitOptions,
+    ];
+    expect(opts.background).toBe(false);
+  });
+
   test("wait refuses a timeout past four minutes", async () => {
     const c = await connect(stubOps());
     const r = await c.callTool({

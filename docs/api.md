@@ -275,6 +275,7 @@ returns. This replaces polling `output` in a loop.
 | `until` | optional. `settled` (default): not `busy`, so `idle`, `question` or `asleep`. `idle` or `question`: that state. `change`: any state other than the one when the wait began |
 | `timeout` | optional. Seconds, 1 to 240, default 60 |
 | `turn` | optional. `1` with `settled`: also wait until the turn after the last send is `done` (see [`turn`](#windows)), so the idle before the window starts on a send does not count |
+| `background` | optional. `1` with `settled`: also wait until the agent has no command running in the background. Claude windows only |
 | `lines` | optional. Include the window's last lines of output, as `output` does. Default 0 |
 
 ```json
@@ -285,6 +286,13 @@ returns. This replaces polling `output` in a loop.
 A window that is not running answers at once with its state: `asleep`, or null
 with `live: false` in `window`. Waiting does not wake a hibernated window.
 `window` is the window's summary, as `GET /api/windows` returns it.
+
+Claude Code moves long commands into the background and goes back to its
+prompt, then answers again when the command finishes. So a Claude window can
+be `idle` with its turn `done` while the work is still going. When that is so,
+the result has `"background": true`. Pass `background=1` to wait for those
+commands too. It is off by default because a command that never ends, like a
+dev server, would keep the wait going until it times out.
 
 `GET /api/windows/wait?refs=a,b,c` waits on up to 32 windows, by ref or id, and
 returns when any one of them meets `until`. `ref` names that window, and
@@ -403,7 +411,7 @@ vibe-os close quiet-amber-otter-1
 | `vibe-os workspace ls [project]` | list workspaces |
 | `vibe-os open <workspace> [--profile <name>] [--prompt <text>] [--blank label=value] [--submit] [--force] [--label <text>] [--reuse]` | add a window, start it, and paste a prompt if given. Prints the window's ref. With `--reuse`, the window already open with `--label` is used instead |
 | `vibe-os output <window> [--lines <n>] [--follow]` | print what a window shows. `--follow` keeps printing new lines until the window stops |
-| `vibe-os wait <window...> [--until <state>] [--timeout <s>] [--turn]` | wait for any of the windows to settle. Exits 0 when one did, 2 when time ran out, 1 when a window is not running |
+| `vibe-os wait <window...> [--until <state>] [--timeout <s>] [--turn] [--background]` | wait for any of the windows to settle. Exits 0 when one did, 2 when time ran out, 1 when a window is not running |
 | `vibe-os events [window...] [--label <text>]` | print window events as JSON lines, until interrupted |
 | `vibe-os close <window>` | close a window and end its session |
 

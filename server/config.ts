@@ -143,6 +143,7 @@ export const OPTION_SPEC = {
   until: { type: "string" as const },
   timeout: { type: "string" as const },
   turn: { type: "boolean" as const },
+  background: { type: "boolean" as const },
   help: { type: "boolean" as const, short: "h" },
   version: { type: "boolean" as const, short: "v" },
 };

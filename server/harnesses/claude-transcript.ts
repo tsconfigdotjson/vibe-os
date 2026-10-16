@@ -32,6 +32,23 @@ async function sessionIdFor(sock: string): Promise<string | null> {
   return UUID.test(marker) ? marker : null;
 }
 
+/**
+ * Whether the Claude in a window has a background command running.
+ *
+ * Claude's registry says `shell` while one runs, and `idle` at its prompt with
+ * none. When the command finishes, Claude is told and answers again, so a
+ * window in `shell` has not finished its turn, whatever its screen shows.
+ */
+export async function claudeBackground(window: {
+  sock: string;
+}): Promise<boolean> {
+  for (const pid of await sessionProcesses(window.sock).catch(() => [])) {
+    const registry = await readRegistry(pid);
+    if (registry) return registry.status === "shell";
+  }
+  return false;
+}
+
 interface Block {
   type?: string;
   text?: string;

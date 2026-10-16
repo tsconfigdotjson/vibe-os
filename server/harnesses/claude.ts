@@ -255,4 +255,6 @@ export const claude: HarnessAdapter = {
   // the profile table, which imports this file.
   messages: async (window, last) =>
     (await import("./claude-transcript.ts")).claudeMessages(window, last),
+  background: async (window) =>
+    (await import("./claude-transcript.ts")).claudeBackground(window),
 };

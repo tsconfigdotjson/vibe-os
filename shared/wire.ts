@@ -257,6 +257,11 @@ export interface WaitResult {
   /** With `lines`: the window's last lines, as `output` returns them. */
   text?: string;
   cursor?: number;
+  /**
+   * The agent in the window still has a command running in the background,
+   * and will say more when it finishes. Known for Claude windows only.
+   */
+  background?: boolean;
   /** With more than one window: where each of them is. */
   windows?: {
     ref: string;

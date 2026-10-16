@@ -128,6 +128,7 @@ function waitQuery(url: URL, signal: AbortSignal) {
     until,
     timeoutMs: intParam(url, "timeout", 1, MAX_WAIT_S, DEFAULT_WAIT_S) * 1000,
     turn: boolParam(url, "turn"),
+    background: boolParam(url, "background"),
     lines: intParam(url, "lines", 0, MAX_OUTPUT_LINES, 0),
     signal,
   };
