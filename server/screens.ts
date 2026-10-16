@@ -148,7 +148,14 @@ function rowsText(
     if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
     else lines.push(text);
   }
-  const trimmed = lines.map((l) => l.trimEnd());
+  const trimmed: string[] = [];
+  for (const line of lines.map((l) => l.trimEnd())) {
+    // One blank line says as much as ten. A full-screen harness pads the
+    // space between a short conversation and its input box with blank rows,
+    // and counted as lines they pushed the answer out of a short read.
+    if (line === "" && trimmed.at(-1) === "") continue;
+    trimmed.push(line);
+  }
   while (trimmed.length > 0 && trimmed[trimmed.length - 1] === "")
     trimmed.pop();
   return trimmed;
@@ -160,7 +167,7 @@ function rowsText(
  * A line the terminal wrapped is joined back to the one it continues, so a
  * long line reads as it was written rather than as the width it was drawn at.
  * Blank lines at the bottom, which are only the unused part of the screen, are
- * dropped.
+ * dropped, and a run of blank lines anywhere else reads as one.
  *
  * Faint text on the cursor's line is left out. That is where a harness draws a
  * placeholder or a suggested prompt, greyed out with SGR 2 (Claude's `Try

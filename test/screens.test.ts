@@ -85,6 +85,16 @@ describe("bufferText", () => {
     term.dispose();
   });
 
+  test("a run of blank lines reads as one", async () => {
+    const term = new Terminal({ rows: 12, cols: 20, allowProposedApi: true });
+    await write(term, "answer\r\n\r\n\r\n\r\n\r\n\r\n❯\r\nstatus");
+    expect(bufferText(term, 3)).toBe(
+      "answer\n\n❯\nstatus".split("\n").slice(-3).join("\n"),
+    );
+    expect(bufferText(term, 10)).toBe("answer\n\n❯\nstatus");
+    term.dispose();
+  });
+
   test("joins a line the terminal wrapped", async () => {
     const term = new Terminal({ rows: 5, cols: 10, allowProposedApi: true });
     await write(term, "abcdefghijklmno\r\nfive five next");

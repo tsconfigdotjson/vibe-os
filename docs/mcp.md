@@ -39,6 +39,11 @@ token, it reports progress every 20 seconds and on every change, which keeps a
 client's idle timeout from firing during a long turn. Claude Code moves a call
 that runs past two minutes into the background and says when it finishes.
 
+`vibe_read_output` with `after` returns only what scrolled into the history
+since an earlier read, plus the screen. A full-screen program such as Claude
+Code keeps no history, so for those it is the screen each time; use
+`vibe_read_messages` for what a Claude window said.
+
 Neither `vibe_wait` nor `vibe_read_output` wakes a hibernated window.
 `vibe_send` does.
 

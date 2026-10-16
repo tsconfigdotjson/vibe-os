@@ -250,11 +250,17 @@ each time. `truncated` is true when some of what came after the cursor is no
 longer held (the history keeps 1000 lines), or when the cursor is from before a
 server restart. `lines` limits `text` when given with `after`.
 
+A full-screen program, such as Claude Code since it moved to drawing in the
+terminal's alternate screen, keeps no history: nothing scrolls off its screen,
+so `cursor` stays put, `text` is empty, and `screen` is everything there is.
+For a Claude window, `messages` below is the better way to read what was said.
+
 A hibernated window answers with what it showed when it went to sleep,
 `state: "asleep"` and `lastOutputAt: null`, and is not woken by the read.
 
 The text is the screen and the history above it, up to 1000 lines. A long line
-the terminal wrapped is joined back into one. Faint text on the cursor's line
+the terminal wrapped is joined back into one, and a run of blank lines reads as
+one. Faint text on the cursor's line
 is left out, so a greyed-out placeholder or suggested prompt in a harness's
 input box does not read as text someone typed. A window that was already running
 when the server started is asked to redraw itself the first time it is read,
