@@ -37,6 +37,7 @@ edit, no `sshd_config` change, and no root.
 ## Contents
 
 - [Quick start](#quick-start)
+- [Drive it from an agent (MCP)](#drive-it-from-an-agent-mcp)
 - [How it works](#how-it-works)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
@@ -74,6 +75,33 @@ every command before it runs it. See [Setup](docs/deploying.md#setup) for what i
 For an agent with SSH access to the box, the prompt is one line:
 
 > Install vibe-os with `curl -fsSL https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/install.sh | sh`, then run `vibe-os setup --yes` and show me its output.
+
+---
+
+## Drive it from an agent (MCP)
+
+vibe-os is also an MCP server, at `/mcp` on the same URL as the desktop. An agent
+in Claude Code, Codex, Cursor or any other MCP client can create workspaces,
+open windows as profiles, hand them prompts, wait for them to finish and read
+their answers.
+
+It needs the URL and the server's token. On the box, the token is in
+`~/.vibe-os/config.json`:
+
+```bash
+export VIBE_OS_TOKEN=$(sed -n 's/.*"token": *"\([^"]*\)".*/\1/p' ~/.vibe-os/config.json)
+```
+
+Then, for Claude Code:
+
+```bash
+claude mcp add --transport http vibe-os https://your-box.example.com/mcp \
+  --header "Authorization: Bearer $VIBE_OS_TOKEN"
+```
+
+[MCP](docs/mcp.md#setup) has the setup for Codex, Cursor, VS Code, Windsurf,
+Gemini CLI and Claude Desktop, and the tools it offers. The token is a shell on
+the box: keep it out of anything that is shared or logged.
 
 ---
 

@@ -46,24 +46,44 @@ saying how much was cut.
 
 ## Setup
 
-The server's URL is the desktop's, plus `/mcp`. The token is the one in
-`~/.vibe-os/config.json`, or the one `vibe-os start` printed.
+Every client needs two things:
+
+- **The URL:** the desktop's address plus `/mcp`, like
+  `https://your-box.example.com/mcp`. On a tailnet it is
+  `https://<machine>.<tailnet>.ts.net/mcp`. To reach it from outside the
+  tailnet, see [Through Tailscale Funnel](#through-tailscale-funnel).
+- **The token:** the one `vibe-os start` printed in its URL, also stored in
+  `~/.vibe-os/config.json` on the box. Each client sends it as an
+  `Authorization: Bearer <token>` header.
+
+The examples read the token from an environment variable rather than writing
+it into the config file:
+
+```sh
+# on the box
+sed -n 's/.*"token": *"\([^"]*\)".*/\1/p' ~/.vibe-os/config.json
+
+# where the client runs
+export VIBE_OS_TOKEN=<the token>
+```
 
 ### Claude Code
 
 ```sh
-claude mcp add --transport http vibe-os https://box.tailnet.ts.net/mcp \
+claude mcp add --transport http vibe-os https://your-box.example.com/mcp \
   --header "Authorization: Bearer $VIBE_OS_TOKEN"
 ```
 
-Or in `.mcp.json`, where `${VIBE_OS_TOKEN}` is read from the environment:
+Add `--scope user` to have it in every project. To share it with a repository
+instead, put it in `.mcp.json`, where `${VIBE_OS_TOKEN}` is read from each
+person's environment:
 
 ```json
 {
   "mcpServers": {
     "vibe-os": {
       "type": "http",
-      "url": "https://box.tailnet.ts.net/mcp",
+      "url": "https://your-box.example.com/mcp",
       "headers": { "Authorization": "Bearer ${VIBE_OS_TOKEN}" }
     }
   }
@@ -76,37 +96,113 @@ In `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.vibe-os]
-url = "https://box.tailnet.ts.net/mcp"
+url = "https://your-box.example.com/mcp"
 bearer_token_env_var = "VIBE_OS_TOKEN"
 ```
 
 ### Cursor
 
-In `~/.cursor/mcp.json`:
+In `~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project:
 
 ```json
 {
   "mcpServers": {
     "vibe-os": {
-      "url": "https://box.tailnet.ts.net/mcp",
+      "url": "https://your-box.example.com/mcp",
       "headers": { "Authorization": "Bearer ${env:VIBE_OS_TOKEN}" }
     }
   }
 }
 ```
 
-### Over stdio
+### VS Code
 
-`vibe-os mcp` is the same tools over stdin and stdout, for a client that starts
-a command rather than calling a URL. It finds the server the way `vibe-os ls`
-does: on the box, from `~/.vibe-os/config.json`; elsewhere, from `--url` and
-`--token` or `VIBE_OS_URL` and `VIBE_OS_TOKEN`.
+In `.vscode/mcp.json`. VS Code asks for the token once and stores it:
+
+```json
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "vibe-os-token",
+      "description": "vibe-os token",
+      "password": true
+    }
+  ],
+  "servers": {
+    "vibe-os": {
+      "type": "http",
+      "url": "https://your-box.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${input:vibe-os-token}" }
+    }
+  }
+}
+```
+
+### Windsurf
+
+In `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "vibe-os": {
+      "serverUrl": "https://your-box.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${env:VIBE_OS_TOKEN}" }
+    }
+  }
+}
+```
+
+### Gemini CLI
+
+In `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "vibe-os": {
+      "httpUrl": "https://your-box.example.com/mcp",
+      "headers": { "Authorization": "Bearer $VIBE_OS_TOKEN" }
+    }
+  }
+}
+```
+
+### Claude Desktop, and any client that starts a command
+
+`vibe-os mcp` serves the same tools over stdin and stdout and passes each call
+on to the server. Use it for a client that can only start a local command, or
+cannot set a header. It needs vibe-os installed where the client runs
+(`bun add -g @tsconfigdotjson/vibe-os`).
+
+For Claude Desktop, in `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "vibe-os": {
+      "command": "vibe-os",
+      "args": ["mcp", "--url", "https://your-box.example.com"],
+      "env": { "VIBE_OS_TOKEN": "<the token>" }
+    }
+  }
+}
+```
+
+`--url` is the server's address without `/mcp`. On the box itself, `vibe-os mcp`
+needs neither: it finds the server and token the way `vibe-os ls` does. It logs
+to stderr only.
 
 ```sh
 claude mcp add vibe-os -- vibe-os mcp
 ```
 
-It logs to stderr only.
+### Checking it works
+
+Ask the agent to list vibe-os projects. It should call `vibe_list_projects`. A
+`401` means the token did not arrive: check the variable is set where the client
+runs, and that the header reads `Bearer <token>`.
 
 ## Authentication
 
@@ -115,8 +211,9 @@ cookie. A token in the query string is not accepted there. Without a token, the
 answer is `401` with `WWW-Authenticate: Bearer`. A server started with
 `--no-token` needs none, and answers only to its own names, as for the API.
 
-claude.ai and Claude Desktop connectors cannot use it yet: they need OAuth, and
-vibe-os has a single static token.
+claude.ai connectors, and connectors added in Claude Desktop's settings, cannot
+use it yet: they need OAuth, and vibe-os has a single static token. Claude Desktop
+can still use it through `vibe-os mcp`, above.
 
 ## Through Tailscale Funnel
 
