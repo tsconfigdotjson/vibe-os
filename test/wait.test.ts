@@ -480,6 +480,42 @@ describe.skipIf(!hasDtach)("waiting on windows", () => {
     }
   }, 30_000);
 
+  test("a shell's turn lasts as long as its command, however quiet", async () => {
+    const id = addWindow(5, null);
+    // No profile: the user's own interactive shell, as a plain terminal gets.
+    const cmd = windowCommand(`vibe-${WORKSPACE}-5`, dir, config, undefined, {
+      detached: true,
+    }) as string;
+    expect(spawnSync("/bin/sh", ["-c", cmd]).status).toBe(0);
+    try {
+      await screens.watch(`vibe-${WORKSPACE}-5`, { fresh: true });
+      await screens.settle(`vibe-${WORKSPACE}-5`, 10_000);
+      const sent = await bodyOf<{ delivered: boolean }>(
+        call("POST", `/api/windows/${id}/send`, {
+          text: "sleep 4; echo HELD-$((6*7))",
+          submit: true,
+        }),
+      );
+      expect(sent.body.delivered).toBe(true);
+      // The echo of the command line goes quiet long before the command ends.
+      const early = await bodyOf<WaitResult>(
+        call("GET", `/api/windows/${id}/wait?timeout=10`),
+      );
+      expect(early.body.state).toBe("idle");
+      expect(early.body.window.turn).toBe("working");
+
+      const done = await bodyOf<WaitResult>(
+        call("GET", `/api/windows/${id}/wait?turn=1&timeout=20&lines=5`),
+      );
+      expect(done.body.reached).toBe(true);
+      expect(done.body.text).toContain("HELD-42");
+      expect(done.body.window.turn).toBe("done");
+    } finally {
+      await killSession(config, `vibe-${WORKSPACE}-5`).catch(() => {});
+      db.delete(windows).where(eq(windows.id, id)).run();
+    }
+  }, 40_000);
+
   test("closing a window says so on the event stream", async () => {
     const id = addWindow(3, null);
     const abort = new AbortController();

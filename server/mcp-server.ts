@@ -647,7 +647,7 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
           ? `${result.ref} is ${result.state} after ${Math.round(result.waitedMs / 1000)}s`
           : result.state === null || result.state === "asleep"
             ? `${result.ref} is ${result.state ?? "not running"}`
-            : `still ${result.state} after ${Math.round(result.waitedMs / 1000)}s; call vibe_wait again to keep waiting`;
+            : `still ${result.state} after ${Math.round(result.waitedMs / 1000)}s${result.window.turn === "working" && result.state !== "busy" ? ", with its last command still running" : ""}; call vibe_wait again to keep waiting`;
         const others = result.windows
           ? `\n${result.windows.map((w) => `${w.ref}: ${w.state ?? "stopped"}${w.turn ? `, turn ${w.turn}` : ""}`).join("\n")}`
           : "";
