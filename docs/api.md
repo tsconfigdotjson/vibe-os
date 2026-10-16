@@ -134,6 +134,9 @@ it. A send that submits text, or presses keys, starts a turn:
 Both are null when nothing has been sent since the server started. Like
 `lastOutputAt`, they are kept in memory and start over when the server restarts.
 A window that is `idle` with `turn: "pending"` has not started on the send yet.
+In a plain terminal or a shell profile, the turn is the command: it stays
+`working` until the shell has the terminal back, so a quiet `sleep 60` is not
+done while it runs.
 
 `GET /api/workspaces/:workspace/windows` lists one workspace's windows, with
 their layout on the desktop.

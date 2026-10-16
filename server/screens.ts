@@ -45,6 +45,8 @@ const SIZE_CHECK_MS = 1_000;
 /** How long the width stays one column short while asking for a repaint. */
 const NUDGE_MS = 200;
 const POLL_MS = 250;
+/** How often a held turn asks again whether the window is still at work. */
+const HOLD_POLL_MS = 2_000;
 
 /**
  * What a program waiting on a question looks like, as opposed to waiting at its
@@ -488,6 +490,15 @@ export class Screens {
   private readonly turns = new Map<string, TurnState>();
   /** Sessions known to be hibernated, so their next screen is a wake. */
   private readonly asleep = new Set<string>();
+  /**
+   * Asked before a turn is done: true while the window is still at work in a
+   * way its screen does not show, like a shell running a quiet command.
+   */
+  private hold: ((session: string) => Promise<boolean>) | null = null;
+  private readonly holdTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly config: Config) {}
@@ -501,6 +512,8 @@ export class Screens {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    for (const t of this.holdTimers.values()) clearTimeout(t);
+    this.holdTimers.clear();
     for (const screen of this.open.values()) screen.close();
     this.open.clear();
   }
@@ -545,10 +558,11 @@ export class Screens {
    */
   noteSend(session: string, at: number): void {
     const screen = this.open.get(session);
+    this.clearHold(session);
     this.turns.set(session, { lastSendAt: at, turn: "pending" });
     if (screen && screen.lastOutputAt !== null && screen.lastOutputAt >= at) {
       this.setTurn(session, "working");
-      if (screen.state !== "busy") this.setTurn(session, "done");
+      if (screen.state !== "busy") this.finishTurn(session);
       return;
     }
     this.emit({ type: "turn", session, turn: "pending", at: Date.now() });
@@ -562,8 +576,48 @@ export class Screens {
     this.emit({ type: "turn", session, turn, at: Date.now() });
   }
 
+  /** Sets what is asked before a turn is done. See `hold`. */
+  setTurnHold(fn: (session: string) => Promise<boolean>): void {
+    this.hold = fn;
+  }
+
+  private clearHold(session: string): void {
+    const t = this.holdTimers.get(session);
+    if (t) clearTimeout(t);
+    this.holdTimers.delete(session);
+  }
+
+  /**
+   * Ends a working turn once the window has gone quiet, unless the hold says
+   * it is still at work; then asks again every few seconds. A command that
+   * ends usually draws a prompt, which comes back through here anyway.
+   */
+  private finishTurn(session: string): void {
+    this.clearHold(session);
+    if (!this.hold) {
+      this.setTurn(session, "done");
+      return;
+    }
+    void this.hold(session)
+      .catch(() => false)
+      .then((held) => {
+        if (this.turns.get(session)?.turn !== "working") return;
+        const screen = this.open.get(session);
+        // The session ended: whatever it was doing is over.
+        if (!screen) return this.setTurn(session, "done");
+        if (screen.state === "busy") return;
+        if (!held) return this.setTurn(session, "done");
+        this.clearHold(session);
+        this.holdTimers.set(
+          session,
+          setTimeout(() => this.finishTurn(session), HOLD_POLL_MS),
+        );
+      });
+  }
+
   /** Drops what is remembered about a session whose window was closed. */
   forget(session: string): void {
+    this.clearHold(session);
     this.turns.delete(session);
     this.asleep.delete(session);
   }
@@ -581,7 +635,7 @@ export class Screens {
   ): void {
     this.emit({ type: "state", session, from, to, at: Date.now() });
     if (to !== "busy" && this.turns.get(session)?.turn === "working")
-      this.setTurn(session, "done");
+      this.finishTurn(session);
   }
 
   /**

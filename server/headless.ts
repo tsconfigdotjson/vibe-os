@@ -272,6 +272,33 @@ export async function sessionTty(sock: string): Promise<string | null> {
 }
 
 /**
+ * Whether a session's shell is running a command in the foreground, rather
+ * than sitting at its prompt. Null when it cannot be told.
+ *
+ * The program dtach started is the shell. A shell gives the terminal to each
+ * command it runs, as its own process group, and takes it back when the
+ * command ends, so the terminal's foreground group is the shell's own exactly
+ * when it is at its prompt.
+ */
+export async function foregroundCommand(sock: string): Promise<boolean | null> {
+  for (const master of await pgrep(["-f", `^([^ ]*/)?dtach -n ${sock}`])) {
+    for (const child of await pgrep(["-P", String(master)])) {
+      const { stdout } = await run(
+        "ps",
+        ["-o", "pgid=,tpgid=", "-p", String(child)],
+        { timeout: 10_000 },
+      ).catch(() => ({ stdout: "" }));
+      const m = /^\s*(\d+)\s+(-?\d+)\s*$/.exec(stdout);
+      if (!m) continue;
+      const tpgid = Number(m[2]);
+      if (tpgid <= 0) return null;
+      return tpgid !== Number(m[1]);
+    }
+  }
+  return null;
+}
+
+/**
  * Whether a terminal is in raw mode, which is how a program says it is reading
  * keys itself. Null when it cannot be read.
  */

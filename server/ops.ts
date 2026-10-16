@@ -28,6 +28,7 @@ import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { harness } from "./harness.ts";
 import {
+  foregroundCommand,
   KEY_NAMES,
   keyBytes,
   paste,
@@ -384,6 +385,16 @@ export function createOps(deps: OpsDeps) {
       off();
     };
   }
+
+  // A shell's turn is the command it was given: it lasts until the shell has
+  // the terminal back, however quiet the command is meanwhile.
+  screens.setTurnHold(async (session) => {
+    const t = whose(session);
+    if (!t) return false;
+    const profile = t.profileId ? getProfile(db, t.profileId) : undefined;
+    if (t.profileId && profile?.harness !== "shell") return false;
+    return (await foregroundCommand(socketPath(config, session))) === true;
+  });
 
   const opened = (t: AttachTarget) => {
     known.set(t.session, t);
