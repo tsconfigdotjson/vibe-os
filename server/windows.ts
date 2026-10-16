@@ -107,26 +107,13 @@ function toRow(w: typeof windows.$inferSelect) {
 /** What happens to a window whose session died under it. See `windows.restore`. */
 export type Restore = "ask" | "resume";
 
-/**
- * Places a new window without landing exactly on an existing one.
- *
- * A plain cascade walks off the bottom-right after a few windows, so this wraps
- * back and nudges sideways instead.
- */
-function placement(index: number): Geometry {
-  const colSpan = DEFAULT_WINDOW_COLS;
-  const rowSpan = DEFAULT_WINDOW_ROWS;
-  const step = 2;
-  const slots = Math.max(1, Math.floor((GRID_COLS - colSpan) / step));
-  const lane = index % slots;
-  const wrap = Math.floor(index / slots);
-  return sanitize({
-    col: lane * step + wrap,
-    row: (lane * step + wrap) % Math.max(1, GRID_ROWS - rowSpan),
-    colSpan,
-    rowSpan,
-  });
-}
+/** A new window opens filling the desktop. Maximize toggles it back to the default size. */
+const FULL: Geometry = {
+  col: 0,
+  row: 0,
+  colSpan: GRID_COLS,
+  rowSpan: GRID_ROWS,
+};
 
 export function createWindow(
   db: Db,
@@ -143,7 +130,7 @@ export function createWindow(
   while (used.has(idx)) idx += 1;
 
   const topZ = existing.reduce((max, w) => Math.max(max, w.z), 0);
-  const geometry = placement(existing.length);
+  const geometry = FULL;
   const id = newId();
 
   db.insert(windows)

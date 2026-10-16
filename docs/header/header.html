@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vibe-os header</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void: #06080c;
+    --plate: #0d1117;
+    --panel: #111620;
+    --line: #1f2633;
+    --text: #dfe5f0;
+    --dim: #9aa3b6;
+    --muted: #667085;
+    --cyan: #56cfe1;
+    --amber: #f2c14e;
+    --green: #7ee081;
+    --violet: #a78bfa;
+    --rose: #f472b6;
+    --blue: #6d9cf5;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+    --sans: "Space Grotesk", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--void); }
+  body { width: 1280px; height: 600px; overflow: hidden; }
+
+  .banner {
+    position: relative;
+    width: 1280px;
+    height: 600px;
+    overflow: hidden;
+    background:
+      radial-gradient(600px 380px at 78% 30%, rgba(86, 207, 225, 0.16), transparent 70%),
+      radial-gradient(520px 360px at 92% 95%, rgba(167, 139, 250, 0.14), transparent 70%),
+      radial-gradient(420px 300px at 8% 100%, rgba(126, 224, 129, 0.08), transparent 70%),
+      var(--void);
+    font-family: var(--mono);
+    color: var(--text);
+  }
+  .banner::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(154, 163, 182, 0.13) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: linear-gradient(90deg, rgba(0,0,0,.9), rgba(0,0,0,.35));
+  }
+
+  /* Left: the pitch */
+  .pitch {
+    position: absolute;
+    left: 64px;
+    top: 72px;
+    width: 560px;
+  }
+  .brand { display: flex; align-items: center; gap: 16px; }
+  .logo {
+    width: 52px; height: 52px; border-radius: 12px;
+    background: var(--plate);
+    border: 1px solid var(--line);
+    position: relative;
+    box-shadow: 0 0 40px rgba(86, 207, 225, 0.25);
+  }
+  .logo::after {
+    content: ""; position: absolute;
+    left: 13px; top: 13px; width: 16px; height: 26px;
+    border-radius: 2px; background: var(--cyan);
+  }
+  .name { font-size: 40px; font-weight: 800; letter-spacing: -1px; }
+  .name .dash { color: var(--cyan); }
+
+  .lines { margin-top: 40px; display: grid; gap: 10px; }
+  .line {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 42px;
+    line-height: 1.1;
+    letter-spacing: -1.5px;
+    white-space: nowrap;
+  }
+  .line .bang { color: var(--k); }
+  .line .hl {
+    color: var(--k);
+    position: relative;
+  }
+  .l1 { --k: var(--cyan); }
+  .l2 { --k: var(--violet); }
+  .l3 { --k: var(--green); }
+
+  .prompt {
+    margin-top: 40px;
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 12px 16px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(13, 17, 23, 0.85);
+    font-size: 15px;
+    color: var(--dim);
+  }
+  .prompt .sig { color: var(--green); }
+  .prompt .cmd { color: var(--text); }
+  .cursor {
+    display: inline-block; width: 9px; height: 18px;
+    background: var(--cyan); border-radius: 1px;
+  }
+
+  /* Right: the box, in a browser */
+  .browser {
+    position: absolute;
+    left: 712px; top: 70px;
+    width: 528px; height: 380px;
+    border-radius: 14px;
+    background: var(--plate);
+    border: 1px solid #263042;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(86, 207, 225, 0.06);
+    overflow: hidden;
+    transform: perspective(1600px) rotateY(-9deg) rotateX(3deg);
+    transform-origin: 30% 50%;
+  }
+  .bar {
+    height: 38px; display: flex; align-items: center; gap: 8px;
+    padding: 0 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: #2a3242; }
+  .url {
+    margin-left: 12px; flex: 1;
+    height: 22px; border-radius: 6px;
+    background: var(--void);
+    display: flex; align-items: center; gap: 7px;
+    padding: 0 10px; font-size: 11.5px; color: var(--dim);
+  }
+  .url .lock { color: var(--green); }
+  .url b { color: var(--text); font-weight: 500; }
+
+  .desk { position: absolute; left: 0; top: 38px; right: 0; bottom: 0; }
+  .side {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 92px;
+    border-right: 1px solid var(--line);
+    padding: 10px 8px; display: grid; align-content: start; gap: 7px;
+  }
+  .ws {
+    height: 18px; border-radius: 4px; background: #161c27;
+    font-size: 8.5px; color: var(--muted); padding: 0 6px;
+    display: block; line-height: 18px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ws.on { background: rgba(86, 207, 225, 0.14); color: var(--cyan); }
+  .rail {
+    position: absolute; right: 0; top: 0; bottom: 0; width: 30px;
+    border-left: 1px solid var(--line);
+    display: grid; align-content: start; justify-items: center; gap: 9px; padding-top: 12px;
+  }
+  .rail i { width: 14px; height: 14px; border-radius: 4px; background: var(--c); opacity: 0.9; }
+
+  .win {
+    position: absolute;
+    border-radius: 8px;
+    background: #0a0e14;
+    border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
+    box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    overflow: hidden;
+    font-size: 9.5px; line-height: 1.55;
+  }
+  .win header {
+    height: 20px; display: flex; align-items: center; gap: 6px;
+    padding: 0 8px;
+    background: color-mix(in srgb, var(--c) 18%, #0d1117);
+    color: var(--c); font-size: 9px; font-weight: 700;
+  }
+  .win header .st {
+    margin-left: auto; font-weight: 500; color: var(--dim);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .win header .st::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--s, var(--muted));
+  }
+  .win pre { padding: 6px 9px; font-family: var(--mono); color: var(--dim); white-space: pre; }
+  .win .k { color: var(--c); }
+  .win .t { color: var(--text); }
+  .win .g { color: var(--green); }
+  .win .a { color: var(--amber); }
+  .win .m { color: var(--muted); }
+
+  .w1 { --c: var(--amber); left: 102px; top: 10px; width: 194px; height: 176px; --s: var(--amber); }
+  .w2 { --c: var(--green); left: 304px; top: 10px; width: 182px; height: 176px; --s: var(--green); }
+  .w3 { --c: var(--violet); left: 102px; top: 194px; width: 384px; height: 138px; --s: var(--cyan); }
+
+  /* The MCP call coming in from outside */
+  .mcp {
+    position: absolute;
+    left: 600px; top: 418px;
+    width: 400px;
+    border-radius: 12px;
+    background: rgba(17, 22, 32, 0.96);
+    border: 1px solid rgba(167, 139, 250, 0.5);
+    box-shadow: 0 20px 60px rgba(0,0,0,.55), 0 0 50px rgba(167, 139, 250, 0.18);
+    font-size: 12.5px; line-height: 1.6;
+    overflow: hidden;
+  }
+  .mcp header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+    font-size: 11px; color: var(--dim);
+  }
+  .tag {
+    font-size: 10px; font-weight: 800; letter-spacing: 1px;
+    color: var(--void); background: var(--violet);
+    padding: 2px 7px; border-radius: 4px;
+  }
+  .mcp pre { padding: 10px 14px 12px; font-family: var(--mono); white-space: pre; color: var(--dim); }
+  .mcp .fn { color: var(--violet); }
+  .mcp .key { color: var(--blue); }
+  .mcp .str { color: var(--amber); }
+  .mcp .ok { color: var(--green); }
+
+
+  .vps {
+    position: absolute; left: 1010px; top: 470px;
+    display: grid; gap: 8px; justify-items: center;
+    font-size: 11px; color: var(--dim);
+  }
+  .rack {
+    width: 150px; border-radius: 10px;
+    border: 1px solid rgba(126, 224, 129, 0.45);
+    background: rgba(13, 17, 23, 0.95);
+    padding: 9px; display: grid; gap: 6px;
+    box-shadow: 0 0 40px rgba(126, 224, 129, 0.12);
+  }
+  .u {
+    height: 16px; border-radius: 4px; background: #161c27;
+    display: flex; align-items: center; gap: 5px; padding: 0 7px;
+  }
+  .u i { width: 5px; height: 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .u i.off { background: #2a3242; box-shadow: none; }
+  .u span { margin-left: auto; width: 46px; height: 3px; border-radius: 2px; background: #232b3a; }
+  .vps b { color: var(--green); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="banner">
+  <div class="pitch">
+    <div class="brand">
+      <div class="logo"></div>
+      <div class="name">vibe<span class="dash">-</span>os</div>
+    </div>
+    <div class="lines">
+      <div class="line l1"><span class="hl">Coding agents</span> in the browser<span class="bang">!</span></div>
+      <div class="line l2">Controlled via <span class="hl">MCP</span><span class="bang">!</span></div>
+      <div class="line l3">On your <span class="hl">own VPS</span><span class="bang">!</span></div>
+    </div>
+    <div class="prompt">
+      <span class="sig">$</span>
+      <span class="cmd">vibe-os setup --domain box.example.com</span>
+      <span class="cursor"></span>
+    </div>
+  </div>
+
+  <div class="browser">
+    <div class="bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <div class="url"><span class="lock">&#9679;</span><b>box.example.com</b>/w/payments-retry</div>
+    </div>
+    <div class="desk">
+      <div class="side">
+        <div class="ws on">payments-retry</div>
+        <div class="ws">onboarding-v2</div>
+        <div class="ws">fix-flaky-e2e</div>
+        <div class="ws">docs-refresh</div>
+      </div>
+      <div class="win w1">
+        <header>Backend Engineer<span class="st">busy</span></header>
+<pre><span class="k">&gt;</span> <span class="t">add retries to the</span>
+  <span class="t">charge webhook</span>
+
+<span class="a">&#9679;</span> Edit server/webhooks.ts
+  <span class="g">+ withRetry(charge, 3)</span>
+<span class="a">&#9679;</span> Bash bun test webhooks
+  <span class="m">running&hellip;</span></pre>
+      </div>
+      <div class="win w2">
+        <header>QA Engineer<span class="st">idle</span></header>
+<pre><span class="k">&gt;</span> <span class="t">e2e the checkout flow</span>
+
+<span class="g">&#10003;</span> 42 passed
+<span class="g">&#10003;</span> checkout &rsaquo; retry
+<span class="g">&#10003;</span> checkout &rsaquo; refund
+
+<span class="t">All green. Ready</span>
+<span class="t">for review.</span></pre>
+      </div>
+      <div class="win w3">
+        <header>Reviewer<span class="st">question</span></header>
+<pre><span class="k">&gt;</span> <span class="t">review the diff on payments-retry</span>
+
+<span class="t">The retry wraps the whole handler, so a duplicate</span>
+<span class="t">event could charge twice. Key it on the event id?</span>
+
+<span class="k">&rsaquo; 1. Yes</span>   <span class="m">2. No</span></pre>
+      </div>
+      <div class="rail">
+        <i style="--c: var(--amber)"></i>
+        <i style="--c: var(--green)"></i>
+        <i style="--c: var(--violet)"></i>
+        <i style="--c: var(--rose)"></i>
+        <i style="--c: var(--blue)"></i>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="mcp">
+    <header><span class="tag">MCP</span> your agent &rarr; https://box.example.com/mcp</header>
+<pre><span class="fn">vibe_open_window</span>({
+  <span class="key">profile</span>: <span class="str">"Reviewer"</span>,
+  <span class="key">prompt</span>: <span class="str">"review the diff on payments-retry"</span>
+})
+<span class="fn">vibe_wait</span>() <span class="ok">&rarr; question</span></pre>
+  </div>
+
+  <div class="vps">
+    <div class="rack">
+      <div class="u"><i></i><span></span></div>
+      <div class="u"><i></i><span></span></div>
+      <div class="u"><i class="off"></i><span></span></div>
+    </div>
+    <div>your box &middot; <b>your keys</b></div>
+  </div>
+</div>
+<script>
+  // render.sh opens this page with ?scale=2 for a sharp PNG on high-DPI screens.
+  const scale = Number(new URLSearchParams(location.search).get("scale")) || 1;
+  document.body.style.zoom = String(scale);
+  // render.sh waits for this, so the screenshot never catches fallback fonts.
+  document.fonts.ready.then(() => document.body.classList.add("ready"));
+</script>
+</body>
+</html>

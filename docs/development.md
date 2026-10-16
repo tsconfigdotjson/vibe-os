@@ -62,3 +62,15 @@ rsvg-convert -w 512 -h 512 public/icon-app.svg -o public/icon-512.png
 rsvg-convert -w 180 -h 180 public/icon-app.svg -o public/apple-touch-icon.png
 rsvg-convert -w 512 -h 512 public/icon-maskable.svg -o public/icon-maskable-512.png
 ```
+
+## README header
+
+The banner at the top of the README is `docs/header/header.html`, rendered to
+`docs/header/header.png` with Playwright's Chromium at 2x:
+
+```bash
+sh docs/header/render.sh
+```
+
+Edit the HTML, run the script, and commit both files. The page is 1280 by 600
+and loads its fonts from Google Fonts, so rendering needs network.
