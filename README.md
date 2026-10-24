@@ -28,10 +28,6 @@ tinted in its colour with Claude already running in the worktree.
 There is nothing to configure. No key to copy and paste, no `authorized_keys` to
 edit, no `sshd_config` change, and no root.
 
-<p align="center">
-<img src="docs/demo.gif" alt="The vibe-os desktop: a Backend Engineer, a QA Engineer and a dev server running in one workspace, then a Reviewer opened from the profiles rail and snapped into the grid">
-</p>
-
 ## Contents
 
 - [Quick start](#quick-start)
