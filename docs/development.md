@@ -52,6 +52,19 @@ publishes `@tsconfigdotjson/vibe-os` to npm with provenance, through npm's
 tag such as `v0.2.0-rc.1` is a prerelease: the installer skips it, and npm gets
 it under the `next` dist-tag rather than `latest`.
 
+## Dependency updates
+
+Dependabot opens one grouped PR a week per ecosystem (packages, Actions, the
+Docker base image) for minor and patch bumps, and auto-merge lands it once CI
+passes. Each major bump gets its own PR to review by hand. Security fixes
+arrive as soon as an advisory is published.
+
+The Bun runtime is set in `.bun-version`. A daily job opens a PR when Bun has a
+newer release, and auto-merges it for a patch release with no advisory. It also
+opens a "Release needed" issue when the Bun in the latest release has a
+published advisory. Bun is compiled into the binary, so cut a release whenever a
+PR or issue says it fixes an advisory.
+
 ## Icons
 
 App icons are generated from `public/icon.svg`:

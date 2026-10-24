@@ -1,7 +1,10 @@
 version: 2
 
-# One grouped PR per ecosystem per week. Security updates are enabled in the
-# repo settings and arrive on their own, outside this schedule.
+# One grouped PR per ecosystem per week for minor and patch bumps, which
+# dependabot-automerge.yml merges once CI passes. Each major bump gets a PR of
+# its own, left for a human, so one breaking upgrade cannot hold up the rest.
+# Security updates are enabled in the repo settings and arrive on their own,
+# outside this schedule.
 #
 # The Bun runtime itself is not covered here: Dependabot does not read
 # .bun-version. .github/workflows/bun-update.yml does that.
@@ -13,6 +16,7 @@ updates:
     groups:
       dependencies:
         patterns: ["*"]
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /
@@ -21,6 +25,7 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]
 
   # The bun base image is bumped by bun-update.yml with .bun-version, so the
   # Dockerfile and CI never build with different runtimes.
@@ -33,3 +38,4 @@ updates:
     groups:
       images:
         patterns: ["*"]
+        update-types: [minor, patch]
