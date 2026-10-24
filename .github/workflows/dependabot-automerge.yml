@@ -16,7 +16,10 @@ jobs:
       - id: meta
         uses: dependabot/fetch-metadata@v2
 
-      - if: steps.meta.outputs.update-type != 'version-update:semver-major'
+      # Named outright: a bump Dependabot cannot classify has no update-type.
+      - if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.update-type == 'version-update:semver-patch'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}

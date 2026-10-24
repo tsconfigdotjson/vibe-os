@@ -21,6 +21,10 @@ describe("affects", () => {
   test("an unreadable range throws rather than reading as safe", () => {
     expect(() => affects("~1.2", "1.2.0")).toThrow();
   });
+
+  test("a pre-release version throws rather than reading as safe", () => {
+    expect(() => affects("< 1.4.4", "1.4.5-canary.1")).toThrow();
+  });
 });
 
 describe("affecting", () => {
@@ -46,6 +50,23 @@ describe("affecting", () => {
       ],
     },
     {
+      ghsa_id: "GHSA-v9mx-4pqq-h232",
+      withdrawn_at: null,
+      vulnerabilities: [
+        {
+          package: { name: "bun" },
+          vulnerable_version_range: "> 0.0.12, < 1.1.30",
+        },
+      ],
+    },
+    {
+      ghsa_id: "GHSA-1111-1111-1111",
+      withdrawn_at: "2026-01-01T00:00:00Z",
+      vulnerabilities: [
+        { package: { name: "bun" }, vulnerable_version_range: "< 9.0.0" },
+      ],
+    },
+    {
       ghsa_id: "GHSA-0000-0000-0000",
       state: "withdrawn",
       vulnerabilities: [
@@ -61,5 +82,18 @@ describe("affecting", () => {
       "GHSA-cf8x-9m69-3gg3",
     ]);
     expect(affecting(advisories, "1.4.4")).toEqual([]);
+  });
+
+  test("reads global advisories, which carry withdrawn_at instead of state", () => {
+    expect(affecting(advisories, "1.1.0")).toEqual([
+      "GHSA-663w-cv8g-jj2p",
+      "GHSA-v9mx-4pqq-h232",
+    ]);
+  });
+
+  test("an advisory in both sources is listed once", () => {
+    expect(affecting([...advisories, ...advisories], "1.3.10")).toEqual([
+      "GHSA-663w-cv8g-jj2p",
+    ]);
   });
 });

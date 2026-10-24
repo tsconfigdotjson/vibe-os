@@ -45,9 +45,11 @@ jobs:
             exit 0
           fi
 
+          # Keyed on the PR, not the branch, so a run that pushed and then
+          # failed before opening the PR is retried the next day.
           branch="bun-$latest"
-          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
-            echo "$branch already exists"
+          if [ -n "$(gh pr list --head "$branch" --state open --json number -q '.[].number')" ]; then
+            echo "a PR for $branch is already open"
             exit 0
           fi
 
@@ -55,12 +57,16 @@ jobs:
 
           echo "$latest" > .bun-version
           sed -i "s|oven/bun:$current-debian|oven/bun:$latest-debian|" Dockerfile
+          if ! grep -qF "oven/bun:$latest-debian" Dockerfile; then
+            echo "::error::Dockerfile is not on oven/bun:$current-debian, so it was not bumped"
+            exit 1
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git commit -am "Bun $latest"
-          git push origin "$branch"
+          git push --force origin "$branch"
 
           title="Bun $latest"
           security=""
@@ -85,7 +91,9 @@ jobs:
             gh pr merge --auto --squash "$pr"
           fi
 
+      # Independent of the bump, so it runs even when that step failed.
       - name: Open an issue when the released Bun has an advisory
+        if: ${{ !cancelled() }}
         run: |
           tag="$(gh release view --json tagName -q .tagName)"
           git fetch --depth=1 origin tag "$tag"

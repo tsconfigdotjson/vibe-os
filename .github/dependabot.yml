@@ -7,7 +7,8 @@ version: 2
 # outside this schedule.
 #
 # The Bun runtime itself is not covered here: Dependabot does not read
-# .bun-version. .github/workflows/bun-update.yml does that.
+# .bun-version. .github/workflows/bun-update.yml does that, along with the
+# oven/bun base image in the Dockerfile.
 updates:
   - package-ecosystem: bun
     directory: /
@@ -24,18 +25,5 @@ updates:
       interval: weekly
     groups:
       actions:
-        patterns: ["*"]
-        update-types: [minor, patch]
-
-  # The bun base image is bumped by bun-update.yml with .bun-version, so the
-  # Dockerfile and CI never build with different runtimes.
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-    ignore:
-      - dependency-name: oven/bun
-    groups:
-      images:
         patterns: ["*"]
         update-types: [minor, patch]
