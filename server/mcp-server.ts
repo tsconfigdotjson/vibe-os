@@ -54,7 +54,7 @@ const INSTRUCTIONS = `vibe-os runs coding agents and terminals in windows, each 
 
 To hand an agent a task: vibe_list_projects to find a project and its profiles, vibe_create_workspace, vibe_open_window with a prompt, then vibe_wait until the window settles, then vibe_read_messages (Claude windows) or vibe_read_output for the answer.
 
-A window is named by its ref, like quiet-amber-otter-1. Its state is busy (drawing), idle (at its prompt), question (stopped on a menu or yes/no question) or asleep (hibernated). A window on a question needs an answer: read it with vibe_read_output, then vibe_send keys, like ["2"] or ["y"] for a numbered menu or a yes/no, or ["Down", "Enter"] to move the ❯ marker in a menu without numbers.`;
+A window is named by its ref, like quiet-amber-otter-1. Its state is busy (drawing), idle (at its prompt), question (stopped on a menu or yes/no question) or asleep (hibernated). A window on a question needs an answer: read it with vibe_read_output, then vibe_send keys, like ["2"] or ["y"] for a numbered menu or a yes/no, or ["Down", "Enter"] to move the ❯ or → marker in a menu without numbers.`;
 
 /** Cuts text to `max` characters from the start, keeping the end. */
 export function clip(text: string, max = MAX_RESULT_CHARS): string {

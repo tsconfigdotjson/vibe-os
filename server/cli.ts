@@ -174,6 +174,7 @@ const HELP = `
                         --yes, which otherwise leaves the firewall alone
     --hermes            install Hermes too (asked otherwise, default no)
     --cursor            install Cursor too (asked otherwise, default no)
+    --pi                install Pi too (asked otherwise, default no)
     --user <name>       as root: the user to create and run vibe-os as
 `;
 

@@ -54,15 +54,54 @@ const HOLD_POLL_MS = 2_000;
  *
  * Matched against the visible screen only, so a question answered long ago and
  * scrolled away does not count. Claude's dialogs (trust this folder, allow this
- * command) and Codex's approvals all end in a "confirm" or "cancel" line, and
- * the rest are the shapes a numbered menu or a yes/no question take.
+ * command) and Codex's approvals all end in a "confirm" or "cancel" line, Pi's
+ * selectors in "↑↓ navigate", and the rest are the shapes a
+ * numbered menu or a yes/no question take.
  */
 export const QUESTION_PATTERNS: RegExp[] = [
   /enter to confirm/i,
   /esc to cancel/i,
+  // Pi's hint line. What follows it names the user's own key bindings.
+  /↑↓ navigate/,
   /^\s*[❯›]\s*\d+\.\s+\S/m,
   /\((y\/n)\)|\[(y\/n)\]/i,
 ];
+
+/**
+ * What a program says it is doing, over the Program Status Protocol (OSC
+ * 7501). Pi sends it when `PI_PROGRAM_STATUS=1`.
+ */
+export type ProgramState = "idle" | "working" | "blocked" | "done" | "error";
+
+const PROGRAM_STATES = new Set<string>([
+  "idle",
+  "working",
+  "blocked",
+  "done",
+  "error",
+]);
+
+/**
+ * The state in one OSC 7501 report, for the root record.
+ *
+ * The body is `key=value` pairs joined by `:`. A report replaces its record
+ * whole, so one with no state at all clears it (null). A state this build does
+ * not know, a report for a child record (`id=…`) and the feature query or its
+ * answer (`?…`) say nothing it can use (undefined), so the last known state
+ * stands.
+ */
+export function programState(body: string): ProgramState | null | undefined {
+  if (body.trim().startsWith("?")) return undefined;
+  const pairs = new Map<string, string>();
+  for (const pair of body.split(":")) {
+    const eq = pair.indexOf("=");
+    if (eq > 0) pairs.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+  }
+  if (pairs.has("id")) return undefined;
+  const state = pairs.get("state");
+  if (!state) return null;
+  return PROGRAM_STATES.has(state) ? (state as ProgramState) : undefined;
+}
 
 /** A harness's input line: its prompt glyph, then whatever has been typed. */
 const PROMPT_LINE = /^\s*[❯›]\s?(.*)$/;
@@ -94,12 +133,23 @@ export function packet(
   return buf;
 }
 
-/** Whether a program is working, waiting on a question, or at its prompt. */
+/**
+ * Whether a program is working, waiting on a question, or at its prompt.
+ *
+ * A program that reports its own state is believed while it is working or
+ * blocked: a model can think for a minute without drawing a thing, and a
+ * dialog is a question whatever it looks like. Once it says it has settled,
+ * the screen decides as it does for every other program, so typing at the
+ * prompt still reads as busy.
+ */
 export function classify(
   lastOutputAt: number | null,
   now: number,
   visible: string,
+  program: ProgramState | null = null,
 ): Activity {
+  if (program === "working") return "busy";
+  if (program === "blocked") return "question";
   if (lastOutputAt !== null && now - lastOutputAt < QUIET_MS) return "busy";
   if (QUESTION_PATTERNS.some((p) => p.test(visible))) return "question";
   return "idle";
@@ -247,6 +297,8 @@ export class Screen {
   state: Activity = "idle";
   /** Called on the next output, once. How a send learns its turn began. */
   onOutput: (() => void) | null = null;
+  /** The program's own last report of its state, if it makes them. */
+  program: ProgramState | null = null;
   private tty: string | null = null;
   private sizeCheckedAt = 0;
   private sizing = false;
@@ -273,6 +325,25 @@ export class Screen {
     ) => void = () => {},
   ) {
     this.watchTrims();
+    // Read as it is parsed, so it lands in the same write as the output around
+    // it. Nothing is answered: a reply would go nowhere, since this connection
+    // only reads.
+    this.term.parser.registerOscHandler(7501, (body) => {
+      const state = programState(body);
+      if (state !== undefined) this.program = state;
+      return true;
+    });
+    // A report outlives the program that made it, so it is dropped where the
+    // protocol says a terminal should: a full reset (RIS), and a shell drawing
+    // its next prompt (OSC 133;A). Both are passed on to xterm's own handling.
+    this.term.parser.registerEscHandler({ final: "c" }, () => {
+      this.program = null;
+      return false;
+    });
+    this.term.parser.registerOscHandler(133, (body) => {
+      if (body.startsWith("A")) this.program = null;
+      return false;
+    });
   }
 
   feed(data: Buffer): void {
@@ -291,9 +362,13 @@ export class Screen {
 
   private readonly quiet = (): void => {
     this.quietTimer = null;
-    const now = this.activity();
-    if (now === "busy" && this.lastOutputAt !== null) {
-      const left = QUIET_MS - (Date.now() - this.lastOutputAt);
+    const at = Date.now();
+    const now = this.activity(at);
+    // A program that says it is working stays busy with no timer: its next
+    // report is output, which starts one. Busy otherwise means output is still
+    // recent, so look again when it will not be.
+    if (now === "busy" && this.program !== "working") {
+      const left = QUIET_MS - (at - (this.lastOutputAt ?? at));
       this.quietTimer = setTimeout(this.quiet, Math.max(left, 0) + 10);
       return;
     }
@@ -376,7 +451,7 @@ export class Screen {
   }
 
   activity(now = Date.now()): Activity {
-    return classify(this.lastOutputAt, now, this.visible());
+    return classify(this.lastOutputAt, now, this.visible(), this.program);
   }
 
   /** What the screen shows right now: the bottom `rows` lines of the buffer. */
@@ -750,6 +825,7 @@ export class Screens {
             Math.max(screen.lastOutputAt ?? 0, begun),
             now,
             screen.visible(),
+            screen.program,
           )
         : "idle";
       if (state !== "busy" || now > deadline) return state;

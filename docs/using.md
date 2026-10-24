@@ -27,7 +27,7 @@ If two pieces of work need to proceed independently, give them a workspace each.
 ## Profiles
 
 A profile is a name, a colour, a harness (`claude`, `hermes`, `cursor`,
-`codex`, [one you add](harnesses.md), a shell, or any command on the box)
+`codex`, `pi`, [one you add](harnesses.md), a shell, or any command on the box)
 with its flags, and a standing prompt. Profiles belong to a
 project and appear in every workspace of it.
 
@@ -49,7 +49,7 @@ behind **Advanced**. Models and permission modes are read off the Claude binary
 installed on the server, so the list follows Claude's releases.
 
 Other harnesses get editors of their own. See [Harnesses](harnesses.md) for
-Hermes, Cursor and Codex, and for adding your own.
+Hermes, Cursor, Codex and Pi, and for adding your own.
 
 ### MCP servers
 

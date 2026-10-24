@@ -13,6 +13,7 @@
 | `hermes` | the Hermes harness (optional) | those profiles open a window that closes immediately |
 | `cursor-agent` | the Cursor harness (optional) | those profiles open a window that closes immediately |
 | `codex` | the Codex harness (optional) | those profiles open a window that closes immediately |
+| `pi` | the Pi harness (optional) | those profiles open a window that closes immediately |
 | `earlyoom` | ending a runaway process when memory runs out | a box with swap thrashes until someone intervenes |
 
 ```bash
@@ -30,6 +31,10 @@ cursor-agent login                                  # one login per box
 # Optional, for the Codex harness
 npm install -g @openai/codex
 codex login --device-auth                           # one login per box
+
+# Optional, for the Pi harness (needs Node.js 22.19 or newer)
+curl -fsSL https://pi.dev/install.sh | sh
+pi                                                  # then /login opencode-go, or another provider
 ```
 
 Verified on Debian 12 and 13, Ubuntu 24.04 and 26.04 LTS, x86\_64.
@@ -86,7 +91,7 @@ it again on a configured box changes nothing. In order:
 2. **Prerequisites.** `openssh-server`, `openssh-client`, `dtach`, `git`,
    `curl` and optionally `gh`, through apt, dnf, yum, pacman or zypper.
 3. **sshd**, enabled and started if nothing answers on port 22.
-4. **Harnesses.** Claude Code, then optionally Hermes and Cursor.
+4. **Harnesses.** Claude Code, then optionally Hermes, Cursor and Pi.
 
 Then, for a private box:
 
@@ -135,7 +140,7 @@ public box.
 | `--domain <fqdn>` | serve publicly on this name instead of through Tailscale |
 | `--email <addr>` | with `--domain`, the contact address for Let's Encrypt |
 | `--firewall` | with `--yes`, do the firewall step too (it is skipped otherwise) |
-| `--hermes`, `--cursor` | install those harnesses too |
+| `--hermes`, `--cursor`, `--pi` | install those harnesses too |
 | `--user <name>` | as root, the user to create |
 | `--port`, `--host` | where the service listens (default `7681` and `127.0.0.1`, or `80` and `::` with `--domain`) |
 

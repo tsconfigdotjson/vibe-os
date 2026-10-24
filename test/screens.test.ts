@@ -13,6 +13,7 @@ import {
   classify,
   packet,
   parseSize,
+  programState,
   QUIET_MS,
   Screen,
   Screens,
@@ -61,6 +62,55 @@ describe("classify", () => {
   test("quiet at a prompt is idle", () => {
     expect(classify(null, now, '❯ Try "fix typecheck errors"')).toBe("idle");
     expect(classify(now - QUIET_MS - 1, now, "$ ")).toBe("idle");
+  });
+
+  /** Pi's project trust prompt, verbatim from Pi 1.4.0 on the box. */
+  test("Pi's selector is a question", () => {
+    const trust = [
+      " Trust project folder?",
+      " /home/ubuntu/pi-probe/trustproj",
+      " → Trust",
+      "   Trust parent folder (/home/ubuntu/pi-probe)",
+      "   Do not trust",
+      " ↑↓ navigate  enter select  escape/ctrl+c cancel",
+    ].join("\n");
+    expect(classify(null, now, trust)).toBe("question");
+  });
+
+  test("a program's own report wins while it is working or blocked", () => {
+    expect(classify(null, now, "$ ", "working")).toBe("busy");
+    expect(classify(now - 100, now, "$ ", "blocked")).toBe("question");
+  });
+
+  test("a settled program is read like any other", () => {
+    expect(classify(null, now, "$ ", "done")).toBe("idle");
+    expect(classify(now - 100, now, "$ ", "idle")).toBe("busy");
+    expect(classify(null, now, "Overwrite it? (y/n)", "error")).toBe(
+      "question",
+    );
+  });
+});
+
+describe("programState", () => {
+  test("reads the root record's state, as Pi sends it", () => {
+    expect(programState("state=idle:app=pi")).toBe("idle");
+    expect(programState("state=working:app=pi:msg=c2Vzc2lvbg")).toBe("working");
+    expect(
+      programState(
+        "state=error:app=pi:msg=NDAxOiB7InR5cGUiOiJzZXJ2ZXJfZXJyb3IifQ",
+      ),
+    ).toBe("error");
+  });
+
+  test("a report with no state clears it", () => {
+    expect(programState("app=pi")).toBeNull();
+  });
+
+  test("a state it does not know, a child record or the query says nothing", () => {
+    expect(programState("state=pondering:app=pi")).toBeUndefined();
+    expect(programState("id=build/test:state=working")).toBeUndefined();
+    expect(programState("?")).toBeUndefined();
+    expect(programState("?:states=idle,working")).toBeUndefined();
   });
 });
 
@@ -173,6 +223,44 @@ describe("state events", () => {
     await Bun.sleep(QUIET_MS + 200);
     expect(seen).toEqual(["busy", "question"]);
     expect(screen.state).toBe("question");
+    screen.close();
+  });
+
+  test("a program working without drawing stays busy, with no timer left", async () => {
+    const seen: (Activity | null)[] = [];
+    const screen = detached((_, to) => seen.push(to));
+    await feed(screen, "\x1b]7501;state=working:app=pi\x07");
+    expect(screen.program).toBe("working");
+    await Bun.sleep(QUIET_MS + 200);
+    expect(seen).toEqual(["busy"]);
+    // Nothing re-arms while it waits for the next report.
+    expect(
+      (screen as unknown as { quietTimer: unknown }).quietTimer,
+    ).toBeNull();
+    await feed(screen, "\x1b]7501;state=done:app=pi\x07");
+    await Bun.sleep(QUIET_MS + 200);
+    expect(seen).toEqual(["busy", "idle"]);
+    screen.close();
+  });
+
+  test("a reset or the next shell prompt drops a report", async () => {
+    for (const end of ["\x1bc", "\x1b]133;A\x07$ "]) {
+      const screen = detached();
+      await feed(screen, "\x1b]7501;state=working:app=x\x07");
+      expect(screen.program).toBe("working");
+      await feed(screen, end);
+      expect(screen.program).toBeNull();
+      await Bun.sleep(QUIET_MS + 200);
+      expect(screen.state).toBe("idle");
+      screen.close();
+    }
+  });
+
+  test("an unknown state keeps the last one", async () => {
+    const screen = detached();
+    await feed(screen, "\x1b]7501;state=blocked:app=x\x07");
+    await feed(screen, "\x1b]7501;state=pondering:app=x\x07");
+    expect(screen.program).toBe("blocked");
     screen.close();
   });
 

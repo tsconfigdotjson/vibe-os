@@ -114,9 +114,15 @@ opened, or null. `live` is whether its session is running.
 | state | |
 | --- | --- |
 | `busy` | it drew something in the last second and a half. An agent at work is always busy |
-| `question` | it is quiet, and the screen shows a question: a dialog that ends in "Enter to confirm" or "Esc to cancel", a numbered menu, or `(y/n)` |
+| `question` | it is quiet, and the screen shows a question: a dialog that ends in "Enter to confirm" or "Esc to cancel", a selector with a "↑↓ navigate" hint, a numbered menu, or `(y/n)` |
 | `idle` | it is quiet at its prompt, or finished |
 | `asleep` | it was hibernated (`--hibernate-after`). `live` is false; `start`, `send` or a browser opening it resumes the conversation |
+
+A program that reports its own state with the Program Status Protocol (OSC
+7501), as Pi does, is `busy` while it says it is working and `question` while
+it says it is waiting on a dialog, whether or not it is drawing. Once it says it
+is done, the screen decides as above. A report counts until the next one, a
+terminal reset or a shell prompt, and is not kept across a server restart.
 
 `lastOutputAt` is when it last drew anything, in milliseconds since the epoch.
 It is null until the server has seen output from it, so it starts over when the
