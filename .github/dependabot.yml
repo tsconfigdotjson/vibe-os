@@ -1,0 +1,35 @@
+version: 2
+
+# One grouped PR per ecosystem per week. Security updates are enabled in the
+# repo settings and arrive on their own, outside this schedule.
+#
+# The Bun runtime itself is not covered here: Dependabot does not read
+# .bun-version. .github/workflows/bun-update.yml does that.
+updates:
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The bun base image is bumped by bun-update.yml with .bun-version, so the
+  # Dockerfile and CI never build with different runtimes.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: oven/bun
+    groups:
+      images:
+        patterns: ["*"]

@@ -11,7 +11,7 @@
 # ── stage 1: build and compile ───────────────────────────────────────────────
 # Runs on the build machine's own architecture and cross-compiles, so a
 # multi-arch build does not run Bun under emulation.
-FROM --platform=$BUILDPLATFORM oven/bun:1-debian AS builder
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.4-debian AS builder
 
 WORKDIR /src
 # scripts/ comes along with the manifest because postinstall runs from there.

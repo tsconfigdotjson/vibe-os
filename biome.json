@@ -12,8 +12,7 @@
       "!node_modules",
       "!public/wasm_exec.js",
       "!server/assets.generated.ts",
-      "!bun.lock",
-      "!package-lock.json"
+      "!bun.lock"
     ]
   },
   "formatter": {

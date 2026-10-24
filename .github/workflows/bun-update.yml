@@ -1,0 +1,56 @@
+name: Bun update
+
+# Bun is compiled into the release binary, so a Bun fix only reaches a box
+# through a vibe-os release. This opens a PR when oven-sh/bun has a newer
+# release than .bun-version. Dependabot does not cover the runtime.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open a PR for a newer Bun
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest="$(gh release view --repo oven-sh/bun --json tagName -q .tagName)"
+          latest="${latest#bun-v}"
+          current="$(cat .bun-version)"
+          if [ "$latest" = "$current" ]; then
+            echo "Bun $current is current"
+            exit 0
+          fi
+
+          branch="bun-$latest"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            echo "$branch already exists"
+            exit 0
+          fi
+
+          echo "$latest" > .bun-version
+          sed -i "s|oven/bun:$current-debian|oven/bun:$latest-debian|" Dockerfile
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "Bun $latest"
+          git push origin "$branch"
+
+          gh pr create --head "$branch" --title "Bun $latest" --body "$(cat <<EOF
+          Bumps Bun from $current to $latest in .bun-version and the Dockerfile.
+
+          Release notes: https://github.com/oven-sh/bun/releases/tag/bun-v$latest
+
+          If this release fixes a security advisory, also raise \`engines.bun\` in package.json, and cut a release so the fix reaches deployed boxes.
+          EOF
+          )"
+          gh workflow run ci.yml --ref "$branch"

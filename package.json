@@ -11,7 +11,7 @@
   },
   "bugs": "https://github.com/tsconfigdotjson/vibe-os/issues",
   "engines": {
-    "bun": ">=1.2"
+    "bun": ">=1.4.4"
   },
   "bin": {
     "vibe-os": "bin/vibe-os.mjs"
