@@ -115,6 +115,7 @@ export const OPTION_SPEC = {
   firewall: { type: "boolean" as const },
   hermes: { type: "boolean" as const },
   cursor: { type: "boolean" as const },
+  pi: { type: "boolean" as const },
   // install-browser only. Kept here because parseArgs is strict, and a flag it
   // has never heard of is an error rather than something a subcommand can read.
   geometry: { type: "string" as const },

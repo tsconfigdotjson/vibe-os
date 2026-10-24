@@ -21,6 +21,7 @@ import { claude } from "./harnesses/claude.ts";
 import { codex } from "./harnesses/codex.ts";
 import { cursor } from "./harnesses/cursor.ts";
 import { hermes } from "./harnesses/hermes.ts";
+import { pi } from "./harnesses/pi.ts";
 import {
   type Discovery,
   type HarnessAdapter,
@@ -36,6 +37,7 @@ export { CLAUDE_INSTALL } from "./harnesses/claude.ts";
 export { CODEX_INSTALL } from "./harnesses/codex.ts";
 export { CURSOR_INSTALL } from "./harnesses/cursor.ts";
 export { HERMES_INSTALL } from "./harnesses/hermes.ts";
+export { PI_INSTALL } from "./harnesses/pi.ts";
 export type { HarnessAdapter, HarnessCheck } from "./harnesses/util.ts";
 
 const BUILT_IN: HarnessAdapter[] = [
@@ -43,6 +45,7 @@ const BUILT_IN: HarnessAdapter[] = [
   hermes as HarnessAdapter,
   cursor,
   codex,
+  pi as HarnessAdapter,
 ];
 
 /** Ids a user file cannot take: the built-ins and the two pseudo-harnesses. */

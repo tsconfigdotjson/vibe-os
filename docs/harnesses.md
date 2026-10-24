@@ -1,7 +1,7 @@
 # Harnesses
 
 A harness is the program a profile launches. vibe-os ships Claude, Hermes,
-Cursor and Codex, plus a plain shell and a custom command. You can add your own
+Cursor, Codex and Pi, plus a plain shell and a custom command. You can add your own
 without changing vibe-os.
 
 ## Built in
@@ -57,6 +57,67 @@ levels come from `codex debug models`, so they follow the installed CLI.
 
 Log in once on the box with `codex login --device-auth`. Logged out, a Codex
 window sits at the login screen, and `vibe-os doctor` says so.
+
+### Pi
+
+Picking the Pi harness runs `pi` in the worktree, and the editor offers a
+model, a thinking dropdown (`--thinking`), an interface (`--tui-mode`) and a few
+switches. Models come from `pi --list-models`, which lists only the providers
+the box has credentials for, grouped by provider. A model is written as
+`--model provider/id`, so the same model from two providers is two choices.
+
+Pi never asks before running a tool, so there is no skip-approvals switch. New
+profiles start with two flags:
+
+- `--tui-mode regular`. Pi's fullscreen interface captures the mouse, and a
+  browser terminal then cannot select or copy text.
+- `--approve`. Pi asks whether to trust a project folder that has a `.pi`
+  directory, and every workspace is a worktree it has not seen. Trusting
+  loads the repo's `.pi` extensions and MCP servers, which run code, so turn it
+  off for a repository you did not write. Without it, answering **Trust parent
+  folder** once covers every later workspace of the project, since they share a
+  parent.
+
+In a browser window, Shift+Enter submits like Enter. Press Ctrl+J for a new line
+in Pi's editor.
+
+Leaving the thinking dropdown on Default leaves `--thinking` out. Pi then starts
+at `defaultThinkingLevel` from `~/.pi/agent/settings.json`, or `medium` when
+that is not set, and the dropdown says which. A model that lacks that level runs
+at the next one up that it has, so DeepSeek V4.1 Flash runs `medium` as `high`.
+A resumed conversation keeps the level it was recorded with.
+
+Credentials belong in Pi's own store, not in a shell profile: a window does not
+read `.profile`, and neither does the server when it lists models. Run `pi` once
+on the box and use `/login` there. Logged out, a Pi window opens with no model,
+and `vibe-os doctor` says so.
+
+#### OpenCode Go and DeepSeek
+
+To run DeepSeek V4.1 Flash through an OpenCode Go subscription:
+
+1. In the OpenCode console, under **Settings › Privacy**, select **Global**
+   under **Regions**. Go allows only Europe and the United States by default,
+   and DeepSeek models are served outside both.
+2. On the box, run `pi`, then `/login opencode-go`, and paste the key.
+3. In the profile editor, pick **OpenCode Go › deepseek-v4.1-flash**. The
+   profile runs `pi --model opencode-go/deepseek-v4.1-flash`.
+
+Go has one DeepSeek V4.1 Flash, with no dated checkpoints to pick from. The
+same model is also on OpenCode Zen (`opencode/…`, `/login opencode`) and
+DeepSeek's own API (`deepseek/deepseek-flash`, `/login deepseek`). Zen's free
+models refuse requests from any client but OpenCode's own, Pi included.
+
+Pi needs Node.js 22.19 or newer, and OpenCode needs Pi 1.3.0 or newer. `vibe-os
+doctor` checks both.
+
+Windows look for `pi` in `~/.local/bin` and on the system PATH. The installer
+uses `~/.local/bin` when it is on PATH at install time, and `~/.pi/agent/bin`
+otherwise; in that case link it, or windows cannot start it:
+
+```sh
+ln -s ~/.pi/agent/bin/pi ~/.local/bin/pi
+```
 
 ## Adding one to a box
 
@@ -184,4 +245,5 @@ TypeScript, with optional code a JSON file cannot have:
 - `checks(report, detail)` returns extra `vibe-os doctor` checks.
 
 A built-in can also use the `mcp` field kind, which is Claude's MCP picker.
-`server/harnesses/codex.ts` is a complete example.
+`server/harnesses/codex.ts` is a complete example, and `server/harnesses/pi.ts`
+shows a harness with no single login.

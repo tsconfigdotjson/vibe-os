@@ -37,7 +37,12 @@ import {
   parseUfw,
   probeTcp,
 } from "./doctor.ts";
-import { CLAUDE_INSTALL, CURSOR_INSTALL, HERMES_INSTALL } from "./harness.ts";
+import {
+  CLAUDE_INSTALL,
+  CURSOR_INSTALL,
+  HERMES_INSTALL,
+  PI_INSTALL,
+} from "./harness.ts";
 import { color, describeError } from "./log.ts";
 import { type OomState, oomState, scopeState } from "./memory.ts";
 import { ENTRY, IS_COMPILED, invocation } from "./runtime.ts";
@@ -209,6 +214,7 @@ interface Options {
   firewall: boolean;
   hermes: boolean;
   cursor: boolean;
+  pi: boolean;
 }
 
 /** Closed over by every step: how to ask, and how to run with privileges. */
@@ -657,6 +663,16 @@ async function harnessStep(s: Session): Promise<void> {
       def: s.opts.cursor,
       after: "run cursor-agent login",
     },
+    {
+      name: "Pi",
+      command: "pi",
+      // Through cat, so the installer's stdout is not a terminal: it ends by
+      // asking "Start pi now?", defaulting to yes, and would exec Pi in the
+      // middle of setup. Its other questions read /dev/tty and still ask.
+      scripts: [`${PI_INSTALL} | cat`],
+      def: s.opts.pi,
+      after: "run pi, then /login opencode-go (or another provider)",
+    },
   ];
 
   const missing = [];
@@ -673,9 +689,13 @@ async function harnessStep(s: Session): Promise<void> {
     const optional = h.command === "claude" ? "" : " (optional)";
     if (!(await s.confirm(`Install ${h.name}?${optional}`, h.def, commands)))
       continue;
-    if (await s.runAll(commands)) {
+    // A script that exits 0 is not proof: Pi's goes through a pipe, which
+    // reports the last command's status rather than the installer's.
+    if ((await s.runAll(commands)) && (await onPath(h.command))) {
       s.done(`${h.name} installed`);
       s.next.push(`${h.name}: ${h.after}`);
+    } else {
+      s.warn(`${h.name} did not install; \`${h.command}\` is not on PATH`);
     }
   }
 }
@@ -1281,6 +1301,7 @@ export async function runSetup(
     firewall: values.firewall === true,
     hermes: values.hermes === true,
     cursor: values.cursor === true,
+    pi: values.pi === true,
   };
 
   if (process.platform !== "linux") {
