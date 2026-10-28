@@ -20,6 +20,7 @@ import pkg from "../package.json" with { type: "json" };
 import { type Remote, resolveRemote } from "./client.ts";
 import type { RawOptions } from "./config.ts";
 import { describeError } from "./log.ts";
+import { SERVER_INFO } from "./mcp-server.ts";
 import { MAX_WAIT_S } from "./ops.ts";
 
 /**
@@ -52,13 +53,11 @@ export async function connectUpstream(
 
 /** A stdio-side server that forwards every tool call to `upstream`. */
 export function bridgeServer(upstream: Client): Server {
-  const server = new Server(
-    { name: "vibe-os", version: pkg.version },
-    {
-      capabilities: { tools: {} },
-      instructions: upstream.getInstructions(),
-    },
-  );
+  // The box's identity, icons included, as its instructions are passed on.
+  const server = new Server(upstream.getServerVersion() ?? SERVER_INFO, {
+    capabilities: { tools: {} },
+    instructions: upstream.getInstructions(),
+  });
   server.setRequestHandler("tools/list", async (request) =>
     upstream.listTools(request.params),
   );

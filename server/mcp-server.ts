@@ -16,6 +16,7 @@
 import {
   type CallToolResult,
   createMcpHandler,
+  type Implementation,
   type McpHttpHandler,
   McpServer,
 } from "@modelcontextprotocol/server";
@@ -55,6 +56,42 @@ const INSTRUCTIONS = `vibe-os runs coding agents and terminals in windows, each 
 To hand an agent a task: vibe_list_projects to find a project and its profiles, vibe_create_workspace, vibe_open_window with a prompt, then vibe_wait until the window settles, then vibe_read_messages (Claude windows) or vibe_read_output for the answer.
 
 A window is named by its ref, like quiet-amber-otter-1. Its state is busy (drawing), idle (at its prompt), question (stopped on a menu or yes/no question) or asleep (hibernated). A window on a question needs an answer: read it with vibe_read_output, then vibe_send keys, like ["2"] or ["y"] for a numbered menu or a yes/no, or ["Down", "Enter"] to move the ❯ or → marker in a menu without numbers.`;
+
+/** Where the icons are served from, for anyone, without the token. */
+const ICONS_URL =
+  "https://raw.githubusercontent.com/tsconfigdotjson/vibe-os/main/public";
+
+/**
+ * Who this server is, as a client shows it: next to the server in its list,
+ * on the connect screen. Sent at initialize to a 2025-era client, and in
+ * every result's _meta to a 2026-era one.
+ *
+ * The icons are on GitHub rather than this box because everything on the box
+ * is behind the token, which a client fetching an image does not send, and a
+ * box on a private network is not reachable from a hosted client at all.
+ * `main` rather than the version's tag, which a build between releases would
+ * not have yet.
+ */
+export const SERVER_INFO: Implementation = {
+  name: "vibe-os",
+  title: "Vibe OS",
+  version: pkg.version,
+  description: pkg.description,
+  websiteUrl: pkg.homepage,
+  icons: [
+    { src: `${ICONS_URL}/icon.svg`, mimeType: "image/svg+xml", sizes: ["any"] },
+    {
+      src: `${ICONS_URL}/icon-192.png`,
+      mimeType: "image/png",
+      sizes: ["192x192"],
+    },
+    {
+      src: `${ICONS_URL}/icon-512.png`,
+      mimeType: "image/png",
+      sizes: ["512x512"],
+    },
+  ],
+};
 
 /** Cuts text to `max` characters from the start, keeping the end. */
 export function clip(text: string, max = MAX_RESULT_CHARS): string {
@@ -774,10 +811,7 @@ export function registerTools(server: McpServer, { ops, db }: McpDeps): void {
 /** The handler mounted at /mcp. Builds a server per request, as the SDK does. */
 export function createMcpEndpoint(deps: McpDeps): McpHttpHandler {
   return createMcpHandler(() => {
-    const server = new McpServer(
-      { name: "vibe-os", version: pkg.version },
-      { instructions: INSTRUCTIONS },
-    );
+    const server = new McpServer(SERVER_INFO, { instructions: INSTRUCTIONS });
     registerTools(server, deps);
     return server;
   });
