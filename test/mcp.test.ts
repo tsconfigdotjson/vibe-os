@@ -16,6 +16,7 @@ import {
   createMcpEndpoint,
   MAX_RESULT_CHARS,
   mcpRoute,
+  SERVER_INFO,
 } from "../server/mcp-server.ts";
 import { bridgeServer, connectUpstream } from "../server/mcp-stdio.ts";
 import { OpError, type Ops, type WaitOptions } from "../server/ops.ts";
@@ -333,6 +334,23 @@ describe("tools", () => {
     expect(progress).toHaveLength(3);
   });
 
+  test("say who the server is, icons included, in either era", async () => {
+    const modern = await connect(stubOps());
+    expect(modern.getProtocolEra()).not.toBe("legacy");
+    expect(modern.getServerVersion()).toEqual(SERVER_INFO);
+
+    handler = createMcpEndpoint({ ops: stubOps(), db });
+    const legacy = new Client({ name: "legacy", version: "1.0.0" });
+    await legacy.connect(
+      new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
+        fetch: (url, init) => handler.fetch(asRequest(url, init)),
+      }),
+    );
+    expect(legacy.getProtocolEra()).toBe("legacy");
+    expect(legacy.getServerVersion()).toEqual(SERVER_INFO);
+    await legacy.close();
+  });
+
   test("list_windows filters by state and names the turn", async () => {
     const c = await connect(stubOps());
     const r = await c.callTool({
@@ -637,6 +655,7 @@ describe("the stdio bridge", () => {
     client = new Client({ name: "stdio-client", version: "1.0.0" });
     await client.connect(left);
 
+    expect(client.getServerVersion()).toEqual(SERVER_INFO);
     const { tools } = await client.listTools();
     expect(tools[0].name).toBe("vibe_list_windows");
     const progress: unknown[] = [];
